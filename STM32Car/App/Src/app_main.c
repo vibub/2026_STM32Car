@@ -26,6 +26,10 @@ volatile float g_app_left_pwm_ratio;
 volatile float g_app_right_pwm_ratio;
 volatile float g_app_line_error;
 volatile float g_app_line_correction_cm_s;
+volatile uint8_t g_app_line_sensor_raw;
+volatile uint32_t g_app_line_sensor_i2c_error_count;
+volatile uint8_t g_app_line_sensor_stale_count;
+volatile uint8_t g_app_line_sensor_fault;
 
 static uint32_t s_last_control_ms;
 static InfraredLineControl s_line_control;
@@ -33,6 +37,11 @@ static WheelSpeedPid s_left_speed_pid;
 static WheelSpeedPid s_right_speed_pid;
 static uint8_t s_current_mode;
 static uint8_t s_line_enabled;
+static uint8_t s_last_line_sensor_mask;
+static uint8_t s_has_line_sensor_sample;
+static uint8_t s_line_sensor_failure_count;
+
+#define APP_LINE_SENSOR_FAILURE_LIMIT 3U
 
 static void App_StopClosedLoop(void)
 {
@@ -51,18 +60,58 @@ static void App_StopClosedLoop(void)
 static void App_ControlStep(uint32_t now_ms)
 {
     EncoderSample encoder;
-    InfraredLineOutput line_output;
-    uint8_t sensor_mask;
+    InfraredLineOutput line_output = {0};
+    uint8_t sensor_mask = 0U;
+    uint8_t sensor_read_ok;
+    uint8_t sensor_failure_stop = 0U;
     float left_command;
     float right_command;
 
-    sensor_mask = InfraredLineSensor_ReadMask();
-    InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
-                               &line_output);
+    sensor_read_ok = InfraredLineSensor_ReadMask(&sensor_mask);
+    g_app_line_sensor_raw = InfraredLineSensor_GetRawValue();
+    g_app_line_sensor_i2c_error_count =
+        InfraredLineSensor_GetErrorCount();
+
+    if (sensor_read_ok != 0U) {
+        s_last_line_sensor_mask = sensor_mask;
+        s_has_line_sensor_sample = 1U;
+        s_line_sensor_failure_count = 0U;
+        g_app_line_sensor_stale_count = 0U;
+        g_app_line_sensor_fault = 0U;
+    } else {
+        if (s_line_sensor_failure_count < 0xFFU) {
+            s_line_sensor_failure_count++;
+        }
+        g_app_line_sensor_stale_count = s_line_sensor_failure_count;
+
+        if ((s_has_line_sensor_sample == 0U) ||
+            (s_line_sensor_failure_count >= APP_LINE_SENSOR_FAILURE_LIMIT)) {
+            sensor_failure_stop = 1U;
+            g_app_line_sensor_fault = 1U;
+            InfraredLineControl_Init(&s_line_control);
+        } else {
+            /* 短暂通信干扰时沿用最近一次成功掩码，不伪装成全白。 */
+            sensor_mask = s_last_line_sensor_mask;
+        }
+    }
 
     EncoderDriver_Sample(&encoder);
     g_app_left_speed_cm_s = encoder.left_cm_s;
     g_app_right_speed_cm_s = encoder.right_cm_s;
+
+    if (sensor_failure_stop != 0U) {
+        g_app_line_sensor_mask = sensor_mask;
+        g_app_line_active_count = 0U;
+        g_app_line_lost = 1U;
+        g_app_line_error = 0.0f;
+        g_app_line_correction_cm_s = 0.0f;
+        g_app_motor_fault = 0U;
+        App_StopClosedLoop();
+        return;
+    }
+
+    InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
+                               &line_output);
     g_app_line_sensor_mask = line_output.sensor_mask;
     g_app_line_active_count = line_output.active_count;
     g_app_line_lost = line_output.line_lost;
@@ -117,6 +166,10 @@ void App_Init(void)
     s_last_control_ms = Board_TimeMs();
     s_current_mode = APP_MODE_STOP;
     s_line_enabled = 0U;
+    s_last_line_sensor_mask = 0U;
+    s_has_line_sensor_sample = 0U;
+    s_line_sensor_failure_count = 0U;
+    g_app_line_sensor_fault = 0U;
     App_StopClosedLoop();
 }
 

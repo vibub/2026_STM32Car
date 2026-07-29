@@ -22,7 +22,7 @@ extern "C" {
 #define K230_UART_INSTANCE UART4
 #define K230_UART_IRQn     UART4_IRQn
 
-/* OLED I2C4: SCL PF14, SDA PF15. */
+/* OLED 与八路红外模块共用 I2C4：SCL PF14，SDA PF15。 */
 #define OLED_I2C_INSTANCE I2C4
 #define OLED_I2C_SCL_PORT GPIOF
 #define OLED_I2C_SCL_PIN  GPIO_PIN_14
@@ -32,18 +32,6 @@ extern "C" {
 #define SCL_PF14_PIN      OLED_I2C_SCL_PIN
 #define SDA_PF15_PORT     OLED_I2C_SDA_PORT
 #define SDA_PF15_PIN      OLED_I2C_SDA_PIN
-
-/*
- * 四路红外候选输入：核心板 JP2 将 PD8～PD11 直接引出为 GPIO。
- * 约定 X1～X4 按车辆左到右连接，实际方向可在传感器驱动宏中反转。
- */
-#define IR_LINE_PORT       GPIOD
-#define IR_LINE_X1_PIN     GPIO_PIN_8
-#define IR_LINE_X2_PIN     GPIO_PIN_9
-#define IR_LINE_X3_PIN     GPIO_PIN_10
-#define IR_LINE_X4_PIN     GPIO_PIN_11
-#define IR_LINE_ALL_PINS   (IR_LINE_X1_PIN | IR_LINE_X2_PIN | \
-                            IR_LINE_X3_PIN | IR_LINE_X4_PIN)
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
