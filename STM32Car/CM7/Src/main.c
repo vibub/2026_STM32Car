@@ -77,6 +77,7 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
 
     /* 先把 H 桥方向脚拉低，避免 PWM 初始化期间误动作。 */
@@ -87,6 +88,13 @@ static void MX_GPIO_Init(void)
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOA, &gpio);
+
+    /* YH-4LXJ 四路输出暂按板载比较器数字输出配置，不启用内部上下拉。 */
+    gpio.Pin = IR_LINE_ALL_PINS;
+    gpio.Mode = GPIO_MODE_INPUT;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(IR_LINE_PORT, &gpio);
 }
 
 static void MX_TIM1_Init(void)

@@ -1156,6 +1156,9 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\encoder_driver.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\infrared_line_sensor.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\imu_heading.c</name>
                 </file>
                 <file>
@@ -1167,6 +1170,9 @@
             </group>
             <group>
                 <name>Control</name>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\infrared_line_control.c</name>
+                </file>
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\line_follow_control.c</name>
                 </file>

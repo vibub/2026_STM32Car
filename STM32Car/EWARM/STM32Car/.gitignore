@@ -2,6 +2,7 @@
 /.vscode/launch.json
 /.settings
 /.eide
+/.pack
 
 # project out
 /build

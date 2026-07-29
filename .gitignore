@@ -18,6 +18,7 @@ STM32Car/tests/*.exe
 .codegraph/
 .vscode/
 .idea/
+docs/superpowers
 .DS_Store
 Thumbs.db
 CLAUDE.md

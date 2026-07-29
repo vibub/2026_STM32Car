@@ -3,28 +3,28 @@
 #include "board_time.h"
 #include "encoder_driver.h"
 #include "imu_heading.h"
-#include "k230_line_protocol.h"
-#include "k230_uart.h"
-#include "line_follow_control.h"
+#include "infrared_line_control.h"
+#include "infrared_line_sensor.h"
 #include "motor_driver.h"
 #include "wheel_speed_pid.h"
-#include <string.h>
 
 /* 这些变量用于 IAR Watch 调试，不参与模块间控制。 */
 volatile uint8_t g_app_line_command_valid;
 volatile uint8_t g_app_motor_fault;
+volatile uint8_t g_app_line_sensor_mask;
+volatile uint8_t g_app_line_active_count;
+volatile uint8_t g_app_line_lost;
 volatile float g_app_left_target_cm_s;
 volatile float g_app_right_target_cm_s;
 volatile float g_app_left_speed_cm_s;
 volatile float g_app_right_speed_cm_s;
 volatile float g_app_left_pwm_ratio;
 volatile float g_app_right_pwm_ratio;
-volatile float g_app_line_error_px;
-volatile float g_app_line_angle_deg;
+volatile float g_app_line_error;
+volatile float g_app_line_correction_cm_s;
 
 static uint32_t s_last_control_ms;
-static K230LineFrame s_line_frame;
-static LineFollowControl s_line_control;
+static InfraredLineControl s_line_control;
 static WheelSpeedPid s_left_speed_pid;
 static WheelSpeedPid s_right_speed_pid;
 
@@ -45,25 +45,23 @@ static void App_StopClosedLoop(void)
 static void App_ControlStep(uint32_t now_ms)
 {
     EncoderSample encoder;
-    LineFollowOutput line_output;
-    uint8_t line_new;
-    uint8_t line_fresh;
+    InfraredLineOutput line_output;
+    uint8_t sensor_mask;
     float left_command;
     float right_command;
 
-    line_new = K230LineProtocol_TakeLatest(&s_line_frame);
-    line_fresh = (uint8_t) (
-        (K230LineProtocol_HasFrame() != 0U) &&
-        (K230LineProtocol_GetAgeMs(now_ms) <= APP_K230_LINK_TIMEOUT_MS));
+    sensor_mask = InfraredLineSensor_ReadMask();
+    InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
+                               &line_output);
 
     EncoderDriver_Sample(&encoder);
     g_app_left_speed_cm_s = encoder.left_cm_s;
     g_app_right_speed_cm_s = encoder.right_cm_s;
-
-    LineFollowControl_Update(&s_line_control, now_ms, &s_line_frame,
-                             line_new, line_fresh, &line_output);
-    g_app_line_error_px = line_output.filtered_error_px;
-    g_app_line_angle_deg = line_output.filtered_angle_deg;
+    g_app_line_sensor_mask = line_output.sensor_mask;
+    g_app_line_active_count = line_output.active_count;
+    g_app_line_lost = line_output.line_lost;
+    g_app_line_error = line_output.filtered_error;
+    g_app_line_correction_cm_s = line_output.correction_cm_s;
     if (line_output.command_valid == 0U) {
         App_StopClosedLoop();
         return;
@@ -96,15 +94,13 @@ static void App_ControlStep(uint32_t now_ms)
 
 void App_Init(void)
 {
-    memset(&s_line_frame, 0, sizeof(s_line_frame));
-    K230LineProtocol_Init();
-    LineFollowControl_Init(&s_line_control);
+    InfraredLineControl_Init(&s_line_control);
     WheelSpeedPid_Init(&s_left_speed_pid);
     WheelSpeedPid_Init(&s_right_speed_pid);
+    InfraredLineSensor_Init();
     MotorDriver_Init();
     EncoderDriver_Init();
     ImuHeading_Init();
-    K230Uart_Init();
     s_last_control_ms = Board_TimeMs();
     App_StopClosedLoop();
 }
@@ -113,7 +109,6 @@ void App_Loop(void)
 {
     uint32_t now_ms;
 
-    K230LineProtocol_Poll();
     ImuHeading_Poll();
     now_ms = Board_TimeMs();
     if ((uint32_t) (now_ms - s_last_control_ms) < APP_CONTROL_PERIOD_MS) {
