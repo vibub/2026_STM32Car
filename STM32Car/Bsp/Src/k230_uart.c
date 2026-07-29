@@ -58,7 +58,7 @@ uint32_t K230Uart_GetErrorCount(void)
     return s_error_count;
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void K230Uart_HandleRxComplete(UART_HandleTypeDef *huart)
 {
     uint16_t next_head;
 
@@ -80,7 +80,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+void K230Uart_HandleError(UART_HandleTypeDef *huart)
 {
     if (huart->Instance != K230_UART_INSTANCE) {
         return;

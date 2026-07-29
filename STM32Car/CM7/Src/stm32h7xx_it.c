@@ -46,6 +46,11 @@ void SysTick_Handler(void)
     HAL_IncTick();
 }
 
+void USART2_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart2);
+}
+
 void UART4_IRQHandler(void)
 {
     HAL_UART_IRQHandler(&huart4);

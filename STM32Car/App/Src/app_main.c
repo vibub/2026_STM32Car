@@ -5,7 +5,10 @@
 #include "imu_heading.h"
 #include "infrared_line_control.h"
 #include "infrared_line_sensor.h"
+#include "k230_uart.h"
 #include "motor_driver.h"
+#include "protocol_tjc.h"
+#include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
 /* 这些变量用于 IAR Watch 调试，不参与模块间控制。 */
@@ -27,6 +30,8 @@ static uint32_t s_last_control_ms;
 static InfraredLineControl s_line_control;
 static WheelSpeedPid s_left_speed_pid;
 static WheelSpeedPid s_right_speed_pid;
+static uint8_t s_current_mode;
+static uint8_t s_line_enabled;
 
 static void App_StopClosedLoop(void)
 {
@@ -62,7 +67,9 @@ static void App_ControlStep(uint32_t now_ms)
     g_app_line_lost = line_output.line_lost;
     g_app_line_error = line_output.filtered_error;
     g_app_line_correction_cm_s = line_output.correction_cm_s;
-    if (line_output.command_valid == 0U) {
+
+    /* 上电默认停车，收到 TJC 灰度巡线命令后才允许闭环输出。 */
+    if ((s_line_enabled == 0U) || (line_output.command_valid == 0U)) {
         App_StopClosedLoop();
         return;
     }
@@ -101,7 +108,12 @@ void App_Init(void)
     MotorDriver_Init();
     EncoderDriver_Init();
     ImuHeading_Init();
+    K230Uart_Init();
+    TjcUart_Init();
+    Protocol_Tjc_Init();
     s_last_control_ms = Board_TimeMs();
+    s_current_mode = APP_MODE_STOP;
+    s_line_enabled = 0U;
     App_StopClosedLoop();
 }
 
@@ -109,6 +121,7 @@ void App_Loop(void)
 {
     uint32_t now_ms;
 
+    Protocol_Tjc_Task();
     ImuHeading_Poll();
     now_ms = Board_TimeMs();
     if ((uint32_t) (now_ms - s_last_control_ms) < APP_CONTROL_PERIOD_MS) {
@@ -118,4 +131,27 @@ void App_Loop(void)
     /* 超过多个周期时不连续补算，避免使用同一份编码器样本重复更新 PID。 */
     s_last_control_ms = now_ms;
     App_ControlStep(now_ms);
+}
+
+uint8_t App_RequestMode(uint8_t mode)
+{
+    if (mode == APP_MODE_STOP) {
+        s_current_mode = APP_MODE_STOP;
+        s_line_enabled = 0U;
+        App_StopClosedLoop();
+        return 1U;
+    }
+
+    if (mode == APP_MODE_GRAY_LINE) {
+        s_current_mode = APP_MODE_GRAY_LINE;
+        s_line_enabled = 1U;
+        return 1U;
+    }
+
+    return 0U;
+}
+
+uint8_t App_GetCurrentMode(void)
+{
+    return s_current_mode;
 }
