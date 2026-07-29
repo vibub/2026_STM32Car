@@ -3,6 +3,8 @@ STM32Car/EWARM/**/Obj/
 STM32Car/EWARM/**/Exe/
 STM32Car/EWARM/**/List/
 STM32Car/EWARM/settings/
+STM32Car/EWARM/STM32Car/.clang-format
+*/**/STM32Car.code-workspace
 *.dep
 *.pbi
 *.map
