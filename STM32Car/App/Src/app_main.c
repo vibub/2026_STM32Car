@@ -32,6 +32,10 @@ volatile uint8_t g_app_line_sensor_stale_count;
 volatile uint8_t g_app_line_sensor_fault;
 
 static uint32_t s_last_control_ms;
+static uint32_t s_oled_timer_start_ms;
+static uint32_t s_oled_timer_elapsed_s;
+static uint32_t s_oled_timer_last_display_s;
+static uint8_t s_oled_timer_running;
 static InfraredLineControl s_line_control;
 static WheelSpeedPid s_left_speed_pid;
 static WheelSpeedPid s_right_speed_pid;
@@ -42,6 +46,53 @@ static uint8_t s_has_line_sensor_sample;
 static uint8_t s_line_sensor_failure_count;
 
 #define APP_LINE_SENSOR_FAILURE_LIMIT 3U
+
+static void App_ShowTimerSeconds(uint32_t elapsed_s)
+{
+    uint8_t hours;
+    uint8_t minutes;
+    uint8_t seconds;
+
+    elapsed_s %= 100UL * 60UL * 60UL;
+    hours = (uint8_t) (elapsed_s / 3600UL);
+    minutes = (uint8_t) ((elapsed_s / 60UL) % 60UL);
+    seconds = (uint8_t) (elapsed_s % 60UL);
+    OledDisplay_ShowTime(hours, minutes, seconds);
+}
+
+static void App_TimerResetAndStart(uint32_t now_ms)
+{
+    s_oled_timer_start_ms = now_ms;
+    s_oled_timer_elapsed_s = 0U;
+    s_oled_timer_last_display_s = 0U;
+    s_oled_timer_running = 1U;
+    App_ShowTimerSeconds(0U);
+}
+
+static void App_TimerStop(uint32_t now_ms)
+{
+    if (s_oled_timer_running != 0U) {
+        s_oled_timer_elapsed_s = (uint32_t) ((now_ms - s_oled_timer_start_ms) / 1000U);
+        s_oled_timer_running = 0U;
+        App_ShowTimerSeconds(s_oled_timer_elapsed_s);
+    }
+}
+
+static void App_TimerTask(uint32_t now_ms)
+{
+    uint32_t elapsed_s;
+
+    if (s_oled_timer_running == 0U) {
+        return;
+    }
+
+    elapsed_s = (uint32_t) ((now_ms - s_oled_timer_start_ms) / 1000U);
+    if (elapsed_s != s_oled_timer_last_display_s) {
+        s_oled_timer_elapsed_s = elapsed_s;
+        s_oled_timer_last_display_s = elapsed_s;
+        App_ShowTimerSeconds(elapsed_s);
+    }
+}
 
 static void App_StopClosedLoop(void)
 {
@@ -162,8 +213,12 @@ void App_Init(void)
     TjcUart_Init();
     Protocol_Tjc_Init();
     OledDisplay_Init();
-    OledDisplay_ShowHello();
+    App_ShowTimerSeconds(0U);
     s_last_control_ms = Board_TimeMs();
+    s_oled_timer_start_ms = s_last_control_ms;
+    s_oled_timer_elapsed_s = 0U;
+    s_oled_timer_last_display_s = 0U;
+    s_oled_timer_running = 0U;
     s_current_mode = APP_MODE_STOP;
     s_line_enabled = 0U;
     s_last_line_sensor_mask = 0U;
@@ -181,12 +236,14 @@ void App_Loop(void)
     ImuHeading_Poll();
     now_ms = Board_TimeMs();
     if ((uint32_t) (now_ms - s_last_control_ms) < APP_CONTROL_PERIOD_MS) {
+        App_TimerTask(now_ms);
         return;
     }
 
     /* 超过多个周期时不连续补算，避免使用同一份编码器样本重复更新 PID。 */
     s_last_control_ms = now_ms;
     App_ControlStep(now_ms);
+    App_TimerTask(now_ms);
 }
 
 uint8_t App_RequestMode(uint8_t mode)
@@ -195,12 +252,14 @@ uint8_t App_RequestMode(uint8_t mode)
         s_current_mode = APP_MODE_STOP;
         s_line_enabled = 0U;
         App_StopClosedLoop();
+        App_TimerStop(Board_TimeMs());
         return 1U;
     }
 
     if (mode == APP_MODE_BASIC_LINE) {
         s_current_mode = APP_MODE_BASIC_LINE;
         s_line_enabled = 1U;
+        App_TimerResetAndStart(Board_TimeMs());
         return 1U;
     }
 
