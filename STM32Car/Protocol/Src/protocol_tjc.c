@@ -81,7 +81,7 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
         Protocol_Tjc_SendResult(accepted ? TJC_RESULT_STOPPED :
                                 TJC_RESULT_ENTER_FAILED,
                                 App_GetCurrentMode(), command);
-    } else if (command == TJC_COMMAND_GRAY_LINE) {
+    } else if (command == TJC_COMMAND_BASIC_LINE) {
         g_tjc_valid_command_count++;
         if (command == current_mode) {
             Protocol_Tjc_SendResult(TJC_RESULT_ALREADY_ACTIVE, current_mode,

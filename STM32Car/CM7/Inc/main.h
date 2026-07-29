@@ -40,8 +40,13 @@ extern TIM_HandleTypeDef htim8;
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart4;
 
+/* 发生 HAL 初始化错误时，记录触发错误的源文件和行号供 IAR Watch 查看。 */
+extern const char * volatile g_error_file;
+extern volatile uint32_t g_error_line;
+
 void SystemClock_Config(void);
-void Error_Handler(void);
+void Error_HandlerAt(const char *file, uint32_t line);
+#define Error_Handler() Error_HandlerAt(__FILE__, (uint32_t) __LINE__)
 
 #ifdef __cplusplus
 }
