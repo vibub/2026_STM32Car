@@ -10,16 +10,16 @@
 #define INFRARED_LINE_ALL_MASK 0x0FU
 
 /*
- * YH-4LXJ V1.1 暂未找到可靠的官方电气资料。
- * 初始按同类模块常见的“黑线输出高电平”处理，实测相反时改为 0U。
+ * YH-4LXJ V1.1 已实测为黑线输出低电平、白底输出高电平。
+ * 驱动统一转换为“掩码位为 1 表示检测到黑线”。
  */
 #ifndef INFRARED_LINE_ACTIVE_HIGH
-#define INFRARED_LINE_ACTIVE_HIGH 1U
+#define INFRARED_LINE_ACTIVE_HIGH 0U
 #endif
 
-/* X1～X4 默认按车辆从左到右排列，安装方向相反时改为 1U。 */
+/* 实测模块编号与车辆左右方向相反，归一化后仍按车辆从左到右排列。 */
 #ifndef INFRARED_LINE_REVERSE_ORDER
-#define INFRARED_LINE_REVERSE_ORDER 0U
+#define INFRARED_LINE_REVERSE_ORDER 1U
 #endif
 
 void InfraredLineSensor_Init(void);

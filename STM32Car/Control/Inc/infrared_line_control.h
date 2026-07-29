@@ -6,6 +6,7 @@
 typedef struct {
     uint8_t filter_ready;
     uint8_t has_valid_line;
+    int8_t last_line_side;
     uint32_t last_valid_line_ms;
     float filtered_error;
     float last_error;
