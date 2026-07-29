@@ -14,6 +14,12 @@ extern "C" {
 #define MOTOR_LEFT_DIR_PIN   GPIO_PIN_3
 #define MOTOR_LEFT_CHANNEL   TIM_CHANNEL_3
 
+/* SG90 servo PWM: TIM4_CH4 on PD15, 50 Hz. */
+#define SERVO_PWM_INSTANCE TIM4
+#define SERVO_PWM_PORT     GPIOD
+#define SERVO_PWM_PIN      GPIO_PIN_15
+#define SERVO_PWM_CHANNEL  TIM_CHANNEL_4
+
 /* TJC3224T124 串口屏：USART2，PD5 为 STM32 TX，PD6 为 STM32 RX。 */
 #define TJC_UART_INSTANCE USART2
 #define TJC_UART_IRQn     USART2_IRQn
@@ -47,6 +53,7 @@ extern "C" {
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim8;
 extern I2C_HandleTypeDef hi2c4;
 extern UART_HandleTypeDef huart2;

@@ -78,18 +78,25 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 {
     GPIO_InitTypeDef gpio = {0};
 
-    if (htim->Instance != TIM2) {
-        return;
+    if (htim->Instance == TIM2) {
+        __HAL_RCC_TIM2_CLK_ENABLE();
+        __HAL_RCC_GPIOA_CLK_ENABLE();
+        gpio.Pin = GPIO_PIN_0 | GPIO_PIN_2;
+        gpio.Mode = GPIO_MODE_AF_PP;
+        gpio.Pull = GPIO_NOPULL;
+        gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        gpio.Alternate = GPIO_AF1_TIM2;
+        HAL_GPIO_Init(GPIOA, &gpio);
+    } else if (htim->Instance == SERVO_PWM_INSTANCE) {
+        __HAL_RCC_TIM4_CLK_ENABLE();
+        __HAL_RCC_GPIOD_CLK_ENABLE();
+        gpio.Pin = SERVO_PWM_PIN;
+        gpio.Mode = GPIO_MODE_AF_PP;
+        gpio.Pull = GPIO_NOPULL;
+        gpio.Speed = GPIO_SPEED_FREQ_LOW;
+        gpio.Alternate = GPIO_AF2_TIM4;
+        HAL_GPIO_Init(SERVO_PWM_PORT, &gpio);
     }
-
-    __HAL_RCC_TIM2_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    gpio.Pin = GPIO_PIN_0 | GPIO_PIN_2;
-    gpio.Mode = GPIO_MODE_AF_PP;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    gpio.Alternate = GPIO_AF1_TIM2;
-    HAL_GPIO_Init(GPIOA, &gpio);
 }
 
 void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef *htim)
@@ -148,6 +155,10 @@ void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *htim)
         __HAL_RCC_TIM2_FORCE_RESET();
         __HAL_RCC_TIM2_RELEASE_RESET();
         HAL_GPIO_DeInit(GPIOA, GPIO_PIN_0 | GPIO_PIN_2);
+    } else if (htim->Instance == SERVO_PWM_INSTANCE) {
+        __HAL_RCC_TIM4_FORCE_RESET();
+        __HAL_RCC_TIM4_RELEASE_RESET();
+        HAL_GPIO_DeInit(SERVO_PWM_PORT, SERVO_PWM_PIN);
     }
 }
 
