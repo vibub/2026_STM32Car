@@ -2,6 +2,7 @@
 STM32Car/EWARM/**/Obj/
 STM32Car/EWARM/**/Exe/
 STM32Car/EWARM/**/List/
+STM32Car/EWARM/settings/
 *.dep
 *.pbi
 *.map
@@ -17,3 +18,4 @@ STM32Car/tests/*.exe
 .idea/
 .DS_Store
 Thumbs.db
+CLAUDE.md
