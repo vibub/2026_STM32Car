@@ -68,7 +68,7 @@ static void App_ControlStep(uint32_t now_ms)
     g_app_line_error = line_output.filtered_error;
     g_app_line_correction_cm_s = line_output.correction_cm_s;
 
-    /* 上电默认停车，收到 TJC 灰度巡线命令后才允许闭环输出。 */
+    /* 上电默认停车，收到 TJC 基础巡线命令后才允许闭环输出。 */
     if ((s_line_enabled == 0U) || (line_output.command_valid == 0U)) {
         App_StopClosedLoop();
         return;
@@ -142,8 +142,8 @@ uint8_t App_RequestMode(uint8_t mode)
         return 1U;
     }
 
-    if (mode == APP_MODE_GRAY_LINE) {
-        s_current_mode = APP_MODE_GRAY_LINE;
+    if (mode == APP_MODE_BASIC_LINE) {
+        s_current_mode = APP_MODE_BASIC_LINE;
         s_line_enabled = 1U;
         return 1U;
     }

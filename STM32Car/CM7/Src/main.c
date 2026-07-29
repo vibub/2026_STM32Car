@@ -8,6 +8,9 @@ TIM_HandleTypeDef htim8;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
+const char * volatile g_error_file;
+volatile uint32_t g_error_line;
+
 static void MPU_Config(void);
 static void CPU_CACHE_Enable(void);
 static void MX_GPIO_Init(void);
@@ -277,8 +280,10 @@ static void MPU_Config(void)
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
-void Error_Handler(void)
+void Error_HandlerAt(const char *file, uint32_t line)
 {
+    g_error_file = file;
+    g_error_line = line;
     if (htim2.Instance == TIM2) {
         MotorDriver_Stop();
     }

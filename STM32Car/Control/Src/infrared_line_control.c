@@ -3,8 +3,8 @@
 #include <string.h>
 
 #define IR_LINE_FILTER_ALPHA                 0.45f
-#define IR_LINE_KP                           3.00f
-#define IR_LINE_KD                           1.20f
+#define IR_LINE_KP                           5.00f
+#define IR_LINE_KD                           1.80f
 #define IR_LINE_CORRECTION_LIMIT_CM_S       10.00f
 #define IR_LINE_CORRECTION_SLEW_CM_S         2.50f
 #define IR_LINE_MEDIUM_ERROR                 1.00f

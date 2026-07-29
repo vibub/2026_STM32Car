@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define APP_MODE_STOP 0x00U
-#define APP_MODE_GRAY_LINE 0x0DU
+#define APP_MODE_STOP       0x00U
+#define APP_MODE_BASIC_LINE 0x01U
 
 void App_Init(void);
 void App_Loop(void);
