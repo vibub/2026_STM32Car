@@ -1,0 +1,19 @@
+# IAR EWARM 构建输出
+STM32Car/EWARM/**/Obj/
+STM32Car/EWARM/**/Exe/
+STM32Car/EWARM/**/List/
+*.dep
+*.pbi
+*.map
+*.out
+*.hex
+
+# 主机测试输出
+STM32Car/tests/*.exe
+
+# 编辑器、索引与系统文件
+.codegraph/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
