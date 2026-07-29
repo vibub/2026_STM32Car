@@ -12,12 +12,12 @@
 #define IR_LINE_MEDIUM_SPEED_SCALE           0.82f
 #define IR_LINE_LARGE_SPEED_SCALE            0.65f
 #define IR_LINE_WIDE_SPEED_SCALE             0.65f
-#define IR_LINE_GAP_SPEED_SCALE              0.50f
-#define IR_LINE_SEARCH_SPEED_SCALE           0.35f
-#define IR_LINE_GAP_POSITION_CM              1.70f
-#define IR_LINE_DIRECTION_EPSILON_CM         0.05f
-#define IR_LINE_TARGET_MAX_CM_S             60.00f
-#define IR_LINE_SENSOR_MASK                  0x0FU
+#define IR_LINE_RECOVERY_SPEED_SCALE         0.50f
+#define IR_LINE_SEARCH_SPEED_SCALE            0.35f
+#define IR_LINE_EDGE_POSITION_CM              4.20f
+#define IR_LINE_DIRECTION_EPSILON_CM          0.05f
+#define IR_LINE_TARGET_MAX_CM_S              60.00f
+#define IR_LINE_SENSOR_MASK                  0xFFU
 
 static float InfraredLine_Abs(float value)
 {
@@ -48,13 +48,16 @@ static float InfraredLine_LimitDelta(float value, float previous, float delta)
 
 static uint8_t InfraredLine_CalculateError(uint8_t mask, float *error)
 {
-    /* 实测探头中心位置，单位为相对车体中心的厘米。 */
-    static const float positions_cm[4] = {-3.0f, -0.4f, 0.4f, 3.0f};
+    /* 相邻探头中心距 12 mm，bit0 在车辆左侧，单位为厘米。 */
+    static const float positions_cm[8] = {
+        -4.2f, -3.0f, -1.8f, -0.6f,
+        0.6f, 1.8f, 3.0f, 4.2f
+    };
     uint8_t index;
     uint8_t active_count = 0U;
     float position_sum = 0.0f;
 
-    for (index = 0U; index < 4U; index++) {
+    for (index = 0U; index < 8U; index++) {
         if ((mask & (uint8_t) (1U << index)) != 0U) {
             position_sum += positions_cm[index];
             active_count++;
@@ -194,15 +197,15 @@ void InfraredLineControl_Update(InfraredLineControl *control,
             return;
         }
 
-        if (line_age_ms <= APP_IR_LINE_GAP_BRIDGE_MS) {
+        if (line_age_ms <= APP_IR_LINE_LOST_RECOVERY_MS) {
             reported_error = (float) control->last_line_side *
-                             IR_LINE_GAP_POSITION_CM;
+                             IR_LINE_EDGE_POSITION_CM;
             output->raw_error = reported_error;
             target_correction = IR_LINE_KP * reported_error;
-            base_speed *= IR_LINE_GAP_SPEED_SCALE;
+            base_speed *= IR_LINE_RECOVERY_SPEED_SCALE;
         } else {
             reported_error = (float) control->last_line_side *
-                             IR_LINE_LARGE_ERROR;
+                             IR_LINE_EDGE_POSITION_CM;
             output->raw_error = reported_error;
             target_correction = (float) control->last_line_side *
                                 IR_LINE_CORRECTION_LIMIT_CM_S;

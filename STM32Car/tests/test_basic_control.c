@@ -24,15 +24,21 @@ static void assert_targets_in_range(const InfraredLineOutput *output)
     assert(output->right_target_cm_s <= TEST_TARGET_MAX_CM_S);
 }
 
-static void test_infrared_physical_positions(void)
+static void test_infrared_eight_positions(void)
 {
-    static const uint8_t masks[4] = {0x01U, 0x02U, 0x04U, 0x08U};
-    static const float expected_errors[4] = {-3.0f, -0.4f, 0.4f, 3.0f};
+    static const uint8_t masks[8] = {
+        0x01U, 0x02U, 0x04U, 0x08U,
+        0x10U, 0x20U, 0x40U, 0x80U
+    };
+    static const float expected_errors[8] = {
+        -4.2f, -3.0f, -1.8f, -0.6f,
+        0.6f, 1.8f, 3.0f, 4.2f
+    };
     InfraredLineControl control;
     InfraredLineOutput output;
     uint8_t index;
 
-    for (index = 0U; index < 4U; index++) {
+    for (index = 0U; index < 8U; index++) {
         InfraredLineControl_Init(&control);
         InfraredLineControl_Update(&control, 0U, masks[index], &output);
         assert(output.command_valid != 0U);
@@ -43,22 +49,23 @@ static void test_infrared_physical_positions(void)
     }
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x03U, &output);
-    assert_float_near(output.raw_error, -1.7f);
-
-    InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x0CU, &output);
-    assert_float_near(output.raw_error, 1.7f);
-
-    InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x06U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x18U, &output);
     assert(output.command_valid != 0U);
     assert(output.active_count == 2U);
+    assert_float_near(output.raw_error, 0.0f);
     assert_float_near(output.filtered_error, 0.0f);
     assert_float_near(output.left_target_cm_s, output.right_target_cm_s);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x0FU, &output);
+    InfraredLineControl_Update(&control, 0U, 0x03U, &output);
+    assert_float_near(output.raw_error, -3.6f);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0xC0U, &output);
+    assert_float_near(output.raw_error, 3.6f);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0xFFU, &output);
     assert(output.command_valid != 0U);
     assert(output.wide_line != 0U);
     assert_float_near(output.filtered_error, 0.0f);
@@ -75,36 +82,36 @@ static void test_infrared_target_differential(void)
     assert_targets_in_range(&output);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x02U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x08U, &output);
     assert(output.left_target_cm_s < output.right_target_cm_s);
     assert(output.left_target_cm_s != output.right_target_cm_s);
     assert_targets_in_range(&output);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x04U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x10U, &output);
     assert(output.left_target_cm_s > output.right_target_cm_s);
     assert(output.left_target_cm_s != output.right_target_cm_s);
     assert_targets_in_range(&output);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x08U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x80U, &output);
     assert(output.left_target_cm_s > output.right_target_cm_s);
     assert_targets_in_range(&output);
 }
 
-static void test_infrared_gap_bridge_and_search(void)
+static void test_infrared_loss_recovery(void)
 {
     InfraredLineControl control;
     InfraredLineOutput output;
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x02U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x08U, &output);
     assert(output.left_target_cm_s < output.right_target_cm_s);
 
     InfraredLineControl_Update(&control, 200U, 0x00U, &output);
     assert(output.command_valid != 0U);
     assert(output.line_lost != 0U);
-    assert_float_near(output.raw_error, -1.7f);
+    assert_float_near(output.raw_error, -4.2f);
     assert(output.correction_cm_s < 0.0f);
     assert(output.left_target_cm_s < output.right_target_cm_s);
     assert_targets_in_range(&output);
@@ -112,7 +119,7 @@ static void test_infrared_gap_bridge_and_search(void)
     InfraredLineControl_Update(&control, 220U, 0x00U, &output);
     assert(output.command_valid != 0U);
     assert(output.line_lost != 0U);
-    assert(output.filtered_error < 0.0f);
+    assert_float_near(output.raw_error, -4.2f);
     assert(output.correction_cm_s < 0.0f);
     assert(output.left_target_cm_s < output.right_target_cm_s);
     assert_targets_in_range(&output);
@@ -123,17 +130,17 @@ static void test_infrared_gap_bridge_and_search(void)
     assert(output.command_valid == 0U);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x04U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x10U, &output);
     InfraredLineControl_Update(&control, 100U, 0x00U, &output);
     assert(output.command_valid != 0U);
-    assert_float_near(output.raw_error, 1.7f);
+    assert_float_near(output.raw_error, 4.2f);
     assert(output.correction_cm_s > 0.0f);
     assert(output.left_target_cm_s > output.right_target_cm_s);
 
-    InfraredLineControl_Update(&control, 120U, 0x04U, &output);
+    InfraredLineControl_Update(&control, 120U, 0x10U, &output);
     assert(output.command_valid != 0U);
     assert(output.line_lost == 0U);
-    assert_float_near(output.raw_error, 0.4f);
+    assert_float_near(output.raw_error, 0.6f);
 }
 
 static void test_infrared_safe_loss_behavior(void)
@@ -147,7 +154,7 @@ static void test_infrared_safe_loss_behavior(void)
     assert(output.line_lost != 0U);
 
     InfraredLineControl_Init(&control);
-    InfraredLineControl_Update(&control, 0U, 0x06U, &output);
+    InfraredLineControl_Update(&control, 0U, 0x18U, &output);
     assert(output.command_valid != 0U);
     InfraredLineControl_Update(&control, 20U, 0x00U, &output);
     assert(output.command_valid == 0U);
@@ -168,9 +175,9 @@ static void test_speed_pid(void)
 
 int main(void)
 {
-    test_infrared_physical_positions();
+    test_infrared_eight_positions();
     test_infrared_target_differential();
-    test_infrared_gap_bridge_and_search();
+    test_infrared_loss_recovery();
     test_infrared_safe_loss_behavior();
     test_speed_pid();
     puts("基础巡线主机测试通过");
