@@ -48,6 +48,32 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     }
 }
 
+void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
+{
+    GPIO_InitTypeDef gpio = {0};
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    if (hi2c->Instance != OLED_I2C_INSTANCE) {
+        return;
+    }
+
+    __HAL_RCC_GPIOF_CLK_ENABLE();
+    __HAL_RCC_I2C4_CLK_ENABLE();
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_I2C4;
+    clock.I2c4ClockSelection = RCC_I2C4CLKSOURCE_HSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    gpio.Pin = OLED_I2C_SCL_PIN | OLED_I2C_SDA_PIN;
+    gpio.Mode = GPIO_MODE_AF_OD;
+    gpio.Pull = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    gpio.Alternate = GPIO_AF4_I2C4;
+    HAL_GPIO_Init(GPIOF, &gpio);
+}
+
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
 {
     GPIO_InitTypeDef gpio = {0};
@@ -104,6 +130,15 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
         __HAL_RCC_UART4_RELEASE_RESET();
         HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8 | GPIO_PIN_9);
         HAL_NVIC_DisableIRQ(UART4_IRQn);
+    }
+}
+
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef *hi2c)
+{
+    if (hi2c->Instance == OLED_I2C_INSTANCE) {
+        __HAL_RCC_I2C4_FORCE_RESET();
+        __HAL_RCC_I2C4_RELEASE_RESET();
+        HAL_GPIO_DeInit(GPIOF, OLED_I2C_SCL_PIN | OLED_I2C_SDA_PIN);
     }
 }
 
