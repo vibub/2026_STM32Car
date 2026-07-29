@@ -11,26 +11,26 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     GPIO_InitTypeDef gpio = {0};
     RCC_PeriphCLKInitTypeDef clock = {0};
 
-    if (huart->Instance != UART4) {
+    if (huart->Instance != USART2) {
         return;
     }
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_UART4_CLK_ENABLE();
-    clock.PeriphClockSelection = RCC_PERIPHCLK_UART4;
-    clock.Usart234578ClockSelection = RCC_UART4CLKSOURCE_HSI;
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+    __HAL_RCC_USART2_CLK_ENABLE();
+    clock.PeriphClockSelection = RCC_PERIPHCLK_USART2;
+    clock.Usart234578ClockSelection = RCC_USART2CLKSOURCE_HSI;
     if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
         Error_Handler();
     }
 
-    gpio.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    gpio.Pin = GPIO_PIN_5 | GPIO_PIN_6;
     gpio.Mode = GPIO_MODE_AF_PP;
     gpio.Pull = GPIO_PULLUP;
     gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    gpio.Alternate = GPIO_AF8_UART4;
-    HAL_GPIO_Init(GPIOB, &gpio);
-    HAL_NVIC_SetPriority(UART4_IRQn, 5U, 0U);
-    HAL_NVIC_EnableIRQ(UART4_IRQn);
+    gpio.Alternate = GPIO_AF7_USART2;
+    HAL_GPIO_Init(GPIOD, &gpio);
+    HAL_NVIC_SetPriority(USART2_IRQn, 5U, 0U);
+    HAL_NVIC_EnableIRQ(USART2_IRQn);
 }
 
 void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
@@ -79,11 +79,11 @@ void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef *htim)
 
 void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == UART4) {
-        __HAL_RCC_UART4_FORCE_RESET();
-        __HAL_RCC_UART4_RELEASE_RESET();
-        HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8 | GPIO_PIN_9);
-        HAL_NVIC_DisableIRQ(UART4_IRQn);
+    if (huart->Instance == USART2) {
+        __HAL_RCC_USART2_FORCE_RESET();
+        __HAL_RCC_USART2_RELEASE_RESET();
+        HAL_GPIO_DeInit(GPIOD, GPIO_PIN_5 | GPIO_PIN_6);
+        HAL_NVIC_DisableIRQ(USART2_IRQn);
     }
 }
 

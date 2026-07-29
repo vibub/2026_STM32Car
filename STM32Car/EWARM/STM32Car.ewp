@@ -1159,7 +1159,7 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\imu_heading.c</name>
                 </file>
                 <file>
-                    <name>$PROJ_DIR$\..\Bsp\Src\k230_uart.c</name>
+                    <name>$PROJ_DIR$\..\Bsp\Src\tjc_uart.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\motor_driver.c</name>
@@ -1168,16 +1168,13 @@
             <group>
                 <name>Control</name>
                 <file>
-                    <name>$PROJ_DIR$\..\Control\Src\line_follow_control.c</name>
-                </file>
-                <file>
                     <name>$PROJ_DIR$\..\Control\Src\wheel_speed_pid.c</name>
                 </file>
             </group>
             <group>
                 <name>Protocol</name>
                 <file>
-                    <name>$PROJ_DIR$\..\Protocol\Src\k230_line_protocol.c</name>
+                    <name>$PROJ_DIR$\..\Protocol\Src\protocol_tjc.c</name>
                 </file>
             </group>
         </group>

@@ -5,7 +5,7 @@
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
-UART_HandleTypeDef huart4;
+UART_HandleTypeDef huart2;
 
 static void MPU_Config(void);
 static void CPU_CACHE_Enable(void);
@@ -13,7 +13,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
-static void MX_UART4_Init(void);
+static void MX_USART2_UART_Init(void);
 
 int main(void)
 {
@@ -26,7 +26,7 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM8_Init();
-    MX_UART4_Init();
+    MX_USART2_UART_Init();
     App_Init();
 
     while (1) {
@@ -79,7 +79,6 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
 
-    /* 先把 H 桥方向脚拉低，避免 PWM 初始化期间误动作。 */
     HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN,
                       GPIO_PIN_RESET);
     gpio.Pin = MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN;
@@ -183,31 +182,31 @@ static void MX_TIM8_Init(void)
     }
 }
 
-static void MX_UART4_Init(void)
+static void MX_USART2_UART_Init(void)
 {
     RCC_PeriphCLKInitTypeDef clock = {0};
 
-    clock.PeriphClockSelection = RCC_PERIPHCLK_UART4;
-    clock.Usart234578ClockSelection = RCC_UART4CLKSOURCE_HSI;
+    clock.PeriphClockSelection = RCC_PERIPHCLK_USART2;
+    clock.Usart234578ClockSelection = RCC_USART2CLKSOURCE_HSI;
     if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
         Error_Handler();
     }
 
-    huart4.Instance = UART4;
-    huart4.Init.BaudRate = 115200U;
-    huart4.Init.WordLength = UART_WORDLENGTH_8B;
-    huart4.Init.StopBits = UART_STOPBITS_1;
-    huart4.Init.Parity = UART_PARITY_NONE;
-    huart4.Init.Mode = UART_MODE_TX_RX;
-    huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-    huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-    huart4.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-    huart4.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-    huart4.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-    if (HAL_UART_Init(&huart4) != HAL_OK) {
+    huart2.Instance = USART2;
+    huart2.Init.BaudRate = 115200U;
+    huart2.Init.WordLength = UART_WORDLENGTH_8B;
+    huart2.Init.StopBits = UART_STOPBITS_1;
+    huart2.Init.Parity = UART_PARITY_NONE;
+    huart2.Init.Mode = UART_MODE_TX_RX;
+    huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+    huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+    huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+    huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+    if (HAL_UART_Init(&huart2) != HAL_OK) {
         Error_Handler();
     }
-    if (HAL_UARTEx_DisableFifoMode(&huart4) != HAL_OK) {
+    if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK) {
         Error_Handler();
     }
 }
@@ -240,7 +239,6 @@ static void MPU_Config(void)
 
 void Error_Handler(void)
 {
-    /* 外设尚未完成初始化时不能访问空的 TIM 句柄。 */
     if (htim2.Instance == TIM2) {
         MotorDriver_Stop();
     }

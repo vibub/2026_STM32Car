@@ -1,68 +1,60 @@
-# STM32Car 基础巡线固件
+﻿# STM32Car Firmware
 
-本目录是从 MSPM0 巡线程序移植出的 STM32H745ZI CM7-only 固件，使用 IAR EWARM 8.3 和 STM32H7 HAL。
+STM32H745ZI CM7 firmware for the smart car chassis, built with IAR EWARM and STM32H7 HAL.
 
-## 当前功能
+## Current Status
 
-- K230 红线协议：UART4，115200 8N1，仅解析 `L,valid,error_x,angle_d10,quality,direction_mask`。
-- 基础视觉巡线：横向误差和红线角度经过低通、死区、限幅和斜率限制后生成左右轮速度目标。
-- 双轮速度闭环：20 ms 编码器采样，左右轮独立 PID，包含积分限幅、启动补偿和编码器反馈故障检测。
-- 安全停车：无有效红线、K230 超时或编码器反馈故障时清空控制器并停止电机。
-- LSM6DSV16X：已预留平台接口，等待 STM32 侧 I2C/SPI 接线确认后接入。
+- TJC touch panel is connected to USART2: TX PD5, RX PD6, 115200 8N1.
+- TJC stop key sends `5A A5 00 FF` and enters stop mode.
+- TJC line key sends `5A A5 0D F2` and enters grayscale line mode.
+- TJC query key/value `5A A5 0E F1` returns the current mode.
+- The old camera UART, camera line protocol, and camera line-follow control have been removed from the application project.
+- Four-channel grayscale line following is now the intended line sensor path, but its pins and polarity are not wired in this firmware yet. Until that hardware mapping is added, grayscale line mode keeps the motors stopped.
+- Motor, encoder, IMU heading, wheel-speed PID, and closed-loop stop handling remain in place.
 
-未迁移蓝牙、CCD、TJC、云台、送药、路口、路线规划和模式状态机。
+## Hardware Map
 
-## 硬件映射
+| Function | Pins |
+| --- | --- |
+| TJC UART | USART2 TX PD5, RX PD6 |
+| Left motor PWM/DIR | TIM2 CH3 PA2, DIR PA3 |
+| Right motor PWM/DIR | TIM2 CH1 PA0, DIR PA1 |
+| Left encoder | TIM8 CH1 PC6, TIM8 CH2 PC7 |
+| Right encoder | TIM1 CH1 PA8, TIM1 CH2 PE11 |
 
-| 功能 | 外设与引脚 |
-|---|---|
-| 右电机 PWM | TIM2_CH1 / PA0 |
-| 右电机方向 | PA1 |
-| 左电机 PWM | TIM2_CH3 / PA2 |
-| 左电机方向 | PA3 |
-| 右编码器 | TIM1_CH1 PA8、TIM1_CH2 PE11 |
-| 左编码器 | TIM8_CH1 PC6、TIM8_CH2 PC7 |
-| K230 UART | UART4 TX PB9、RX PB8 |
+## TJC Protocol
 
-电机 PWM 约为 6.4 kHz。首版最大 PID 输出限制为 50%，基础巡线速度为 15 cm/s。
-
-## IAR 构建
-
-打开：
+The touch panel sends a 4-byte frame:
 
 ```text
-EWARM/STM32Car.eww
+5A A5 <mode> <check>
 ```
 
-命令行构建：
+The checksum byte is the bitwise inverse of the mode byte:
 
-```powershell
-& "D:\Program Files (x86)\IAR Systems\Embedded Workbench 8.3\common\bin\IarBuild.exe" `
-  "D:\Develop\2026_STM32Car\STM32Car\EWARM\STM32Car.ewp" `
-  -build STM32H745I_Nucleo_CM7
+```text
+check = mode ^ 0xFF
 ```
 
-输出文件名为 `STM32Car_CM7.out` 和 `STM32Car_CM7.hex`。
+Supported mode values:
 
-## 主机测试
+| Mode | Frame | Meaning |
+| --- | --- | --- |
+| `0x00` | `5A A5 00 FF` | Stop |
+| `0x0D` | `5A A5 0D F2` | Four-channel grayscale line mode |
+| `0x0E` | `5A A5 0E F1` | Query current mode |
 
-```bash
-gcc -std=c11 -Wall -Wextra -Werror \
-  -IApp/Inc -IBsp/Inc -IControl/Inc -IProtocol/Inc \
-  tests/test_basic_control.c \
-  Protocol/Src/k230_line_protocol.c \
-  Control/Src/line_follow_control.c \
-  Control/Src/wheel_speed_pid.c \
-  -o tests/test_basic_control.exe
-./tests/test_basic_control.exe
-```
+The firmware replies through USART2 with a 5-byte result frame: `A5 <result> <current_mode> <request> <xor>`.
 
-## 上车前必须验证
+## Next Hardware Step
 
-1. 烧录前清空 CM4 所在的 Flash Bank 2，或在 Option Bytes 中关闭 CM4 启动，避免旧 CM4 固件继续占用外设。
-2. 架空测试左右电机正反转和停止电平组合。
-3. 确认车辆向前时 TIM1/TIM8 编码器速度均为正。
-4. 实测轮子一圈的编码器计数，校准当前 56000 counts/rev 参数。
-5. 人工移动红线，确认红线右偏时左轮目标大于右轮目标。
-6. 低速落地测试，确认断开 K230 后电机可靠停止。
-7. 后续为 IMU 选择 I2C 引脚时避开已被 UART4 占用的 PB8/PB9。
+Add the four grayscale sensor interface once the wiring is fixed:
+
+- Sensor type: digital DO or analog AO.
+- Four channel pins, from left to right.
+- Active polarity for black line detection.
+- Desired steering behavior when all channels lose the line.
+
+After that, `APP_MODE_GRAY_LINE` can drive the motor speed and steering from the grayscale sensor state instead of holding the car stopped.
+
+
