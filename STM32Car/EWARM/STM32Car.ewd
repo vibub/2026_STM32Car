@@ -44,7 +44,7 @@
                 </option>
                 <option>
                     <name>MemFile</name>
-                    <state>$TOOLKIT_DIR$\CONFIG\debugger\ST\STM32H745ZI_M7.ddf</state>
+                    <state>$TOOLKIT_DIR$\CONFIG\debugger\ST\STM32H745ZI_CM7.ddf</state>
                 </option>
                 <option>
                     <name>RunToEnable</name>
@@ -1025,7 +1025,7 @@
                 </option>
                 <option>
                     <name>CCCpuClockEdit</name>
-                    <state>480</state>
+                    <state>200</state>
                 </option>
                 <option>
                     <name>CCSwoClockAuto</name>

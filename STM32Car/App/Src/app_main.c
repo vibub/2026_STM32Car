@@ -7,6 +7,7 @@
 #include "infrared_line_sensor.h"
 #include "k230_uart.h"
 #include "motor_driver.h"
+#include "oled_display.h"
 #include "protocol_tjc.h"
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
@@ -111,6 +112,8 @@ void App_Init(void)
     K230Uart_Init();
     TjcUart_Init();
     Protocol_Tjc_Init();
+    OledDisplay_Init();
+    OledDisplay_ShowHello();
     s_last_control_ms = Board_TimeMs();
     s_current_mode = APP_MODE_STOP;
     s_line_enabled = 0U;

@@ -5,6 +5,7 @@
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
+I2C_HandleTypeDef hi2c4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
@@ -17,6 +18,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
+static void MX_I2C4_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
 
@@ -31,6 +33,7 @@ int main(void)
     MX_TIM1_Init();
     MX_TIM2_Init();
     MX_TIM8_Init();
+    MX_I2C4_Init();
     MX_USART2_UART_Init();
     MX_UART4_Init();
     App_Init();
@@ -85,6 +88,7 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOC_CLK_ENABLE();
     __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOF_CLK_ENABLE();
 
     HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN,
                       GPIO_PIN_RESET);
@@ -100,6 +104,30 @@ static void MX_GPIO_Init(void)
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(IR_LINE_PORT, &gpio);
+}
+
+static void MX_I2C4_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_I2C4;
+    clock.I2c4ClockSelection = RCC_I2C4CLKSOURCE_HSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    hi2c4.Instance = OLED_I2C_INSTANCE;
+    hi2c4.Init.Timing = 0x10D19CE4U;
+    hi2c4.Init.OwnAddress1 = 0U;
+    hi2c4.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c4.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c4.Init.OwnAddress2 = 0U;
+    hi2c4.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c4) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
 static void MX_TIM1_Init(void)
