@@ -11,9 +11,9 @@
 #define LINKAGE_SERVO_G_Y_CM                   3.0f           /* 舵机轴 G 相对 A 的竖直坐标。 */
 #define LINKAGE_HORN_GF_CM                     1.9f           /* 舵机摇臂轴心到连接孔的中心距。 */
 #define LINKAGE_CONNECTING_CF_CM               7.0716718f     /* 单连杆 C-F 的名义中心距。 */
-#define LINKAGE_HORN_INSTALL_CENTER_DEG      107.4401f        /* 内部 135°对应的摇臂绝对安装角。 */
-#define LINKAGE_SERVO_INTERNAL_CENTER_DEG    135.0f           /* 270°舵机的内部位置中点。 */
-#define LINKAGE_SERVO_DIRECTION               (-1.0f)         /* 实机舵机反向安装，内部角增大时摇臂绝对角减小。 */
+#define LINKAGE_HORN_LEVEL_DEG               116.2342619f     /* 水管水平时由几何模型得到的摇臂绝对角。 */
+#define LINKAGE_SERVO_LEVEL_DEG              122.0f           /* 连接件重新定向后水管水平对应的舵机内部角。 */
+#define LINKAGE_SERVO_DIRECTION               (-1.0f)         /* 内部角增大时摇臂绝对角减小。 */
 #define LINKAGE_REACH_TOLERANCE_CM             0.0001f        /* 可达条件允许的浮点计算误差。 */
 #define LINKAGE_ANGLE_TOLERANCE_DEG            0.01f          /* 反解工作范围允许的浮点角度误差。 */
 
@@ -107,9 +107,9 @@ uint8_t LinkageKinematics_PipePitchToServoAngle(float pipe_pitch_deg,
         return 0U;
     }
 
-    *servo_angle_deg = LINKAGE_SERVO_INTERNAL_CENTER_DEG +
+    *servo_angle_deg = LINKAGE_SERVO_LEVEL_DEG +
         LINKAGE_SERVO_DIRECTION *
-        (horn_angle_deg - LINKAGE_HORN_INSTALL_CENTER_DEG);
+        (horn_angle_deg - LINKAGE_HORN_LEVEL_DEG);
     return LinkageKinematics_ValueIsValid(*servo_angle_deg);
 }
 
@@ -134,8 +134,8 @@ uint8_t LinkageKinematics_ServoAngleToPipePitch(float servo_angle_deg,
         return 0U;
     }
 
-    horn_angle_deg = LINKAGE_HORN_INSTALL_CENTER_DEG +
-        (servo_angle_deg - LINKAGE_SERVO_INTERNAL_CENTER_DEG) /
+    horn_angle_deg = LINKAGE_HORN_LEVEL_DEG +
+        (servo_angle_deg - LINKAGE_SERVO_LEVEL_DEG) /
         LINKAGE_SERVO_DIRECTION;
     horn_angle_rad = horn_angle_deg * LINKAGE_DEG_TO_RAD;
     point_f_x = LINKAGE_SERVO_G_X_CM +

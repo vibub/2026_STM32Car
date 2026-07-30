@@ -4,8 +4,8 @@
 
 #include <string.h>
 
-#define BALL_BALANCE_MIN_ANGLE_DEG             100.0f  /* 连杆装配状态下的最小安全舵机内部角。 */
-#define BALL_BALANCE_MAX_ANGLE_DEG             170.0f  /* 连杆装配状态下的最大安全舵机内部角。 */
+#define BALL_BALANCE_MIN_ANGLE_DEG              90.0f  /* 重新装配后的最小安全舵机内部角。 */
+#define BALL_BALANCE_MAX_ANGLE_DEG             180.0f  /* 重新装配后的最大安全舵机内部角。 */
 #define BALL_BALANCE_MAX_PIPE_PITCH_DEG          3.0f  /* 钢球位置外环允许的最大目标水管俯仰角。 */
 #define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       6.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
 #define BALL_BALANCE_POSITION_KP_DEG_PER_MM       0.040f /* 钢球位置到目标水管角的比例增益。 */

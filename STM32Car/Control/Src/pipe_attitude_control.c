@@ -6,9 +6,9 @@
 #include <string.h>
 
 #define PIPE_ATTITUDE_RAD_TO_DEG                  57.2957795f /* 弧度转换为角度的比例。 */
-#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG    -6.0f      /* 空载标定使用的连杆模型负向极限角。 */
+#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG    -8.0f      /* 重新装配后的空载负向模型标定角。 */
 #define PIPE_ATTITUDE_CALIBRATION_CENTER_DEG       0.0f      /* 三点标定使用的水平模型目标角。 */
-#define PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG     6.0f      /* 空载标定使用的连杆模型正向极限角。 */
+#define PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG     6.8f      /* 留出几何死点余量的正向模型标定角。 */
 #define PIPE_ATTITUDE_LEVEL_SETTLE_MS            500U        /* 水平零偏采样前的静置时间。 */
 #define PIPE_ATTITUDE_POINT_SETTLE_MS            800U        /* 到达模型标定点后的静置时间。 */
 #define PIPE_ATTITUDE_LEVEL_SAMPLE_COUNT         180U        /* 水平零偏标定采样数量，约为 3 秒。 */
@@ -33,8 +33,8 @@
 #define PIPE_ATTITUDE_MAX_RETURN_ERROR_DEG             0.60f   /* 回到模型水平点后允许的最大回差。 */
 #define PIPE_ATTITUDE_CALIBRATION_SERVO_SLEW_DEG_S    30.0f   /* 标定期间舵机命令最大变化率。 */
 #define PIPE_ATTITUDE_SERVO_TARGET_EPSILON_DEG          0.01f  /* 判定软件舵机命令到位的角度误差。 */
-#define PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG              100.0f   /* 连杆装配下允许的最小舵机内部角。 */
-#define PIPE_ATTITUDE_SERVO_SAFE_MAX_DEG              170.0f   /* 连杆装配下允许的最大舵机内部角。 */
+#define PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG               90.0f   /* 重新装配后允许的最小舵机内部角。 */
+#define PIPE_ATTITUDE_SERVO_SAFE_MAX_DEG              180.0f   /* 重新装配后允许的最大舵机内部角。 */
 
 static float PipeAttitudeControl_Abs(float value)
 {
@@ -403,10 +403,14 @@ static void PipeAttitudeControl_FinishMapping(PipeAttitudeControl *control,
     control->model_scale = normalized_span /
         (PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG -
          PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG);
+    /* 非对称标定端点下，对三个采样点的模型残差取平均得到零偏。 */
     control->model_offset_deg =
-        (control->negative_pitch_deg +
+        ((control->negative_pitch_deg -
+          control->model_scale * PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG) +
          control->center_pitch_deg +
-         control->positive_pitch_deg) / 3.0f;
+         (control->positive_pitch_deg -
+          control->model_scale * PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG)) /
+        3.0f;
     return_error = PipeAttitudeControl_Abs(control->return_pitch_deg -
                                            control->center_pitch_deg);
 
