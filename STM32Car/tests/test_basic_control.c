@@ -1,11 +1,16 @@
+#include "ball_balance_control.h"
+#include "ball_position_protocol.h"
 #include "infrared_line_control.h"
 #include "lap_stop_detector.h"
+#include "pipe_attitude_control.h"
 #include "wheel_speed_pid.h"
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 
 #define TEST_FLOAT_EPSILON       0.0001f /* 浮点断言允许的绝对误差。 */
 #define TEST_TARGET_MAX_CM_S    60.0f    /* 测试使用的单轮目标速度上限。 */
+#define TEST_PI                  3.14159265f /* 测试生成姿态样本使用的圆周率。 */
 
 static float test_abs(float value)
 {
@@ -23,6 +28,14 @@ static void assert_targets_in_range(const InfraredLineOutput *output)
     assert(output->left_target_cm_s <= TEST_TARGET_MAX_CM_S);
     assert(output->right_target_cm_s >= 0.0f);
     assert(output->right_target_cm_s <= TEST_TARGET_MAX_CM_S);
+}
+
+static void feed_ball_protocol_text(const char *text)
+{
+    while (*text != '\0') {
+        BallPositionProtocol_FeedByte((uint8_t) *text);
+        text++;
+    }
 }
 
 static void test_infrared_eight_positions(void)
@@ -231,6 +244,251 @@ static void test_lap_stop_detector(void)
     assert(detector.completed == 0U);
 }
 
+static void test_ball_position_protocol(void)
+{
+    BallPositionSample sample;
+    uint8_t index;
+
+    BallPositionProtocol_Init();
+    feed_ball_protocol_text("B,1,-125,86,42\r\n");
+    assert(BallPositionProtocol_TakeSample(&sample) != 0U);
+    assert(sample.valid == 1U);
+    assert(sample.position_d10_mm == -125);
+    assert(sample.quality == 86U);
+    assert(sample.sequence == 42U);
+    assert(BallPositionProtocol_TakeSample(&sample) == 0U);
+
+    feed_ball_protocol_text("B,0,0,0,43\n");
+    assert(BallPositionProtocol_TakeSample(&sample) != 0U);
+    assert(sample.valid == 0U);
+    assert(sample.sequence == 43U);
+
+    feed_ball_protocol_text("B,1,250");
+    assert(BallPositionProtocol_TakeSample(&sample) == 0U);
+    feed_ball_protocol_text(",90,44\n");
+    assert(BallPositionProtocol_TakeSample(&sample) != 0U);
+    assert(sample.position_d10_mm == 250);
+    assert(sample.quality == 90U);
+
+    feed_ball_protocol_text("X,1,0,80,45\n");
+    feed_ball_protocol_text("B,1,0,101,46\n");
+    feed_ball_protocol_text("B,1,0,80,70000\n");
+    feed_ball_protocol_text("B,999999999999,0,80,47\n");
+    assert(g_ball_protocol_invalid_frame_count == 4U);
+
+    for (index = 0U; index < 60U; index++) {
+        BallPositionProtocol_FeedByte((uint8_t) 'X');
+    }
+    BallPositionProtocol_FeedByte((uint8_t) '\n');
+    assert(g_ball_protocol_line_overflow_count == 1U);
+
+    feed_ball_protocol_text("B,1,10,75,47\n");
+    assert(BallPositionProtocol_TakeSample(&sample) != 0U);
+    assert(sample.position_d10_mm == 10);
+    assert(sample.sequence == 47U);
+    assert(g_ball_protocol_valid_frame_count == 4U);
+}
+
+static void test_pipe_attitude_control(void)
+{
+    PipeAttitudeControl control;
+    PipeAttitudeMeasurement measurement;
+    PipeAttitudeOutput output;
+    float servo_angle = 90.0f;
+    float pipe_pitch_deg;
+    float pitch_rad;
+    uint32_t now_ms;
+    uint16_t iteration;
+
+    PipeAttitudeControl_Init(&control);
+    PipeAttitudeControl_Update(&control, 0U, 0, 0.0f, &output);
+    assert(output.calibration_valid == 0U);
+    assert(output.attitude_valid == 0U);
+
+    assert(PipeAttitudeControl_StartCalibration(&control, 0U) != 0U);
+    PipeAttitudeControl_Update(&control, 0U, 0, 0.0f, &output);
+    assert(output.status_changed != 0U);
+    assert(output.calibration_event == PIPE_CALIBRATION_EVENT_READY);
+    assert(output.servo_override_active != 0U);
+
+    now_ms = 0U;
+    for (iteration = 0U; iteration < 700U; iteration++) {
+        now_ms += 20U;
+        pipe_pitch_deg = (servo_angle - 90.0f) * 0.5f;
+        pitch_rad = pipe_pitch_deg * TEST_PI / 180.0f;
+        measurement.valid = 1U;
+        measurement.timestamp_ms = now_ms;
+        measurement.accel_x_g = 0.0f;
+        measurement.accel_y_g = sinf(pitch_rad);
+        measurement.accel_z_g = cosf(pitch_rad);
+        measurement.gyro_x_dps = 0.40f;
+        measurement.gyro_y_dps = 0.0f;
+        measurement.gyro_z_dps = 0.0f;
+        PipeAttitudeControl_Update(&control,
+                                   now_ms,
+                                   &measurement,
+                                   0.0f,
+                                   &output);
+        if (output.servo_override_active != 0U) {
+            servo_angle = output.servo_override_deg;
+        }
+        if (output.calibration_valid != 0U) {
+            break;
+        }
+    }
+
+    assert(output.calibration_valid != 0U);
+    assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
+    assert_float_near(output.gyro_x_bias_dps, 0.40f);
+    assert(output.negative_pitch_deg < -0.5f);
+    assert(output.positive_pitch_deg > 0.5f);
+    assert(output.servo_deg_per_pipe_deg > 1.5f);
+    assert(output.servo_deg_per_pipe_deg < 2.5f);
+    assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.6f);
+
+    now_ms += 20U;
+    measurement.timestamp_ms = now_ms;
+    measurement.accel_y_g = 0.0f;
+    measurement.accel_z_g = 1.0f;
+    measurement.gyro_x_dps = 0.40f;
+    PipeAttitudeControl_Update(&control,
+                               now_ms,
+                               &measurement,
+                               100.0f,
+                               &output);
+    assert(output.attitude_valid != 0U);
+    assert(output.accel_trusted == 0U);
+
+    assert(PipeAttitudeControl_StartCalibration(&control, now_ms) != 0U);
+    PipeAttitudeControl_AbortCalibration(&control);
+    PipeAttitudeControl_Update(&control, now_ms, 0, 0.0f, &output);
+    assert(output.calibration_event == PIPE_CALIBRATION_EVENT_ABORTED);
+    assert(output.calibration_valid == 0U);
+}
+
+static void test_ball_balance_control(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    uint32_t now_ms;
+    uint8_t index;
+
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetEnabled(&control, 1U, 0U);
+    BallBalanceControl_Update(&control, 0U, 0, 0, &output);
+    assert(output.enable_requested == 0U);
+    assert_float_near(output.command_angle_deg, 90.0f);
+
+    BallBalanceControl_SetPipeCalibration(&control, 1U, 2.0f);
+    BallBalanceControl_SetEnabled(&control, 1U, 0U);
+    assert(BallBalanceControl_IsEnabled(&control) != 0U);
+
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    now_ms = 0U;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.enabled != 0U);
+    assert(output.enable_pending == 0U);
+    assert_float_near(output.command_angle_deg, 90.0f);
+
+    measurement.valid = 1U;
+    measurement.position_d10_mm = 500;
+    measurement.quality = 80U;
+    measurement.sequence = 1U;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert(output.measurement_accepted != 0U);
+    assert(output.tracking_valid != 0U);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
+    assert(output.desired_angle_deg > 90.0f);
+    assert(output.command_angle_deg > 90.0f);
+    assert(output.command_angle_deg <= 95.0f);
+
+    measurement.position_d10_mm = -500;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert(output.measurement_accepted == 0U);
+    assert(output.filtered_position_mm > 0.0f);
+
+    BallBalanceControl_SetTargetMm(&control, 200.0f);
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              0,
+                              &attitude,
+                              &output);
+    assert_float_near(output.target_mm, 100.0f);
+
+    now_ms += 220U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              0,
+                              &attitude,
+                              &output);
+    assert(output.timed_out != 0U);
+    assert(output.tracking_valid == 0U);
+    assert_float_near(output.desired_pipe_pitch_deg, 0.0f);
+
+    now_ms += 120U;
+    BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
+    assert(output.enabled == 0U);
+    assert(output.imu_fault != 0U);
+    assert(output.desired_angle_deg == 90.0f);
+
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        attitude.pitch_deg = 0.0f;
+        attitude.pitch_rate_dps = 0.0f;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.enabled != 0U);
+    assert(output.imu_fault == 0U);
+
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    attitude.pitch_deg = 7.0f;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              0,
+                              &attitude,
+                              &output);
+    assert(output.enabled == 0U);
+    assert(output.imu_fault != 0U);
+
+    BallBalanceControl_SetEnabled(&control, 0U, now_ms);
+    BallBalanceControl_Update(&control, now_ms + 20U, 0, 0, &output);
+    assert(output.enable_requested == 0U);
+    assert(output.enabled == 0U);
+}
+
 static void test_speed_pid(void)
 {
     WheelSpeedPid pid;
@@ -251,7 +509,10 @@ int main(void)
     test_infrared_loss_recovery();
     test_infrared_safe_loss_behavior();
     test_lap_stop_detector();
+    test_ball_position_protocol();
+    test_pipe_attitude_control();
+    test_ball_balance_control();
     test_speed_pid();
-    puts("基础巡线主机测试通过");
+    puts("基础控制、IMU 姿态与钢球平衡主机测试通过");
     return 0;
 }

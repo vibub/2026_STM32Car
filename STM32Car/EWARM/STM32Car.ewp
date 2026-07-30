@@ -1177,6 +1177,9 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\motor_driver.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\servo_driver.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\oled_display.c</name>
                 </file>
             </group>
@@ -1191,11 +1194,20 @@
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\lap_stop_detector.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\ball_balance_control.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\pipe_attitude_control.c</name>
+                </file>
             </group>
             <group>
                 <name>Protocol</name>
                 <file>
                     <name>$PROJ_DIR$\..\Protocol\Src\protocol_tjc.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Protocol\Src\ball_position_protocol.c</name>
                 </file>
             </group>
         </group>
