@@ -23,6 +23,10 @@ try:
     )
     from libs.YOLO import YOLO11
     from vision_pipeline import VisionPipeline
+    try:
+        from wifi_ap_video import WifiApVideoStreamer
+    except ImportError:
+        WifiApVideoStreamer = None
 except ImportError:
     print("K230 module import failed")
     print("sys.path:", sys.path)
@@ -51,6 +55,16 @@ K230_UART_RX_IO = 45
 SEND_INTERVAL_MS = 40
 OSD_INTERVAL_MS = 100
 GC_INTERVAL_FRAMES = 30
+
+# K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
+VIDEO_AP_ENABLE = True
+VIDEO_AP_SSID = "K230_VIDEO"
+VIDEO_AP_KEY = "12345678"
+VIDEO_AP_IP = "192.168.4.1"
+VIDEO_AP_PORT = 80
+VIDEO_AP_FPS = 6
+VIDEO_AP_JPEG_QUALITY = 40
+VIDEO_AP_START_DELAY_FRAMES = 20
 
 # STEEL_BALL 使用现成 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
@@ -202,6 +216,7 @@ def run():
     pipeline = None
     uart = None
     yolo = None
+    video_streamer = None
     os.exitpoint(os.EXITPOINT_ENABLE)
 
     try:
@@ -226,16 +241,43 @@ def run():
         frame_count = 0
         last_send_ms = time.ticks_ms()
         last_osd_ms = last_send_ms
+        video_ap_started = False
 
         while True:
             os.exitpoint()
             clock.tick()
             frame = pipeline.capture_vision_frame()
+            now_ms = time.ticks_ms()
+            if (
+                VIDEO_AP_ENABLE and
+                not video_ap_started and
+                frame_count >= VIDEO_AP_START_DELAY_FRAMES
+            ):
+                video_ap_started = True
+                if WifiApVideoStreamer is None:
+                    print("wifi_ap_video.py missing, keep local display running")
+                else:
+                    try:
+                        video_streamer = WifiApVideoStreamer(
+                            ssid=VIDEO_AP_SSID,
+                            key=VIDEO_AP_KEY,
+                            ip=VIDEO_AP_IP,
+                            port=VIDEO_AP_PORT,
+                            fps=VIDEO_AP_FPS,
+                            jpeg_quality=VIDEO_AP_JPEG_QUALITY,
+                        )
+                        video_streamer.start()
+                    except BaseException as error:
+                        print("video AP start failed, keep local display running:")
+                        sys.print_exception(error)
+                        video_streamer = None
             yolo_result = None
             ai_frame = None
             ai_array = None
             if use_yolo:
                 detector.update_calibration(frame)
+                if video_streamer is not None:
+                    video_streamer.tick(frame, now_ms)
                 frame = None
                 ai_frame, ai_array = pipeline.capture_ai_frame()
                 yolo_result = yolo.run(ai_array)
@@ -246,8 +288,9 @@ def run():
                 result = detector.result_from_yolo_box(detection)
             else:
                 result = detector.detect(frame)
+                if video_streamer is not None:
+                    video_streamer.tick(frame, now_ms)
             frame = None
-            now_ms = time.ticks_ms()
 
             if time.ticks_diff(now_ms, last_send_ms) >= SEND_INTERVAL_MS:
                 uart.write(format_ball_message(result, sequence))
@@ -270,16 +313,6 @@ def run():
             yolo_result = None
 
             frame_count += 1
-            if frame_count % 15 == 0:
-                print(
-                    "BALL",
-                    "scale=", 2 if detector.calibration is not None else 0,
-                    "scale_q=", result.scale_quality,
-                    "valid=", int(result.valid),
-                    "position_d10_mm=", result.position_d10_mm,
-                    "quality=", result.quality,
-                    "fps=", clock.fps(),
-                )
             if frame_count % GC_INTERVAL_FRAMES == 0:
                 gc.collect()
 
@@ -289,6 +322,11 @@ def run():
         print("钢珠位置识别异常:")
         sys.print_exception(error)
     finally:
+        if video_streamer is not None:
+            try:
+                video_streamer.stop()
+            except BaseException as error:
+                sys.print_exception(error)
         if yolo is not None:
             try:
                 yolo.deinit()
