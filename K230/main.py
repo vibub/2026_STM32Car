@@ -42,6 +42,10 @@ except ImportError:
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
 DISPLAY_SIZE = (800, 480)          # LCD 与 OSD 分辨率。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
+# 钢球只会出现在管道附近；CV 坐标系为 640x360。
+# 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
+STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
+
 STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # 当前钢球 kmodel 的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
     "/sdcard/models/steel_ball_yolo11n_det_320.kmodel",
@@ -123,15 +127,59 @@ def _resolve_steel_ball_model_path():
     )
 
 
+def _ai_roi_from_cv_roi(cv_roi):
+    x, y, width, height = cv_roi
+    return (
+        int(round(x * AI_SIZE[0] / CV_SIZE[0])),
+        int(round(y * AI_SIZE[1] / CV_SIZE[1])),
+        max(1, int(round(width * AI_SIZE[0] / CV_SIZE[0]))),
+        max(1, int(round(height * AI_SIZE[1] / CV_SIZE[1]))),
+    )
+
+
+def _crop_ai_array(ai_array, roi):
+    x, y, width, height = roi
+    shape = getattr(ai_array, "shape", None)
+    if shape is None:
+        return ai_array
+    if len(shape) == 4:
+        return ai_array[:, :, y:y + height, x:x + width]
+    if len(shape) == 3 and shape[0] in (1, 3, 4):
+        return ai_array[:, y:y + height, x:x + width]
+    if len(shape) == 3:
+        return ai_array[y:y + height, x:x + width, :]
+    return ai_array
+
+
+def _scale_roi_detection_box(detection, source_roi, target_roi):
+    if detection is None:
+        return None
+    scaled = scale_detection_box(
+        detection,
+        (source_roi[2], source_roi[3]),
+        (target_roi[2], target_roi[3]),
+    )
+    x, y, width, height, confidence = scaled
+    return (
+        x + target_roi[0],
+        y + target_roi[1],
+        width,
+        height,
+        confidence,
+    )
+
+
 def _create_steel_ball_yolo(pipeline):
     model_path = _resolve_steel_ball_model_path()
+    ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
     print("loading steel-ball YOLO:", model_path)
+    print("steel-ball YOLO ROI cv={} ai={}".format(STEEL_BALL_YOLO_ROI_CV, ai_roi))
     detector = YOLO11(
         task_type="detect",
         mode="video",
         kmodel_path=model_path,
         labels=STEEL_BALL_LABELS,
-        rgb888p_size=list(AI_SIZE),
+        rgb888p_size=[ai_roi[2], ai_roi[3]],
         model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
         display_size=list(pipeline.display_size),
         conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
@@ -163,8 +211,6 @@ def _draw_overlay(
 ):
     osd = pipeline.osd_img
     pipeline.clear_osd()
-    if yolo is not None and yolo_result is not None:
-        yolo.draw_result(yolo_result, osd)
     green = (0, 255, 0)
     red = (255, 0, 0)
     yellow = (255, 255, 0)
@@ -210,6 +256,10 @@ def _draw_overlay(
             for row in (calibration.upper, calibration.lower):
                 x, y, width, height = _scale_rect(row.rect)
                 osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+
+    if TARGET_PROFILE == "STEEL_BALL":
+        x, y, width, height = _scale_rect(STEEL_BALL_YOLO_ROI_CV)
+        osd.draw_rectangle(x, y, width, height, color=yellow, thickness=1)
 
     if result.target_rect is not None:
         x, y, width, height = _scale_rect(result.target_rect)
@@ -373,19 +423,25 @@ def run():
                     frame = None
 
                 ai_frame, ai_array = pipeline.capture_ai_frame()
-                yolo_result = yolo.run(ai_array)
+                ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
+                ai_roi_array = _crop_ai_array(ai_array, ai_roi)
+                yolo_result = yolo.run(ai_roi_array)
                 previous_ai_x = None
                 if detector.previous_center_x is not None:
                     previous_ai_x = (
-                        detector.previous_center_x
-                        * float(AI_SIZE[0])
-                        / float(CV_SIZE[0])
+                        (detector.previous_center_x - STEEL_BALL_YOLO_ROI_CV[0])
+                        * float(ai_roi[2])
+                        / float(STEEL_BALL_YOLO_ROI_CV[2])
                     )
                 detection = select_best_yolo_box(
                     yolo_result,
                     previous_ai_x,
                 )
-                detection = scale_detection_box(detection, AI_SIZE, CV_SIZE)
+                detection = _scale_roi_detection_box(
+                    detection,
+                    ai_roi,
+                    STEEL_BALL_YOLO_ROI_CV,
+                )
                 result = detector.result_from_yolo_box(detection)
             else:
                 frame = pipeline.capture_vision_frame()
