@@ -176,18 +176,24 @@ class WifiApVideoStreamer:
         except AttributeError:
             sock.settimeout(0)
 
-    def tick(self, frame, now_ms=None):
-        if not self.started or frame is None:
+    def needs_frame(self, now_ms=None):
+        """仅在存在客户端且达到发送周期时请求一张 CV 帧。"""
+        if not self.started or not self.clients:
+            return False
+        if now_ms is None:
+            now_ms = time.ticks_ms()
+        return _ticks_diff(now_ms, self.last_frame_ms) >= self.frame_interval_ms
+
+    def tick(self, frame=None, now_ms=None):
+        if not self.started:
             return
 
         if now_ms is None:
             now_ms = time.ticks_ms()
 
+        # 接受客户端不依赖图像，主循环可以在绝大多数 YOLO 帧中跳过 CV snapshot。
         self._accept_clients()
-        if not self.clients:
-            return
-
-        if _ticks_diff(now_ms, self.last_frame_ms) < self.frame_interval_ms:
+        if frame is None or not self.needs_frame(now_ms):
             return
         self.last_frame_ms = now_ms
 
@@ -203,7 +209,6 @@ class WifiApVideoStreamer:
         finally:
             payload = None
             jpeg = None
-            gc.collect()
 
     def _accept_clients(self):
         while True:

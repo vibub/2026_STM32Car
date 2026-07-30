@@ -1,8 +1,8 @@
 # K230 红色标记与钢珠位置识别联调
 
-运行 `ball_camera.py`。程序同时使用 640×360 传统视觉通道识别红色标记，以及 640×360 AI 通道运行钢球 YOLO；两通道坐标一致。导轨沿画面水平方向放置。
+运行 `main.py`。程序使用 640×360 传统视觉通道识别红色标记和提供 Wi-Fi 图传，同时使用 320×180 AI 通道运行钢球 YOLO；YOLO 检测框会转换到 640×360 标定坐标系。导轨沿画面水平方向放置。
 
-`ball_camera.py`、`ball_position.py` 和 `vision_pipeline.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/steel_ball_yolo11n_det_320.kmodel`；也兼容原工程的 `/sdcard/yolo11n_det_320.kmodel`。入口会显式把 `/sdcard` 加入模块搜索路径。
+`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_video.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/steel_ball_yolo11n_det_320.kmodel`；也兼容原工程的 `/sdcard/yolo11n_det_320.kmodel`。入口会显式把 `/sdcard` 加入模块搜索路径。
 
 ## 红色位置标记
 
@@ -29,6 +29,7 @@ LCD/IDE 叠加层中：
 - `MARK 5/5`：五组全部有效。
 - 绿色框：识别到的圆环或钢珠。
 - `BALL POS +xx.x mm`：钢球相对 0 标记的位置；识别无效时显示 `BALL POS --.- mm`。
+- `BALL FPS x.x`：每秒实际完成的钢球 YOLO 识别次数，包含摄像头采集、图传和 OSD 对实时性的影响。
 
 少于两组、上下红线无法配对或红线间距明显不合理时，位置结果立即无效，不沿用旧值。
 
