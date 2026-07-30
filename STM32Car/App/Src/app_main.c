@@ -13,7 +13,7 @@
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
-/* 这些变量用于 IAR Watch 调试，不参与模块间控制。 */
+/* Debug variables for IAR Watch only; they do not drive module control. */
 volatile uint8_t g_app_line_command_valid;
 volatile uint8_t g_app_motor_fault;
 volatile uint8_t g_app_line_sensor_mask;
@@ -169,7 +169,7 @@ static void App_ControlStep(uint32_t now_ms)
             g_app_line_sensor_fault = 1U;
             InfraredLineControl_Init(&s_line_control);
         } else {
-            /* 短暂通信干扰时沿用最近一次成功掩码，不伪装成全白。 */
+            /* Reuse the latest valid sensor mask during short I2C glitches. */
             sensor_mask = s_last_line_sensor_mask;
         }
     }
@@ -282,14 +282,12 @@ void App_Loop(void)
     Protocol_Tjc_Task();
     ImuHeading_Poll();
     now_ms = Board_TimeMs();
-    if ((uint32_t) (now_ms - s_last_control_ms) < APP_CONTROL_PERIOD_MS) {
-        App_TimerTask(now_ms);
-        return;
+    if ((uint32_t) (now_ms - s_last_control_ms) >= APP_CONTROL_PERIOD_MS) {
+        /* Do not backfill missed periods with the same encoder sample. */
+        s_last_control_ms = now_ms;
+        App_ControlStep(now_ms);
+        now_ms = Board_TimeMs();
     }
-
-    /* 超过多个周期时不连续补算，避免使用同一份编码器样本重复更新 PID。 */
-    s_last_control_ms = now_ms;
-    App_ControlStep(now_ms);
     App_TimerTask(now_ms);
 }
 

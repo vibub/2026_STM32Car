@@ -8,6 +8,13 @@
 #define OLED_CHAR_WIDTH        6U            /* 基础字符占用的列数，包含字符间隔。 */
 
 static uint8_t s_oled_ready;
+static uint8_t s_oled_huge_row0[OLED_WIDTH];
+static uint8_t s_oled_huge_row1[OLED_WIDTH];
+static uint8_t s_oled_huge_row2[OLED_WIDTH];
+static uint8_t s_oled_huge_row3[OLED_WIDTH];
+static uint8_t s_oled_tx_buffer[OLED_WIDTH + 1U];
+static char s_oled_time_text[6];
+static uint8_t s_oled_time_text_valid;
 
 static uint8_t Oled_WriteCommand(uint8_t command)
 {
@@ -21,7 +28,6 @@ static uint8_t Oled_WriteCommand(uint8_t command)
 
 static uint8_t Oled_WriteData(const uint8_t *data, uint16_t size)
 {
-    uint8_t buffer[17];
     uint16_t offset;
     uint16_t chunk;
     uint16_t index;
@@ -29,16 +35,17 @@ static uint8_t Oled_WriteData(const uint8_t *data, uint16_t size)
     offset = 0U;
     while (offset < size) {
         chunk = (uint16_t) (size - offset);
-        if (chunk > (uint16_t) (sizeof(buffer) - 1U)) {
-            chunk = (uint16_t) (sizeof(buffer) - 1U);
+        if (chunk > (uint16_t) (sizeof(s_oled_tx_buffer) - 1U)) {
+            chunk = (uint16_t) (sizeof(s_oled_tx_buffer) - 1U);
         }
 
-        buffer[0] = 0x40U;
+        s_oled_tx_buffer[0] = 0x40U;
         for (index = 0U; index < chunk; index++) {
-            buffer[index + 1U] = data[offset + index];
+            s_oled_tx_buffer[index + 1U] = data[offset + index];
         }
 
-        if (HAL_I2C_Master_Transmit(&hi2c4, OLED_I2C_ADDRESS, buffer,
+        if (HAL_I2C_Master_Transmit(&hi2c4, OLED_I2C_ADDRESS,
+                                    s_oled_tx_buffer,
                                     (uint16_t) (chunk + 1U),
                                     OLED_I2C_TIMEOUT_MS) != HAL_OK) {
             return 0U;
@@ -140,65 +147,117 @@ static uint8_t Oled_WriteString(const char *text)
     return 1U;
 }
 
-static void Oled_ScaleGlyphColumn2x(uint8_t source, uint8_t *low,
-                                      uint8_t *high)
+static void Oled_ScaleGlyphColumn3x(uint8_t source,
+                                    uint8_t *page0,
+                                    uint8_t *page1,
+                                    uint8_t *page2,
+                                    uint8_t *page3)
 {
     uint8_t bit;
-    uint16_t scaled = 0U;
+    uint32_t scaled = 0U;
 
     for (bit = 0U; bit < 7U; bit++) {
         if ((source & (uint8_t) (1U << bit)) != 0U) {
-            scaled |= (uint16_t) (1U << (bit * 2U));
-            scaled |= (uint16_t) (1U << ((bit * 2U) + 1U));
+            scaled |= (uint32_t) (1UL << (bit * 3U));
+            scaled |= (uint32_t) (1UL << ((bit * 3U) + 1U));
+            scaled |= (uint32_t) (1UL << ((bit * 3U) + 2U));
         }
     }
 
-    *low = (uint8_t) (scaled & 0xFFU);
-    *high = (uint8_t) ((scaled >> 8U) & 0xFFU);
+    scaled <<= 5U;
+
+    *page0 = (uint8_t) (scaled & 0xFFU);
+    *page1 = (uint8_t) ((scaled >> 8U) & 0xFFU);
+    *page2 = (uint8_t) ((scaled >> 16U) & 0xFFU);
+    *page3 = (uint8_t) ((scaled >> 24U) & 0xFFU);
 }
 
-static uint8_t Oled_WriteLargeString(uint8_t page, uint8_t column,
-                                      const char *text)
+static uint8_t Oled_WriteHugeChar(uint8_t page, uint8_t column, char ch)
 {
-    uint8_t upper[96];
-    uint8_t lower[96];
     uint8_t glyph[5];
-    uint8_t text_index;
     uint8_t glyph_index;
+    uint8_t repeat;
     uint8_t out_index = 0U;
-    uint8_t upper_byte;
-    uint8_t lower_byte;
+    uint8_t page0_byte;
+    uint8_t page1_byte;
+    uint8_t page2_byte;
+    uint8_t page3_byte;
 
-    for (text_index = 0U; text[text_index] != '\0'; text_index++) {
-        Oled_GetGlyph(text[text_index], glyph);
-        for (glyph_index = 0U; glyph_index < 5U; glyph_index++) {
-            Oled_ScaleGlyphColumn2x(glyph[glyph_index], &upper_byte,
-                                    &lower_byte);
-            upper[out_index] = upper_byte;
-            lower[out_index] = lower_byte;
-            out_index++;
-            upper[out_index] = upper_byte;
-            lower[out_index] = lower_byte;
+    Oled_GetGlyph(ch, glyph);
+    for (glyph_index = 0U; glyph_index < 5U; glyph_index++) {
+        Oled_ScaleGlyphColumn3x(glyph[glyph_index],
+                                &page0_byte,
+                                &page1_byte,
+                                &page2_byte,
+                                &page3_byte);
+        for (repeat = 0U; repeat < 3U; repeat++) {
+            s_oled_huge_row0[out_index] = page0_byte;
+            s_oled_huge_row1[out_index] = page1_byte;
+            s_oled_huge_row2[out_index] = page2_byte;
+            s_oled_huge_row3[out_index] = page3_byte;
             out_index++;
         }
-        upper[out_index] = 0x00U;
-        lower[out_index] = 0x00U;
-        out_index++;
-        upper[out_index] = 0x00U;
-        lower[out_index] = 0x00U;
+    }
+
+    for (repeat = 0U; repeat < 3U; repeat++) {
+        s_oled_huge_row0[out_index] = 0x00U;
+        s_oled_huge_row1[out_index] = 0x00U;
+        s_oled_huge_row2[out_index] = 0x00U;
+        s_oled_huge_row3[out_index] = 0x00U;
         out_index++;
     }
 
     if (Oled_SetCursor(page, column) == 0U) {
         return 0U;
     }
-    if (Oled_WriteData(upper, out_index) == 0U) {
+    if (Oled_WriteData(s_oled_huge_row0, out_index) == 0U) {
         return 0U;
     }
     if (Oled_SetCursor((uint8_t) (page + 1U), column) == 0U) {
         return 0U;
     }
-    return Oled_WriteData(lower, out_index);
+    if (Oled_WriteData(s_oled_huge_row1, out_index) == 0U) {
+        return 0U;
+    }
+    if (Oled_SetCursor((uint8_t) (page + 2U), column) == 0U) {
+        return 0U;
+    }
+    if (Oled_WriteData(s_oled_huge_row2, out_index) == 0U) {
+        return 0U;
+    }
+    if (Oled_SetCursor((uint8_t) (page + 3U), column) == 0U) {
+        return 0U;
+    }
+    return Oled_WriteData(s_oled_huge_row3, out_index);
+}
+
+static uint8_t Oled_WriteHugeStringChanged(uint8_t page, uint8_t column,
+                                           const char *text)
+{
+    uint8_t index;
+    uint8_t changed = 0U;
+
+    for (index = 0U; text[index] != '\0'; index++) {
+        if ((s_oled_time_text_valid == 0U) ||
+            (s_oled_time_text[index] != text[index])) {
+            if (Oled_WriteHugeChar(page,
+                                   (uint8_t) (column + (index * 18U)),
+                                   text[index]) == 0U) {
+                return 0U;
+            }
+            changed = 1U;
+        }
+    }
+
+    if (changed != 0U) {
+        for (index = 0U; text[index] != '\0'; index++) {
+            s_oled_time_text[index] = text[index];
+        }
+        s_oled_time_text[index] = '\0';
+        s_oled_time_text_valid = 1U;
+    }
+
+    return 1U;
 }
 
 static uint8_t Oled_Clear(void)
@@ -236,6 +295,7 @@ void OledDisplay_Init(void)
     uint8_t index;
 
     s_oled_ready = 0U;
+    s_oled_time_text_valid = 0U;
     HAL_Delay(100U);
 
     if (HAL_I2C_IsDeviceReady(&hi2c4, OLED_I2C_ADDRESS, 2U,
@@ -274,28 +334,23 @@ void OledDisplay_ShowHello(void)
 
 void OledDisplay_ShowTime(uint8_t hours, uint8_t minutes, uint8_t seconds)
 {
-    char text[9];
+    char text[6];
 
     if (s_oled_ready == 0U) {
         return;
     }
 
-    hours %= 100U;
+    (void) hours;
     minutes %= 60U;
     seconds %= 60U;
-    text[0] = (char) ('0' + (hours / 10U));
-    text[1] = (char) ('0' + (hours % 10U));
+    text[0] = (char) ('0' + (minutes / 10U));
+    text[1] = (char) ('0' + (minutes % 10U));
     text[2] = ':';
-    text[3] = (char) ('0' + (minutes / 10U));
-    text[4] = (char) ('0' + (minutes % 10U));
-    text[5] = ':';
-    text[6] = (char) ('0' + (seconds / 10U));
-    text[7] = (char) ('0' + (seconds % 10U));
-    text[8] = '\0';
+    text[3] = (char) ('0' + (seconds / 10U));
+    text[4] = (char) ('0' + (seconds % 10U));
+    text[5] = '\0';
 
-    if (Oled_WriteLargeString(2U, 16U, text) == 0U) {
-        s_oled_ready = 0U;
-    }
+    (void) Oled_WriteHugeStringChanged(2U, 19U, text);
 }
 
 uint8_t OledDisplay_IsReady(void)
