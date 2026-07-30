@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define PIPE_ATTITUDE_RAD_TO_DEG                  57.2957795f /* 弧度转换为角度的比例。 */
-#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG    -8.0f      /* 重新装配后的空载负向模型标定角。 */
+#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG   -10.0f      /* 与负向几何死点保留余量的标定角。 */
 #define PIPE_ATTITUDE_CALIBRATION_CENTER_DEG       0.0f      /* 三点标定使用的水平模型目标角。 */
 #define PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG     6.8f      /* 留出几何死点余量的正向模型标定角。 */
 #define PIPE_ATTITUDE_LEVEL_SETTLE_MS            500U        /* 水平零偏采样前的静置时间。 */
@@ -33,7 +33,7 @@
 #define PIPE_ATTITUDE_MAX_RETURN_ERROR_DEG             0.60f   /* 回到模型水平点后允许的最大回差。 */
 #define PIPE_ATTITUDE_CALIBRATION_SERVO_SLEW_DEG_S    30.0f   /* 标定期间舵机命令最大变化率。 */
 #define PIPE_ATTITUDE_SERVO_TARGET_EPSILON_DEG          0.01f  /* 判定软件舵机命令到位的角度误差。 */
-#define PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG               90.0f   /* 重新装配后允许的最小舵机内部角。 */
+#define PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG                0.0f   /* 重新装配后允许的最小舵机内部角。 */
 #define PIPE_ATTITUDE_SERVO_SAFE_MAX_DEG              180.0f   /* 重新装配后允许的最大舵机内部角。 */
 
 static float PipeAttitudeControl_Abs(float value)

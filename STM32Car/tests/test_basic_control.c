@@ -328,17 +328,20 @@ static void test_linkage_kinematics(void)
                                     0.002f);
     }
     assert(LinkageKinematics_PipePitchToServoAngle(
-               -8.0f, &servo_angle_deg) != 0U);
-    assert_float_near_tolerance(servo_angle_deg, 91.2474f, 0.002f);
+               -10.0f, &servo_angle_deg) != 0U);
+    assert_float_near_tolerance(servo_angle_deg, 86.0168f, 0.002f);
     assert(LinkageKinematics_PipePitchToServoAngle(
                6.8f, &servo_angle_deg) != 0U);
     assert_float_near_tolerance(servo_angle_deg, 178.7746f, 0.002f);
-    assert(LinkageKinematics_PipePitchToServoAngle(-8.1f,
+    assert(LinkageKinematics_PipePitchToServoAngle(-10.1f,
                                                     &servo_angle_deg) == 0U);
     assert(LinkageKinematics_PipePitchToServoAngle(6.9f,
                                                     &servo_angle_deg) == 0U);
-    assert(LinkageKinematics_ServoAngleToPipePitch(90.0f,
-                                                    &recovered_pitch_deg) == 0U);
+    assert(LinkageKinematics_ServoAngleToPipePitch(
+               90.0f, &recovered_pitch_deg) != 0U);
+    assert_float_near_tolerance(recovered_pitch_deg,
+                                -8.4121f,
+                                0.002f);
 }
 
 static void test_pipe_attitude_control(void)
@@ -404,7 +407,7 @@ static void test_pipe_attitude_control(void)
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
     assert(output.imu_pitch_sign == -1);
     assert_float_near_tolerance(output.gyro_x_bias_dps, 0.40f, 0.001f);
-    assert(output.negative_pitch_deg < -3.2f);
+    assert(output.negative_pitch_deg < -4.0f);
     assert(output.center_pitch_deg > -0.1f);
     assert(output.center_pitch_deg < 0.1f);
     assert(output.positive_pitch_deg > 2.7f);
@@ -492,7 +495,7 @@ static void test_ball_balance_control(void)
     assert(output.desired_model_pitch_deg > 0.0f);
     assert(output.desired_angle_deg > neutral_angle_deg);
     assert(output.command_angle_deg > neutral_angle_deg);
-    assert(output.command_angle_deg >= 90.0f);
+    assert(output.command_angle_deg >= 0.0f);
     assert(output.command_angle_deg <= 180.0f);
 
     measurement.position_d10_mm = -500;
@@ -580,7 +583,7 @@ static void test_flexible_pipe_mapping_limits(void)
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
-        output.minimum_pipe_pitch_deg, -2.98f, 0.01f);
+        output.minimum_pipe_pitch_deg, -3.82f, 0.01f);
     assert_float_near_tolerance(
         output.maximum_pipe_pitch_deg, 3.00f, 0.01f);
 
@@ -626,10 +629,10 @@ static void test_flexible_pipe_mapping_limits(void)
                               &attitude,
                               &output);
     assert_float_near_tolerance(
-        output.desired_pipe_pitch_deg, -2.98f, 0.01f);
+        output.desired_pipe_pitch_deg, -3.82f, 0.01f);
     assert(output.mapping_valid != 0U);
     assert(output.mapping_fault == 0U);
-    assert(output.desired_model_pitch_deg >= -8.0f);
+    assert(output.desired_model_pitch_deg >= -10.0f);
 }
 
 static void test_speed_pid(void)
