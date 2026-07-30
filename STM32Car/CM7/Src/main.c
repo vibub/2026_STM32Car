@@ -5,12 +5,14 @@
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim8;
+I2C_HandleTypeDef hi2c2;
 I2C_HandleTypeDef hi2c4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
 const char * volatile g_error_file;
 volatile uint32_t g_error_line;
+volatile uint8_t g_boot_step;
 
 static void MPU_Config(void);
 static void CPU_CACHE_Enable(void);
@@ -19,26 +21,42 @@ static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM8_Init(void);
 static void MX_I2C4_Init(void);
+static void MX_I2C2_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
 
 int main(void)
 {
+    g_boot_step = 1U;
     MPU_Config();
     CPU_CACHE_Enable();
     HAL_Init();
+    g_boot_step = 2U;
     SystemClock_Config();
+    g_boot_step = 3U;
 
     MX_GPIO_Init();
+    g_boot_step = 4U;
     MX_TIM1_Init();
+    g_boot_step = 5U;
     MX_TIM2_Init();
+    g_boot_step = 6U;
     MX_TIM8_Init();
+    g_boot_step = 7U;
     MX_I2C4_Init();
+    g_boot_step = 8U;
+    MX_I2C2_Init();
+    g_boot_step = 9U;
     MX_USART2_UART_Init();
+    g_boot_step = 10U;
     MX_UART4_Init();
+    g_boot_step = 11U;
+    g_boot_step = 12U;
     App_Init();
+    g_boot_step = 13U;
 
     while (1) {
+        g_boot_step = 14U;
         App_Loop();
     }
 }
@@ -123,6 +141,29 @@ static void MX_I2C4_Init(void)
     }
 }
 
+static void MX_I2C2_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_I2C2;
+    clock.I2c123ClockSelection = RCC_I2C2CLKSOURCE_HSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    hi2c2.Instance = IMU_I2C_INSTANCE;
+    hi2c2.Init.Timing = 0x10D19CE4U;
+    hi2c2.Init.OwnAddress1 = 0U;
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c2.Init.OwnAddress2 = 0U;
+    hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+        Error_Handler();
+    }
+}
 static void MX_TIM1_Init(void)
 {
     TIM_Encoder_InitTypeDef encoder = {0};

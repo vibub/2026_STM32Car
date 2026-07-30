@@ -14,6 +14,7 @@
 #include "wheel_speed_pid.h"
 
 /* Debug variables for IAR Watch only; they do not drive module control. */
+volatile uint8_t g_app_init_step;
 volatile uint8_t g_app_line_command_valid;
 volatile uint8_t g_app_motor_fault;
 volatile uint8_t g_app_line_sensor_mask;
@@ -51,7 +52,7 @@ static uint8_t s_last_line_sensor_mask;
 static uint8_t s_has_line_sensor_sample;
 static uint8_t s_line_sensor_failure_count;
 
-#define APP_LINE_SENSOR_FAILURE_LIMIT 3U /* 红外 I2C 连续读取失败后停车的次数门槛。 */
+#define APP_LINE_SENSOR_FAILURE_LIMIT 3U /* 红外 I2C 连续读取失败后停车的次数门槛�?*/
 
 static float App_Abs(float value)
 {
@@ -198,7 +199,7 @@ static void App_ControlStep(uint32_t now_ms)
     g_app_line_correction_cm_s = line_output.correction_cm_s;
 
     if (s_line_enabled != 0U) {
-        /* 将固定 20 ms 轮速样本还原为本周期左右轮平均行驶距离。 */
+        /* 将固�?20 ms 轮速样本还原为本周期左右轮平均行驶距离�?*/
         distance_delta_cm = 0.5f *
                             (App_Abs(encoder.left_cm_s) +
                              App_Abs(encoder.right_cm_s)) *
@@ -214,7 +215,7 @@ static void App_ControlStep(uint32_t now_ms)
         App_UpdateLapStopDebug();
     }
 
-    /* 上电默认停车，收到 TJC 基础巡线命令后才允许闭环输出。 */
+    /* 上电默认停车，收�?TJC 基础巡线命令后才允许闭环输出�?*/
     if ((s_line_enabled == 0U) || (line_output.command_valid == 0U)) {
         App_StopClosedLoop();
         return;
@@ -273,6 +274,7 @@ void App_Init(void)
     g_app_line_sensor_fault = 0U;
     App_UpdateLapStopDebug();
     App_StopClosedLoop();
+    g_app_init_step = 100U;
 }
 
 void App_Loop(void)
