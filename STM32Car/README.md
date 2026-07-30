@@ -94,6 +94,7 @@ gcc -std=c11 -Wall -Wextra -Werror \
   tests/test_basic_control.c \
   Control/Src/infrared_line_control.c \
   Control/Src/wheel_speed_pid.c \
+  Control/Src/lap_stop_detector.c \
   -o tests/test_basic_control.exe
 ./tests/test_basic_control.exe
 ```
@@ -111,4 +112,7 @@ gcc -std=c11 -Wall -Wextra -Werror \
 9. 架空低速测试，确认左侧探头压线时左轮目标低于右轮目标，右侧探头压线时方向相反。
 10. 连续断开 I²C 通信，确认第 3 次失败后传感器故障停车；恢复连接后能够重新读取。
 11. 确认八路持续丢线后电机可靠停止。
-12. 后续为 IMU 选择 I2C/SPI 引脚时避开当前 I2C4、TJC USART2 的 PD5/PD6 和 K230 UART4 的 PB8/PB9。
+12. 第二题实车验证时，确认累计里程达到约 400 cm 前全黑不会停车。
+13. 返回 A 点连续 2 个有效采样均检测到至少 5 路黑线后，确认电机输出立即清零并冻结 OLED 计时。
+14. 记录 `MotorDriver_Stop()` 实际造成的停车过冲；本功能当前未加入主动制动和停车距离补偿。
+15. 后续为 IMU 选择 I2C/SPI 引脚时避开当前 I2C4、TJC USART2 的 PD5/PD6 和 K230 UART4 的 PB8/PB9。

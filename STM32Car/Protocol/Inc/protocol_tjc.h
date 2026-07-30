@@ -1,13 +1,13 @@
 #ifndef PROTOCOL_TJC_H
 #define PROTOCOL_TJC_H
 #include <stdint.h>
-#define TJC_REQUEST_HEADER_0 0x5AU
-#define TJC_REQUEST_HEADER_1 0xA5U
-#define TJC_REQUEST_FRAME_SIZE 4U
-#define TJC_COMMAND_STOP       0x00U
-#define TJC_COMMAND_BASIC_LINE 0x01U
-#define TJC_COMMAND_QUERY      0x0EU
-#define TJC_RESPONSE_HEADER 0xA5U
+#define TJC_REQUEST_HEADER_0   0x5AU /* TJC 请求帧第一个帧头字节。 */
+#define TJC_REQUEST_HEADER_1   0xA5U /* TJC 请求帧第二个帧头字节。 */
+#define TJC_REQUEST_FRAME_SIZE 4U    /* TJC 请求帧固定字节数。 */
+#define TJC_COMMAND_STOP       0x00U /* TJC 停车命令编号。 */
+#define TJC_COMMAND_BASIC_LINE 0x01U /* TJC 基础八路巡线命令编号。 */
+#define TJC_COMMAND_QUERY      0x0EU /* TJC 当前模式查询命令编号。 */
+#define TJC_RESPONSE_HEADER    0xA5U /* STM32 返回帧的帧头字节。 */
 typedef enum {
     TJC_RESULT_STATE = 0x10U,
     TJC_RESULT_ACCEPTED_BRAKING = 0x11U,

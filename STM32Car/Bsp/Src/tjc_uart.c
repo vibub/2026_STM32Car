@@ -2,8 +2,8 @@
 #include "k230_uart.h"
 #include "main.h"
 
-#define TJC_UART_RX_BUFFER_SIZE 64U
-#define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U)
+#define TJC_UART_RX_BUFFER_SIZE 64U                            /* TJC UART 接收环形缓冲区容量。 */
+#define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U) /* 环形缓冲区下标回绕掩码。 */
 
 static volatile uint8_t s_rx_buffer[TJC_UART_RX_BUFFER_SIZE];
 static volatile uint16_t s_rx_head;

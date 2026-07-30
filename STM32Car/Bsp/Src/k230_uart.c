@@ -1,8 +1,8 @@
 #include "k230_uart.h"
 #include "main.h"
 
-#define K230_UART_RX_BUFFER_SIZE 256U
-#define K230_UART_RX_BUFFER_MASK (K230_UART_RX_BUFFER_SIZE - 1U)
+#define K230_UART_RX_BUFFER_SIZE 256U                             /* K230 UART 接收环形缓冲区容量。 */
+#define K230_UART_RX_BUFFER_MASK (K230_UART_RX_BUFFER_SIZE - 1U) /* 环形缓冲区下标回绕掩码。 */
 
 static volatile uint8_t s_rx_buffer[K230_UART_RX_BUFFER_SIZE];
 static volatile uint16_t s_rx_head;

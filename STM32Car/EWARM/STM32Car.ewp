@@ -1188,6 +1188,9 @@
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\wheel_speed_pid.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\lap_stop_detector.c</name>
+                </file>
             </group>
             <group>
                 <name>Protocol</name>

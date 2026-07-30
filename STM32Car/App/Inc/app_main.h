@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define APP_MODE_STOP       0x00U
-#define APP_MODE_BASIC_LINE 0x01U
+#define APP_MODE_STOP       0x00U /* 停车模式编号。 */
+#define APP_MODE_BASIC_LINE 0x01U /* 基础八路红外巡线模式编号。 */
 
 void App_Init(void);
 void App_Loop(void);

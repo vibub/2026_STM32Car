@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define INFRARED_LINE_ALL_MASK 0xFFU
+#define INFRARED_LINE_ALL_MASK 0xFFU /* 八路探头全部有效的位掩码。 */
 
 void InfraredLineSensor_Init(void);
 uint8_t InfraredLineSensor_ReadMask(uint8_t *sensor_mask);
