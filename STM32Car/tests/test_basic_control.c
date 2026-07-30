@@ -174,24 +174,28 @@ static void test_lap_stop_detector(void)
     assert(LapStopDetector_Update(&detector, -10.0f, 1U, 0xFFU) == 0U);
     assert_float_near(detector.distance_cm, 399.0f);
 
-    assert(LapStopDetector_Update(&detector, 1.0f, 1U, 0x18U) == 0U);
+    /* 达到里程门槛但只有 4 路黑线时，不得停车。 */
+    assert(LapStopDetector_Update(&detector, 1.0f, 1U, 0x0FU) == 0U);
     assert(detector.armed != 0U);
     assert(detector.full_black_count == 0U);
 
-    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    /* 5 路黑线开始连续确认，中间降到 4 路时计数清零。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x1FU) == 0U);
     assert(detector.full_black_count == 1U);
-    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x18U) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
     assert(detector.full_black_count == 0U);
 
-    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
-    assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0xFFU) == 0U);
+    /* I2C 无效采样不能沿用陈旧掩码完成终点确认。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x1FU) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0x1FU) == 0U);
     assert(detector.full_black_count == 0U);
 
-    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    /* 5 路和 8 路黑线均满足门槛，连续两帧后完成停车。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x1FU) == 0U);
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) != 0U);
     assert(detector.completed != 0U);
     assert(detector.full_black_count == 2U);
-    assert(LapStopDetector_Update(&detector, 10.0f, 1U, 0x18U) != 0U);
+    assert(LapStopDetector_Update(&detector, 10.0f, 1U, 0x0FU) != 0U);
     assert_float_near(detector.distance_cm, 400.0f);
 
     LapStopDetector_Init(&detector);

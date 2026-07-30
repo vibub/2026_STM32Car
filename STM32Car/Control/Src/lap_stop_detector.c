@@ -3,8 +3,21 @@
 #include <string.h>
 
 #define LAP_STOP_ARM_DISTANCE_CM     400.0f /* 累计达到该里程后允许识别返程 A 点。 */
-#define LAP_STOP_FULL_BLACK_MASK     0xFFU  /* A 点横向启停线对应的八路全黑掩码。 */
-#define LAP_STOP_CONFIRM_SAMPLES     2U     /* 连续全黑达到该有效采样数后停车。 */
+#define LAP_STOP_MIN_ACTIVE_COUNT   5U      /* 每帧至少识别到 5 路黑线才参与终点确认。 */
+#define LAP_STOP_CONFIRM_SAMPLES     2U     /* 连续满足黑线数量门槛的有效采样数。 */
+
+static uint8_t LapStopDetector_CountActiveSensors(uint8_t sensor_mask)
+{
+    uint8_t index;
+    uint8_t active_count = 0U;
+
+    for (index = 0U; index < 8U; index++) {
+        if ((sensor_mask & (uint8_t) (1U << index)) != 0U) {
+            active_count++;
+        }
+    }
+    return active_count;
+}
 
 void LapStopDetector_Init(LapStopDetector *detector)
 {
@@ -18,6 +31,8 @@ uint8_t LapStopDetector_Update(LapStopDetector *detector,
                                uint8_t sensor_sample_valid,
                                uint8_t sensor_mask)
 {
+    uint8_t active_count;
+
     if (detector == 0) {
         return 0U;
     }
@@ -39,8 +54,13 @@ uint8_t LapStopDetector_Update(LapStopDetector *detector,
     }
 
     /* 只接受连续有效的新采样，I2C 失败时的陈旧掩码不能用于停车。 */
-    if ((sensor_sample_valid == 0U) ||
-        (sensor_mask != LAP_STOP_FULL_BLACK_MASK)) {
+    if (sensor_sample_valid == 0U) {
+        detector->full_black_count = 0U;
+        return 0U;
+    }
+
+    active_count = LapStopDetector_CountActiveSensors(sensor_mask);
+    if (active_count < LAP_STOP_MIN_ACTIVE_COUNT) {
         detector->full_black_count = 0U;
         return 0U;
     }
