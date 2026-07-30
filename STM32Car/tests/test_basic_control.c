@@ -300,9 +300,9 @@ static void test_ball_position_protocol(void)
 static void test_linkage_kinematics(void)
 {
     static const float expected_servo_angles[13] = {
-        167.9172f, 164.3419f, 160.6126f, 156.7204f, 152.6440f,
-        148.3509f, 143.7942f, 138.9069f, 133.5910f, 127.6940f,
-        120.9561f, 112.8655f, 102.0828f
+        102.0828f, 105.6581f, 109.3874f, 113.2796f, 117.3560f,
+        121.6491f, 126.2058f, 131.0931f, 136.4090f, 142.3060f,
+        149.0439f, 157.1345f, 167.9172f
     };
     float horn_angle_deg;
     float servo_angle_deg;
@@ -311,7 +311,7 @@ static void test_linkage_kinematics(void)
     uint8_t index;
 
     assert_float_near_tolerance(
-        LinkageKinematics_GetNominalServoCenterDeg(), 143.7942f, 0.0002f);
+        LinkageKinematics_GetNominalServoCenterDeg(), 126.2058f, 0.0002f);
     for (index = 0U; index < 13U; index++) {
         pitch_deg = (int8_t) index - 6;
         assert(LinkageKinematics_PipePitchToHornAngle(
@@ -398,10 +398,10 @@ static void test_pipe_attitude_control(void)
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
     assert(output.imu_pitch_sign == -1);
     assert_float_near_tolerance(output.gyro_x_bias_dps, 0.40f, 0.001f);
-    assert(output.negative_pitch_deg < -2.8f);
+    assert(output.negative_pitch_deg < -4.8f);
     assert(output.center_pitch_deg > -0.1f);
     assert(output.center_pitch_deg < 0.1f);
-    assert(output.positive_pitch_deg > 2.8f);
+    assert(output.positive_pitch_deg > 4.8f);
     assert_float_near_tolerance(output.model_scale, 1.0f, 0.03f);
     assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.08f);
     assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.1f);
@@ -484,8 +484,8 @@ static void test_ball_balance_control(void)
     assert(output.tracking_valid != 0U);
     assert(output.desired_pipe_pitch_deg > 0.0f);
     assert(output.desired_model_pitch_deg > 0.0f);
-    assert(output.desired_angle_deg < neutral_angle_deg);
-    assert(output.command_angle_deg < neutral_angle_deg);
+    assert(output.desired_angle_deg > neutral_angle_deg);
+    assert(output.command_angle_deg > neutral_angle_deg);
     assert(output.command_angle_deg >= 100.0f);
 
     measurement.position_d10_mm = -500;

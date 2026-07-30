@@ -5,7 +5,7 @@
 
 #define LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG       (-6.0f) /* 连杆模型允许的最小水管俯仰角。 */
 #define LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG         6.0f  /* 连杆模型允许的最大水管俯仰角。 */
-#define LINKAGE_KINEMATICS_NOMINAL_SERVO_CENTER_DEG 143.7942f /* 水管水平时的名义舵机内部角。 */
+#define LINKAGE_KINEMATICS_NOMINAL_SERVO_CENTER_DEG 126.2058f /* 实机反向安装下水管水平时的名义舵机内部角。 */
 
 uint8_t LinkageKinematics_PipePitchToHornAngle(float pipe_pitch_deg,
                                                 float *horn_angle_deg);

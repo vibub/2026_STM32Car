@@ -289,8 +289,12 @@ static void App_SendPipeCalibrationEvent(PipeCalibrationEvent event)
                 TJC_STATUS_CALIBRATION_FAILED_MOTION);
             break;
         case PIPE_CALIBRATION_EVENT_FAILED_RANGE:
-            Protocol_Tjc_SendStatusText(
-                TJC_STATUS_CALIBRATION_FAILED_RANGE);
+            Protocol_Tjc_SendCalibrationRangeFailure(
+                App_ValueToX100(s_pipe_attitude_output.model_scale),
+                App_ValueToX100(s_pipe_attitude_output.model_offset_deg),
+                App_ValueToX100(App_Abs(
+                    s_pipe_attitude_output.return_pitch_deg -
+                    s_pipe_attitude_output.center_pitch_deg)));
             break;
         case PIPE_CALIBRATION_EVENT_ABORTED:
             Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_ABORTED);

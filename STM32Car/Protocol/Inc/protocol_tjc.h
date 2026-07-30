@@ -62,5 +62,8 @@ void Protocol_Tjc_SendResult(Tjc_Result result,
 void Protocol_Tjc_SendStatusText(Tjc_StatusText status);
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
                                          int16_t offset_x100);
+void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
+                                              int16_t offset_x100,
+                                              int16_t return_error_x100);
 
 #endif /* PROTOCOL_TJC_H */

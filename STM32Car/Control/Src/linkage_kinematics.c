@@ -13,7 +13,7 @@
 #define LINKAGE_CONNECTING_CF_CM               7.0716718f     /* 单连杆 C-F 的名义中心距。 */
 #define LINKAGE_HORN_INSTALL_CENTER_DEG      107.4401f        /* 内部 135°对应的摇臂绝对安装角。 */
 #define LINKAGE_SERVO_INTERNAL_CENTER_DEG    135.0f           /* 270°舵机的内部位置中点。 */
-#define LINKAGE_SERVO_DIRECTION                1.0f           /* 内部角增大时摇臂绝对角也增大。 */
+#define LINKAGE_SERVO_DIRECTION               (-1.0f)         /* 实机舵机反向安装，内部角增大时摇臂绝对角减小。 */
 #define LINKAGE_REACH_TOLERANCE_CM             0.0001f        /* 可达条件允许的浮点计算误差。 */
 #define LINKAGE_ANGLE_TOLERANCE_DEG            0.01f          /* 反解工作范围允许的浮点角度误差。 */
 
