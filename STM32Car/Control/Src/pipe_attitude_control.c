@@ -6,9 +6,9 @@
 #include <string.h>
 
 #define PIPE_ATTITUDE_RAD_TO_DEG                  57.2957795f /* 弧度转换为角度的比例。 */
-#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG    -5.0f      /* 空载三点标定使用的负向模型目标角。 */
+#define PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG    -6.0f      /* 空载标定使用的连杆模型负向极限角。 */
 #define PIPE_ATTITUDE_CALIBRATION_CENTER_DEG       0.0f      /* 三点标定使用的水平模型目标角。 */
-#define PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG     5.0f      /* 空载三点标定使用的正向模型目标角。 */
+#define PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG     6.0f      /* 空载标定使用的连杆模型正向极限角。 */
 #define PIPE_ATTITUDE_LEVEL_SETTLE_MS            500U        /* 水平零偏采样前的静置时间。 */
 #define PIPE_ATTITUDE_POINT_SETTLE_MS            800U        /* 到达模型标定点后的静置时间。 */
 #define PIPE_ATTITUDE_LEVEL_SAMPLE_COUNT         180U        /* 水平零偏标定采样数量，约为 3 秒。 */

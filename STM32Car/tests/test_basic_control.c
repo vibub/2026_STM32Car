@@ -398,10 +398,10 @@ static void test_pipe_attitude_control(void)
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
     assert(output.imu_pitch_sign == -1);
     assert_float_near_tolerance(output.gyro_x_bias_dps, 0.40f, 0.001f);
-    assert(output.negative_pitch_deg < -2.0f);
+    assert(output.negative_pitch_deg < -2.4f);
     assert(output.center_pitch_deg > -0.1f);
     assert(output.center_pitch_deg < 0.1f);
-    assert(output.positive_pitch_deg > 2.0f);
+    assert(output.positive_pitch_deg > 2.4f);
     assert_float_near_tolerance(output.model_scale, 0.42f, 0.03f);
     assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.08f);
     assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.1f);
