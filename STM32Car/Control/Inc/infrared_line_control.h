@@ -6,6 +6,7 @@
 typedef struct {
     uint8_t filter_ready;
     uint8_t has_valid_line;
+    int8_t last_line_side;
     uint32_t last_valid_line_ms;
     float filtered_error;
     float last_error;
@@ -29,6 +30,7 @@ void InfraredLineControl_Init(InfraredLineControl *control);
 void InfraredLineControl_Update(InfraredLineControl *control,
                                 uint32_t now_ms,
                                 uint8_t sensor_mask,
+                                uint8_t force_wide_slowdown,
                                 InfraredLineOutput *output);
 
 #endif /* INFRARED_LINE_CONTROL_H */

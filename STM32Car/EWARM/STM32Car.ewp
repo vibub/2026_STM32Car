@@ -1091,6 +1091,12 @@
                 <name>$PROJ_DIR$\..\Drivers\STM32H7xx_HAL_Driver\Src\stm32h7xx_hal_gpio.c</name>
             </file>
             <file>
+                <name>$PROJ_DIR$\..\Drivers\STM32H7xx_HAL_Driver\Src\stm32h7xx_hal_i2c.c</name>
+            </file>
+            <file>
+                <name>$PROJ_DIR$\..\Drivers\STM32H7xx_HAL_Driver\Src\stm32h7xx_hal_i2c_ex.c</name>
+            </file>
+            <file>
                 <name>$PROJ_DIR$\..\Drivers\STM32H7xx_HAL_Driver\Src\stm32h7xx_hal_pwr.c</name>
             </file>
             <file>
@@ -1170,6 +1176,9 @@
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\motor_driver.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\oled_display.c</name>
+                </file>
             </group>
             <group>
                 <name>Control</name>
@@ -1178,6 +1187,9 @@
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\wheel_speed_pid.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\lap_stop_detector.c</name>
                 </file>
             </group>
             <group>

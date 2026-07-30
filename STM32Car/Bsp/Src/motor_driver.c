@@ -1,7 +1,7 @@
 #include "motor_driver.h"
 #include "main.h"
 
-#define MOTOR_DRIVER_MAX_RATIO 0.50f
+#define MOTOR_DRIVER_MAX_RATIO 0.50f /* 单侧电机允许输出的最大 PWM 比例。 */
 
 static float s_left_ratio;
 static float s_right_ratio;
