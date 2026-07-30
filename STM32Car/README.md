@@ -96,7 +96,7 @@ A5 <result> <current_mode> <request> <xor>
 `0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page2.t0`：
 
 ```text
-page2.t0.txt="<GBK 中文状态>" FF FF FF
+page2.t0.txt="<UTF-8 中文状态>" FF FF FF
 ```
 
 标定状态包括准备、水平零偏采样、模型 −3°采样、0°复核、+3°采样、回中检查、成功和失败原因。舵机以 30°/s 移动，到达每个模型命令后才开始静置计时；成功时显示模型校正比例 `S` 和零偏 `O`。每次上电必须先成功执行 `0x04`，才允许在停车模式下发送 `0x02`；`0x02` 会先复核约 500 ms 的水平和静止状态，再进入平衡。
@@ -166,7 +166,7 @@ gcc -std=c11 -Wall -Wextra -Werror \
 16. 确认 IMU 刚性固定在左侧合页附近的可动水管上，+Y 朝钢球、+Z 朝上；SDA/SCL 空闲电压为 3.3 V。
 17. 连接 IMU 后确认 `g_imu_ready=1`、`g_imu_who_am_i=0x70`，且 `g_imu_i2c_address` 为 `0x6A` 或 `0x6B`。
 18. 移除钢球并确认摆杆无阻挡，在停车模式发送 `5A A5 04 FB`；观察舵机按模型目标 −3°→0°→+3°→0°缓速运行，任何时候发送 0x00/0x03 都应中断采样并缓速回水平。
-19. 确认 `page2.t0` 为全局控件并按 GBK 正确显示标定进度；成功后 `g_app_pipe_calibration_valid=1`，`g_app_pipe_model_scale` 在 0.75～1.25、`g_app_pipe_model_offset_deg` 绝对值不超过 0.75°，方向和四个标定角合理。
+19. 在 USART HMI 工程中把 `page2.t0` 的 `vscope` 设为“全局”、`txt_maxl` 设为至少 64，并保持工程为 UTF-8 编码；重新编译下载屏幕工程后，确认标定进度能够显示。成功后 `g_app_pipe_calibration_valid=1`，`g_app_pipe_model_scale` 在 0.75～1.25、`g_app_pipe_model_offset_deg` 绝对值不超过 0.75°，方向和四个标定角合理。
 20. 标定失败、复位或尚未执行 0x04 时发送 0x02，确认 STM32 拒绝启用钢球平衡。
 21. 放置钢球后发送 0x02，确认水管在约 500 ms 水平复核期间保持中位，随后显示“平衡已启用”。
 22. 空载手动抬高水管右端，确认 `g_app_pipe_pitch_deg` 为正，`g_app_pipe_pitch_rate_dps` 动态方向正确。
