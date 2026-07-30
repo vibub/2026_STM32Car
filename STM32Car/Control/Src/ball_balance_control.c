@@ -6,9 +6,9 @@
 
 #define BALL_BALANCE_MIN_ANGLE_DEG               0.0f  /* 重新装配后的最小安全舵机内部角。 */
 #define BALL_BALANCE_MAX_ANGLE_DEG             180.0f  /* 重新装配后的最大安全舵机内部角。 */
-#define BALL_BALANCE_MIN_PIPE_PITCH_DEG         -4.0f  /* 钢球外环允许的最大下降目标角。 */
+#define BALL_BALANCE_MIN_PIPE_PITCH_DEG         -6.0f  /* 钢球外环允许的最大下降目标角。 */
 #define BALL_BALANCE_MAX_PIPE_PITCH_DEG          3.0f  /* 钢球外环允许的最大抬升目标角。 */
-#define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       6.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
+#define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       7.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
 #define BALL_BALANCE_POSITION_KP_DEG_PER_MM       0.040f /* 钢球位置到目标水管角的比例增益。 */
 #define BALL_BALANCE_POSITION_KI_DEG_PER_MM_S     0.000f /* 钢球位置积分增益，首版保持为 0。 */
 #define BALL_BALANCE_POSITION_KD_DEG_PER_MM_S     0.012f /* 钢球速度到目标水管角的阻尼增益。 */
