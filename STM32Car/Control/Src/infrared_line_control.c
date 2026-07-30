@@ -11,7 +11,7 @@
 #define IR_LINE_LARGE_ERROR                  2.00f
 #define IR_LINE_MEDIUM_SPEED_SCALE           0.82f
 #define IR_LINE_LARGE_SPEED_SCALE            0.65f
-#define IR_LINE_WIDE_SPEED_SCALE             0.65f
+#define IR_LINE_WIDE_SPEED_SCALE             0.50f
 #define IR_LINE_RECOVERY_SPEED_SCALE         0.50f
 #define IR_LINE_SEARCH_SPEED_SCALE            0.35f
 #define IR_LINE_EDGE_POSITION_CM              4.20f

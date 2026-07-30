@@ -1,4 +1,5 @@
 #include "infrared_line_control.h"
+#include "lap_stop_detector.h"
 #include "wheel_speed_pid.h"
 #include <assert.h>
 #include <stdio.h>
@@ -161,6 +162,46 @@ static void test_infrared_safe_loss_behavior(void)
     assert(output.line_lost != 0U);
 }
 
+static void test_lap_stop_detector(void)
+{
+    LapStopDetector detector;
+
+    LapStopDetector_Init(&detector);
+    assert(LapStopDetector_Update(&detector, 399.0f, 1U, 0xFFU) == 0U);
+    assert(detector.armed == 0U);
+    assert(detector.full_black_count == 0U);
+
+    assert(LapStopDetector_Update(&detector, -10.0f, 1U, 0xFFU) == 0U);
+    assert_float_near(detector.distance_cm, 399.0f);
+
+    assert(LapStopDetector_Update(&detector, 1.0f, 1U, 0x18U) == 0U);
+    assert(detector.armed != 0U);
+    assert(detector.full_black_count == 0U);
+
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    assert(detector.full_black_count == 1U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x18U) == 0U);
+    assert(detector.full_black_count == 0U);
+
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0xFFU) == 0U);
+    assert(detector.full_black_count == 0U);
+
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) != 0U);
+    assert(detector.completed != 0U);
+    assert(detector.full_black_count == 3U);
+    assert(LapStopDetector_Update(&detector, 10.0f, 1U, 0x18U) != 0U);
+    assert_float_near(detector.distance_cm, 400.0f);
+
+    LapStopDetector_Init(&detector);
+    assert_float_near(detector.distance_cm, 0.0f);
+    assert(detector.armed == 0U);
+    assert(detector.full_black_count == 0U);
+    assert(detector.completed == 0U);
+}
+
 static void test_speed_pid(void)
 {
     WheelSpeedPid pid;
@@ -179,6 +220,7 @@ int main(void)
     test_infrared_target_differential();
     test_infrared_loss_recovery();
     test_infrared_safe_loss_behavior();
+    test_lap_stop_detector();
     test_speed_pid();
     puts("基础巡线主机测试通过");
     return 0;
