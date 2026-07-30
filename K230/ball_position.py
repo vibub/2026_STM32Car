@@ -48,6 +48,8 @@ SCALE_MIN_BLOB_AREA = 4
 SCALE_MERGE_MARGIN = 4
 SCALE_REFRESH_FRAMES = 10
 SCALE_HOLD_FRAMES = 30
+SCALE_TRACK_ROI_PAD_X = 36
+SCALE_TRACK_ROI_PAD_Y = 28
 
 # 样图刻度为 -12 cm 到 +12 cm；内部统一使用 mm。
 SCALE_MIN_MM = -120.0
@@ -293,6 +295,17 @@ class MarkerScaleCalibration:
 
     def marker_rects(self):
         return [column.rect for column in self.marker_columns]
+
+    def search_roi(self, image_width=IMAGE_WIDTH, image_height=IMAGE_HEIGHT):
+        left = min(column.rect[0] for column in self.marker_columns) - SCALE_TRACK_ROI_PAD_X
+        top = min(column.rect[1] for column in self.marker_columns) - SCALE_TRACK_ROI_PAD_Y
+        right = max(column.rect[0] + column.rect[2] for column in self.marker_columns) + SCALE_TRACK_ROI_PAD_X
+        bottom = max(column.rect[1] + column.rect[3] for column in self.marker_columns) + SCALE_TRACK_ROI_PAD_Y
+        left = int(_clip(left, 0, image_width - 1))
+        top = int(_clip(top, 0, image_height - 1))
+        right = int(_clip(right, left + 1, image_width))
+        bottom = int(_clip(bottom, top + 1, image_height))
+        return left, top, right - left, bottom - top
 
 
 def _median(values):
@@ -870,13 +883,14 @@ def select_scale_rows(
     )
 
 
-def detect_scale_calibration(img):
-    """识别至少三列上下成对的红色记号并生成当帧标定。"""
+def detect_scale_calibration(img, roi=None):
+    """Detect red scale calibration in a full or local ROI."""
     if img is None or img.width() != IMAGE_WIDTH or img.height() != IMAGE_HEIGHT:
         return None
+    search_roi = SCALE_SEARCH_ROI if roi is None else roi
     blobs = img.find_blobs(
         SCALE_THRESHOLDS,
-        roi=SCALE_SEARCH_ROI,
+        roi=search_roi,
         pixels_threshold=SCALE_MIN_BLOB_PIXELS,
         area_threshold=SCALE_MIN_BLOB_AREA,
         merge=True,
@@ -1104,7 +1118,16 @@ class BallPositionDetector:
         if not should_refresh:
             return self.calibration
 
-        detected = detect_scale_calibration(img)
+        search_roi = None
+        if self.calibration is not None:
+            roi_getter = getattr(self.calibration, "search_roi", None)
+            if roi_getter is not None:
+                search_roi = roi_getter(img.width(), img.height())
+
+        detected = detect_scale_calibration(img, search_roi)
+        if detected is None and search_roi is not None:
+            detected = detect_scale_calibration(img)
+
         if detected is not None:
             self.calibration = detected
             self.scale_missing_frames = 0

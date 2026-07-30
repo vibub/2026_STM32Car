@@ -54,11 +54,12 @@ STEEL_BALL_NMS_THRESHOLD = 0.45
 K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
 K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 100               # OSD 降至 10 Hz，减少 800×480 图层刷新开销。
-CALIBRATION_INTERVAL_MS = 100       # 红色刻度标定最多每秒刷新 10 次。
-CALIBRATION_HOLD_UPDATES = 200       # 连续标定失败约 20 秒后清除旧标定。
+OSD_INTERVAL_MS = 80                # OSD refresh at up to 12.5 Hz.
+CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
+CALIBRATION_HOLD_UPDATES = 250      # Keep the last calibration for about 20 seconds.
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
-GC_INTERVAL_FRAMES = 30             # 主循环周期性垃圾回收间隔。
+GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
+OSD_TEXT_ENABLE = False             # Hide large debug text in performance mode.
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
 VIDEO_AP_ENABLE = True
@@ -68,7 +69,7 @@ VIDEO_AP_IP = "192.168.4.1"
 VIDEO_AP_PORT = 80
 VIDEO_AP_FPS = 6
 VIDEO_AP_JPEG_QUALITY = 40
-VIDEO_AP_START_DELAY_FRAMES = 20
+VIDEO_AP_START_DELAY_FRAMES = 0
 
 # STEEL_BALL 使用现成 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
@@ -233,32 +234,33 @@ def _draw_overlay(
         )
     else:
         position_text = "--.- mm"
-    osd.draw_string_advanced(
-        8, 8, 20,
-        "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
-        color=cyan if scale_ok else red,
-    )
-    osd.draw_string_advanced(
-        8, 34, 20,
-        "TARGET {} V{} Q{}".format(
-            TARGET_PROFILE,
-            int(result.valid),
-            result.quality,
-        ),
-        color=green if result.valid else yellow,
-    )
-    osd.draw_string_advanced(
-        8, 60, 24,
-        "BALL POS " + position_text,
-        color=green if result.valid else yellow,
-    )
-    osd.draw_string_advanced(
-        8,
-        92,
-        18,
-        "BALL FPS {:.1f}".format(inference_fps),
-        color=white,
-    )
+    if OSD_TEXT_ENABLE:
+        osd.draw_string_advanced(
+            8, 8, 20,
+            "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
+            color=cyan if scale_ok else red,
+        )
+        osd.draw_string_advanced(
+            8, 34, 20,
+            "TARGET {} V{} Q{}".format(
+                TARGET_PROFILE,
+                int(result.valid),
+                result.quality,
+            ),
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8, 60, 24,
+            "BALL POS " + position_text,
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8,
+            92,
+            18,
+            "BALL FPS {:.1f}".format(inference_fps),
+            color=white,
+        )
     pipeline.show_osd()
 
 
@@ -290,6 +292,7 @@ def run():
             cv_size=CV_SIZE,
             ai_size=AI_SIZE,
             display_size=DISPLAY_SIZE,
+            to_ide=True,
         )
         pipeline.create()
         uart = _create_uart()
