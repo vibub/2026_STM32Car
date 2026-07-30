@@ -1197,6 +1197,9 @@
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\ball_balance_control.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\pipe_attitude_control.c</name>
+                </file>
             </group>
             <group>
                 <name>Protocol</name>

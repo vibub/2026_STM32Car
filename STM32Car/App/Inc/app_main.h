@@ -14,6 +14,9 @@ uint8_t App_RequestMode(uint8_t mode);
 uint8_t App_GetCurrentMode(void);
 uint8_t App_SetBallBalanceEnabled(uint8_t enabled);
 uint8_t App_GetBallBalanceEnabled(void);
+uint8_t App_StartPipeCalibration(void);
+uint8_t App_GetPipeCalibrationActive(void);
+uint8_t App_GetPipeCalibrationValid(void);
 void App_SetBallBalanceTargetMm(float target_mm);
 
 #endif /* APP_MAIN_H */
