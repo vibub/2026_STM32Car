@@ -1,9 +1,9 @@
 #include "infrared_line_sensor.h"
 #include "main.h"
 
-#define INFRARED_LINE_I2C_ADDRESS       (0x12U << 1U)
-#define INFRARED_LINE_STATUS_REGISTER   0x30U
-#define INFRARED_LINE_I2C_TIMEOUT_MS    2U
+#define INFRARED_LINE_I2C_ADDRESS       (0x12U << 1U) /* 八路红外模块的 HAL 传输地址。 */
+#define INFRARED_LINE_STATUS_REGISTER   0x30U         /* 八路探头状态寄存器地址。 */
+#define INFRARED_LINE_I2C_TIMEOUT_MS    2U            /* 单次 I2C 读取超时时间，单位为毫秒。 */
 
 static uint8_t s_raw_value;
 static uint32_t s_read_count;

@@ -2,9 +2,9 @@
 
 #include <string.h>
 
-#define LAP_STOP_ARM_DISTANCE_CM     400.0f
-#define LAP_STOP_FULL_BLACK_MASK     0xFFU
-#define LAP_STOP_CONFIRM_SAMPLES     2U
+#define LAP_STOP_ARM_DISTANCE_CM     400.0f /* 累计达到该里程后允许识别返程 A 点。 */
+#define LAP_STOP_FULL_BLACK_MASK     0xFFU  /* A 点横向启停线对应的八路全黑掩码。 */
+#define LAP_STOP_CONFIRM_SAMPLES     2U     /* 连续全黑达到该有效采样数后停车。 */
 
 void LapStopDetector_Init(LapStopDetector *detector)
 {

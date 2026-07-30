@@ -1,11 +1,11 @@
 #include "oled_display.h"
 #include "main.h"
 
-#define OLED_I2C_ADDRESS       (0x3CU << 1U)
-#define OLED_I2C_TIMEOUT_MS    20U
-#define OLED_WIDTH             128U
-#define OLED_PAGE_COUNT        8U
-#define OLED_CHAR_WIDTH        6U
+#define OLED_I2C_ADDRESS       (0x3CU << 1U) /* OLED 的 HAL 传输地址。 */
+#define OLED_I2C_TIMEOUT_MS    20U           /* OLED 单次 I2C 传输超时时间，单位为毫秒。 */
+#define OLED_WIDTH             128U          /* OLED 横向像素数。 */
+#define OLED_PAGE_COUNT        8U            /* OLED 纵向页数，每页高 8 像素。 */
+#define OLED_CHAR_WIDTH        6U            /* 基础字符占用的列数，包含字符间隔。 */
 
 static uint8_t s_oled_ready;
 

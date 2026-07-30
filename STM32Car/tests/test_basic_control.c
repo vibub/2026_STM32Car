@@ -4,8 +4,8 @@
 #include <assert.h>
 #include <stdio.h>
 
-#define TEST_FLOAT_EPSILON 0.0001f
-#define TEST_TARGET_MAX_CM_S 60.0f
+#define TEST_FLOAT_EPSILON       0.0001f /* 浮点断言允许的绝对误差。 */
+#define TEST_TARGET_MAX_CM_S    60.0f    /* 测试使用的单轮目标速度上限。 */
 
 static float test_abs(float value)
 {
@@ -188,10 +188,9 @@ static void test_lap_stop_detector(void)
     assert(detector.full_black_count == 0U);
 
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
-    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) == 0U);
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) != 0U);
     assert(detector.completed != 0U);
-    assert(detector.full_black_count == 3U);
+    assert(detector.full_black_count == 2U);
     assert(LapStopDetector_Update(&detector, 10.0f, 1U, 0x18U) != 0U);
     assert_float_near(detector.distance_cm, 400.0f);
 

@@ -51,7 +51,7 @@ static uint8_t s_last_line_sensor_mask;
 static uint8_t s_has_line_sensor_sample;
 static uint8_t s_line_sensor_failure_count;
 
-#define APP_LINE_SENSOR_FAILURE_LIMIT 3U
+#define APP_LINE_SENSOR_FAILURE_LIMIT 3U /* 红外 I2C 连续读取失败后停车的次数门槛。 */
 
 static float App_Abs(float value)
 {

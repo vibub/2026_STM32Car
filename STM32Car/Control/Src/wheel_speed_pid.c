@@ -1,20 +1,20 @@
 #include "wheel_speed_pid.h"
 #include <string.h>
 
-#define SPEED_TARGET_LIMIT_CM_S          60.0f
-#define SPEED_PID_KP                      0.0050f
-#define SPEED_PID_KI                      0.0010f
-#define SPEED_PID_KD                      0.0005f
-#define SPEED_PID_INTEGRAL_LIMIT        500.0f
-#define SPEED_PID_INTEGRAL_ERROR_LIMIT   50.0f
-#define SPEED_PID_OUTPUT_LIMIT            0.50f
-#define SPEED_STARTUP_KICK_MIN_CM_S        5.0f
-#define SPEED_STARTUP_KICK_PWM             0.20f
-#define SPEED_STARTUP_KICK_WINDOWS         5U
-#define SPEED_STALL_MIN_CM_S               5.0f
-#define SPEED_STALL_MIN_PWM                0.18f
-#define SPEED_STALL_FEEDBACK_CM_S          0.30f
-#define SPEED_STALL_WINDOWS               50U
+#define SPEED_TARGET_LIMIT_CM_S          60.0f   /* 单侧车轮目标速度绝对上限。 */
+#define SPEED_PID_KP                      0.0050f /* 轮速 PID 比例增益。 */
+#define SPEED_PID_KI                      0.0010f /* 轮速 PID 积分增益。 */
+#define SPEED_PID_KD                      0.0005f /* 轮速 PID 微分增益。 */
+#define SPEED_PID_INTEGRAL_LIMIT        500.0f   /* 轮速 PID 积分累计值绝对上限。 */
+#define SPEED_PID_INTEGRAL_ERROR_LIMIT   50.0f   /* 允许继续积分的速度误差绝对上限。 */
+#define SPEED_PID_OUTPUT_LIMIT            0.50f  /* 轮速 PID 输出 PWM 比例绝对上限。 */
+#define SPEED_STARTUP_KICK_MIN_CM_S        5.0f  /* 启用起步补偿所需的最小目标速度。 */
+#define SPEED_STARTUP_KICK_PWM             0.20f  /* 编码器尚无反馈时的起步补偿 PWM 比例。 */
+#define SPEED_STARTUP_KICK_WINDOWS         5U     /* 起步补偿最多持续的控制周期数。 */
+#define SPEED_STALL_MIN_CM_S               5.0f  /* 判断堵转所需的最小目标速度。 */
+#define SPEED_STALL_MIN_PWM                0.18f  /* 判断堵转所需的最小 PWM 输出比例。 */
+#define SPEED_STALL_FEEDBACK_CM_S          0.30f  /* 视为编码器无有效反馈的速度门槛。 */
+#define SPEED_STALL_WINDOWS               50U     /* 连续无反馈达到该周期数后报告故障。 */
 
 static float SpeedPid_Abs(float value)
 {
