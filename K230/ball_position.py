@@ -75,6 +75,30 @@ def _clip(value, minimum, maximum):
     return value
 
 
+def scale_detection_box(detection, source_size, target_size):
+    """在不同摄像头通道之间等比例转换目标框坐标。"""
+    if detection is None:
+        return None
+
+    source_width, source_height = source_size
+    target_width, target_height = target_size
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("source size must be positive")
+    if target_width <= 0 or target_height <= 0:
+        raise ValueError("target size must be positive")
+
+    x, y, width, height, confidence = detection
+    scale_x = float(target_width) / float(source_width)
+    scale_y = float(target_height) / float(source_height)
+    return (
+        int(round(x * scale_x)),
+        int(round(y * scale_y)),
+        max(1, int(round(width * scale_x))),
+        max(1, int(round(height * scale_y))),
+        confidence,
+    )
+
+
 def _blob_pixels(blob):
     try:
         return int(blob.pixels())
@@ -840,6 +864,7 @@ class BallPositionDetector:
         expected_diameter_px=24,
         target_diameter_mm=None,
         scale_refresh_frames=SCALE_REFRESH_FRAMES,
+        scale_hold_frames=SCALE_HOLD_FRAMES,
     ):
         self.scale = scale
         self.auto_scale = scale is None
@@ -850,6 +875,7 @@ class BallPositionDetector:
             None if target_diameter_mm is None else float(target_diameter_mm)
         )
         self.scale_refresh_frames = max(1, int(scale_refresh_frames))
+        self.scale_hold_frames = max(0, int(scale_hold_frames))
         self.previous_center_x = None
         self.calibration = scale if self.auto_scale else None
         self.scale_missing_frames = 0
@@ -876,7 +902,7 @@ class BallPositionDetector:
             self.scale_missing_frames = 0
         else:
             self.scale_missing_frames += self.scale_refresh_frames
-            if self.scale_missing_frames > SCALE_HOLD_FRAMES:
+            if self.scale_missing_frames > self.scale_hold_frames:
                 self.calibration = None
                 self.previous_center_x = None
         return self.calibration

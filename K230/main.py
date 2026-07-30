@@ -19,6 +19,7 @@ try:
         RING_TARGET_THRESHOLDS,
         STEEL_BALL_TARGET_THRESHOLDS,
         format_ball_message,
+        scale_detection_box,
         select_best_yolo_box,
     )
     from libs.YOLO import YOLO11
@@ -38,10 +39,10 @@ except ImportError:
     raise
 
 
-CV_SIZE = (640, 360)
-DISPLAY_SIZE = (800, 480)
-AI_SIZE = (640, 360)
-STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]
+CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
+DISPLAY_SIZE = (800, 480)          # LCD 与 OSD 分辨率。
+AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
+STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # 当前钢球 kmodel 的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
     "/sdcard/models/steel_ball_yolo11n_det_320.kmodel",
     "/sdcard/yolo11n_det_320.kmodel",
@@ -50,11 +51,14 @@ STEEL_BALL_LABELS = {0: "steel_ball"}
 STEEL_BALL_CONFIDENCE_THRESHOLD = 0.60
 STEEL_BALL_NMS_THRESHOLD = 0.45
 
-K230_UART_TX_IO = 44
-K230_UART_RX_IO = 45
-SEND_INTERVAL_MS = 40
-OSD_INTERVAL_MS = 100
-GC_INTERVAL_FRAMES = 30
+K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
+K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
+SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
+OSD_INTERVAL_MS = 200               # OSD 降至 5 Hz，减少 800×480 图层刷新开销。
+CALIBRATION_INTERVAL_MS = 250       # 红色刻度标定最多每秒刷新 4 次。
+CALIBRATION_HOLD_UPDATES = 12       # 连续标定失败约 3 秒后清除旧标定。
+INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
+GC_INTERVAL_FRAMES = 30             # 主循环周期性垃圾回收间隔。
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
 VIDEO_AP_ENABLE = True
@@ -113,7 +117,7 @@ def _create_steel_ball_yolo(pipeline):
         display_size=list(pipeline.display_size),
         conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
         nms_thresh=STEEL_BALL_NMS_THRESHOLD,
-        max_boxes_num=20,
+        max_boxes_num=5,
         debug_mode=0,
     )
     detector.config_preprocess()
@@ -130,7 +134,14 @@ def _scale_rect(rect):
     )
 
 
-def _draw_overlay(pipeline, detector, result, fps, yolo=None, yolo_result=None):
+def _draw_overlay(
+    pipeline,
+    detector,
+    result,
+    inference_fps,
+    yolo=None,
+    yolo_result=None,
+):
     osd = pipeline.osd_img
     pipeline.clear_osd()
     if yolo is not None and yolo_result is not None:
@@ -194,7 +205,13 @@ def _draw_overlay(pipeline, detector, result, fps, yolo=None, yolo_result=None):
         "BALL POS " + position_text,
         color=green if result.valid else yellow,
     )
-    osd.draw_string_advanced(8, 92, 18, "FPS {:.1f}".format(fps), color=white)
+    osd.draw_string_advanced(
+        8,
+        92,
+        18,
+        "BALL FPS {:.1f}".format(inference_fps),
+        color=white,
+    )
     pipeline.show_osd()
 
 
@@ -229,24 +246,28 @@ def run():
         )
         pipeline.create()
         uart = _create_uart()
+        use_yolo = TARGET_PROFILE == "STEEL_BALL"
         detector = BallPositionDetector(
             thresholds=_target_thresholds(),
             target_diameter_mm=diameter_mm,
+            scale_refresh_frames=1 if use_yolo else 10,
+            scale_hold_frames=CALIBRATION_HOLD_UPDATES,
         )
-        use_yolo = TARGET_PROFILE == "STEEL_BALL"
         if use_yolo:
             yolo = _create_steel_ball_yolo(pipeline)
-        clock = time.clock()
         sequence = 0
         frame_count = 0
-        last_send_ms = time.ticks_ms()
-        last_osd_ms = last_send_ms
+        now_ms = time.ticks_ms()
+        last_send_ms = now_ms
+        last_osd_ms = now_ms
+        last_calibration_ms = None
+        inference_window_start_ms = now_ms
+        inference_window_frames = 0
+        inference_fps = 0.0
         video_ap_started = False
 
         while True:
             os.exitpoint()
-            clock.tick()
-            frame = pipeline.capture_vision_frame()
             now_ms = time.ticks_ms()
             if (
                 VIDEO_AP_ENABLE and
@@ -271,26 +292,72 @@ def run():
                         print("video AP start failed, keep local display running:")
                         sys.print_exception(error)
                         video_streamer = None
+
+            # 无图像时也轮询 HTTP 客户端，避免浏览器连接等待下一次 CV 采集。
+            if video_streamer is not None:
+                video_streamer.tick(None, now_ms)
+
+            frame = None
             yolo_result = None
             ai_frame = None
             ai_array = None
             if use_yolo:
-                detector.update_calibration(frame)
-                if video_streamer is not None:
-                    video_streamer.tick(frame, now_ms)
-                frame = None
+                calibration_due = (
+                    last_calibration_ms is None or
+                    time.ticks_diff(now_ms, last_calibration_ms)
+                    >= CALIBRATION_INTERVAL_MS
+                )
+                video_frame_due = (
+                    video_streamer is not None and
+                    video_streamer.needs_frame(now_ms)
+                )
+
+                # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
+                if calibration_due or video_frame_due:
+                    frame = pipeline.capture_vision_frame()
+                    if calibration_due:
+                        detector.update_calibration(frame)
+                        last_calibration_ms = now_ms
+                    if video_frame_due:
+                        video_streamer.tick(frame, now_ms)
+                    frame = None
+
                 ai_frame, ai_array = pipeline.capture_ai_frame()
                 yolo_result = yolo.run(ai_array)
+                previous_ai_x = None
+                if detector.previous_center_x is not None:
+                    previous_ai_x = (
+                        detector.previous_center_x
+                        * float(AI_SIZE[0])
+                        / float(CV_SIZE[0])
+                    )
                 detection = select_best_yolo_box(
                     yolo_result,
-                    detector.previous_center_x,
+                    previous_ai_x,
                 )
+                detection = scale_detection_box(detection, AI_SIZE, CV_SIZE)
                 result = detector.result_from_yolo_box(detection)
             else:
+                frame = pipeline.capture_vision_frame()
                 result = detector.detect(frame)
                 if video_streamer is not None:
                     video_streamer.tick(frame, now_ms)
-            frame = None
+                frame = None
+
+            # 统计单位时间内真正完成的钢球识别次数，包含实际摄像头与系统开销。
+            inference_window_frames += 1
+            now_ms = time.ticks_ms()
+            inference_elapsed_ms = time.ticks_diff(
+                now_ms,
+                inference_window_start_ms,
+            )
+            if inference_elapsed_ms >= INFERENCE_FPS_WINDOW_MS:
+                inference_fps = (
+                    inference_window_frames * 1000.0
+                    / float(inference_elapsed_ms)
+                )
+                inference_window_frames = 0
+                inference_window_start_ms = now_ms
 
             if time.ticks_diff(now_ms, last_send_ms) >= SEND_INTERVAL_MS:
                 uart.write(format_ball_message(result, sequence))
@@ -302,7 +369,7 @@ def run():
                     pipeline,
                     detector,
                     result,
-                    clock.fps(),
+                    inference_fps,
                     yolo,
                     yolo_result,
                 )
