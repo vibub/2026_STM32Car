@@ -2,8 +2,22 @@
 #include "k230_uart.h"
 #include "main.h"
 
-#define TJC_UART_RX_BUFFER_SIZE 64U
-#define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U)
+#define TJC_UART_RX_BUFFER_SIZE 64U                            /* TJC UART 接收环形缓冲区容量。 */
+#define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U) /* 环形缓冲区下标回绕掩码。 */
+
+/**
+ * @brief 淘晶驰串口屏按钮“弹起事件”需要发送的命令。
+ *
+ * printh 5A A5 00 FF       全局停止，禁用钢球平衡并中断标定。
+ * printh 5A A5 01 FE       进入八路红外巡线模式。
+ * printh 5A A5 02 FD       停车且标定成功后启用钢球平衡。
+ * printh 5A A5 03 FC       禁用钢球平衡并将舵机恢复到中位。
+ * printh 5A A5 04 FB       停车且移除钢球后启动水管三点标定。
+ * printh 5A A5 0E F1       查询当前底盘停车或巡线模式。
+ *
+ * 推荐启动顺序：0x04 标定成功 -> 0x02 平衡启用 -> 0x01 开始巡线。
+ * 注意：printh 直接发送上述四个字节，不需要追加 FF FF FF。
+ */
 
 static volatile uint8_t s_rx_buffer[TJC_UART_RX_BUFFER_SIZE];
 static volatile uint16_t s_rx_head;

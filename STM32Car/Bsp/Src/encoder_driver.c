@@ -1,13 +1,13 @@
 #include "encoder_driver.h"
 #include "main.h"
 
-#define ENCODER_WHEEL_DIAMETER_CM 6.5f
-#define ENCODER_COUNTS_PER_REV    56000.0f
-#define ENCODER_SAMPLE_SECONDS    0.020f
-#define ENCODER_LEFT_SIGN         (-1.0f)
-#define ENCODER_RIGHT_SIGN        (-1.0f)
+#define ENCODER_WHEEL_DIAMETER_CM 6.5f     /* 驱动轮有效滚动直径，单位为厘米。 */
+#define ENCODER_COUNTS_PER_REV    56000.0f /* 车轮旋转一圈对应的编码器计数。 */
+#define ENCODER_SAMPLE_SECONDS    0.020f   /* 编码器速度采样周期，单位为秒。 */
+#define ENCODER_LEFT_SIGN         (-1.0f)  /* 左编码器计数方向修正系数。 */
+#define ENCODER_RIGHT_SIGN        (-1.0f)  /* 右编码器计数方向修正系数。 */
 #define ENCODER_COUNT_TO_CM \
-    ((3.14159265f * ENCODER_WHEEL_DIAMETER_CM) / ENCODER_COUNTS_PER_REV)
+    ((3.14159265f * ENCODER_WHEEL_DIAMETER_CM) / ENCODER_COUNTS_PER_REV) /* 单个编码器计数对应的轮距，单位为厘米。 */
 
 void EncoderDriver_Init(void)
 {

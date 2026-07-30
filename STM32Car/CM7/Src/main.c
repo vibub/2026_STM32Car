@@ -4,41 +4,62 @@
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim8;
+I2C_HandleTypeDef hi2c2;
 I2C_HandleTypeDef hi2c4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
 const char * volatile g_error_file;
 volatile uint32_t g_error_line;
+volatile uint8_t g_boot_step;
 
 static void MPU_Config(void);
 static void CPU_CACHE_Enable(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM4_Init(void);
 static void MX_TIM8_Init(void);
 static void MX_I2C4_Init(void);
+static void MX_I2C2_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
 
 int main(void)
 {
+    g_boot_step = 1U;
     MPU_Config();
     CPU_CACHE_Enable();
     HAL_Init();
+    g_boot_step = 2U;
     SystemClock_Config();
+    g_boot_step = 3U;
 
     MX_GPIO_Init();
+    g_boot_step = 4U;
     MX_TIM1_Init();
+    g_boot_step = 5U;
     MX_TIM2_Init();
+    g_boot_step = 6U;
+    MX_TIM4_Init();
+    g_boot_step = 7U;
     MX_TIM8_Init();
+    g_boot_step = 8U;
     MX_I2C4_Init();
+    g_boot_step = 9U;
+    MX_I2C2_Init();
+    g_boot_step = 10U;
     MX_USART2_UART_Init();
+    g_boot_step = 11U;
     MX_UART4_Init();
+    g_boot_step = 12U;
     App_Init();
+    g_boot_step = 13U;
 
     while (1) {
+        g_boot_step = 14U;
         App_Loop();
     }
 }
@@ -86,7 +107,6 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOF_CLK_ENABLE();
 
@@ -98,12 +118,6 @@ static void MX_GPIO_Init(void)
     gpio.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOA, &gpio);
 
-    /* YH-4LXJ 四路输出暂按板载比较器数字输出配置，不启用内部上下拉。 */
-    gpio.Pin = IR_LINE_ALL_PINS;
-    gpio.Mode = GPIO_MODE_INPUT;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(IR_LINE_PORT, &gpio);
 }
 
 static void MX_I2C4_Init(void)
@@ -126,6 +140,30 @@ static void MX_I2C4_Init(void)
     hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
     if (HAL_I2C_Init(&hi2c4) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_I2C2_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_I2C2;
+    clock.I2c123ClockSelection = RCC_I2C2CLKSOURCE_HSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    hi2c2.Instance = IMU_I2C_INSTANCE;
+    hi2c2.Init.Timing = 0x10D19CE4U;
+    hi2c2.Init.OwnAddress1 = 0U;
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c2.Init.OwnAddress2 = 0U;
+    hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
         Error_Handler();
     }
 }
@@ -186,6 +224,38 @@ static void MX_TIM2_Init(void)
         Error_Handler();
     }
     if (HAL_TIM_PWM_ConfigChannel(&htim2, &channel, TIM_CHANNEL_3) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_TIM4_Init(void)
+{
+    TIM_OC_InitTypeDef channel = {0};
+    TIM_MasterConfigTypeDef master = {0};
+
+    /* APB1 定时器时钟为 64 MHz，分频后以 1 us 为一个计数。 */
+    htim4.Instance = SERVO_PWM_INSTANCE;
+    htim4.Init.Prescaler = 63U;
+    htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim4.Init.Period = 19999U;
+    htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+    if (HAL_TIM_PWM_Init(&htim4) != HAL_OK) {
+        Error_Handler();
+    }
+
+    master.MasterOutputTrigger = TIM_TRGO_RESET;
+    master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+    if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &master) != HAL_OK) {
+        Error_Handler();
+    }
+
+    channel.OCMode = TIM_OCMODE_PWM1;
+    channel.Pulse = 0U;
+    channel.OCPolarity = TIM_OCPOLARITY_HIGH;
+    channel.OCFastMode = TIM_OCFAST_DISABLE;
+    if (HAL_TIM_PWM_ConfigChannel(&htim4, &channel,
+                                  SERVO_PWM_CHANNEL) != HAL_OK) {
         Error_Handler();
     }
 }
