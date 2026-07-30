@@ -31,6 +31,7 @@
 #define PIPE_ATTITUDE_MODEL_SCALE_MAX                  1.25f   /* 模型校正比例允许的最大值。 */
 #define PIPE_ATTITUDE_MODEL_OFFSET_MAX_DEG             0.75f   /* 模型校正零偏允许的最大绝对值。 */
 #define PIPE_ATTITUDE_MAX_RETURN_ERROR_DEG             0.60f   /* 回到模型水平点后允许的最大回差。 */
+#define PIPE_ATTITUDE_MAPPING_MIN_STEP_DEG              0.05f   /* 相邻实测点允许的最小单调角度差。 */
 #define PIPE_ATTITUDE_CALIBRATION_SERVO_SLEW_DEG_S    30.0f   /* 标定期间舵机命令最大变化率。 */
 #define PIPE_ATTITUDE_SERVO_TARGET_EPSILON_DEG          0.01f  /* 判定软件舵机命令到位的角度误差。 */
 #define PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG                0.0f   /* 重新装配后允许的最小舵机内部角。 */
@@ -92,9 +93,7 @@ static uint8_t PipeAttitudeControl_IsActiveState(PipeCalibrationState state)
 static uint8_t PipeAttitudeControl_IsPointSampleState(
     PipeCalibrationState state)
 {
-    return (uint8_t) ((state == PIPE_CALIBRATION_SAMPLE_NEGATIVE) ||
-                      (state == PIPE_CALIBRATION_SAMPLE_CENTER) ||
-                      (state == PIPE_CALIBRATION_SAMPLE_POSITIVE) ||
+    return (uint8_t) ((state == PIPE_CALIBRATION_SAMPLE_MAPPING_POINT) ||
                       (state == PIPE_CALIBRATION_SAMPLE_RETURN));
 }
 
@@ -156,6 +155,32 @@ static uint8_t PipeAttitudeControl_SetPointState(
         return 0U;
     }
     PipeAttitudeControl_SetState(control, state, now_ms, event);
+    return 1U;
+}
+
+static uint8_t PipeAttitudeControl_SetMappingPointState(
+    PipeAttitudeControl *control,
+    uint8_t point_index,
+    uint32_t now_ms)
+{
+    float model_pitch_deg;
+    float servo_angle_deg;
+
+    if ((LinkageKinematics_GetCalibrationPoint(point_index,
+                                               &model_pitch_deg,
+                                               &servo_angle_deg) == 0U) ||
+        (servo_angle_deg < PIPE_ATTITUDE_SERVO_SAFE_MIN_DEG) ||
+        (servo_angle_deg > PIPE_ATTITUDE_SERVO_SAFE_MAX_DEG)) {
+        return 0U;
+    }
+
+    control->calibration_point_index = point_index;
+    control->calibration_target_pitch_deg = model_pitch_deg;
+    control->servo_target_deg = servo_angle_deg;
+    PipeAttitudeControl_SetState(control,
+                                 PIPE_CALIBRATION_SETTLE_MAPPING_POINT,
+                                 now_ms,
+                                 PIPE_CALIBRATION_EVENT_MAPPING_POINT);
     return 1U;
 }
 
@@ -293,12 +318,9 @@ static void PipeAttitudeControl_CollectLevelSample(
     control->filter_ready = 1U;
     control->sample_ready = 1U;
     control->last_sample_ms = measurement->timestamp_ms;
-    if (PipeAttitudeControl_SetPointState(
-            control,
-            PIPE_CALIBRATION_SETTLE_NEGATIVE,
-            PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG,
-            now_ms,
-            PIPE_CALIBRATION_EVENT_NEGATIVE) == 0U) {
+    if (PipeAttitudeControl_SetMappingPointState(control,
+                                                 0U,
+                                                 now_ms) == 0U) {
         PipeAttitudeControl_Fail(control,
                                  now_ms,
                                  PIPE_CALIBRATION_EVENT_FAILED_RANGE);
@@ -330,42 +352,41 @@ static void PipeAttitudeControl_CollectPointSample(
 
     average = control->sample_sum / (float) control->sample_count;
     switch (control->calibration_state) {
-        case PIPE_CALIBRATION_SAMPLE_NEGATIVE:
-            control->negative_pitch_deg = average;
-            if (PipeAttitudeControl_SetPointState(
-                    control,
-                    PIPE_CALIBRATION_SETTLE_CENTER,
-                    PIPE_ATTITUDE_CALIBRATION_CENTER_DEG,
-                    now_ms,
-                    PIPE_CALIBRATION_EVENT_CENTER) == 0U) {
+        case PIPE_CALIBRATION_SAMPLE_MAPPING_POINT:
+            if (control->calibration_point_index >=
+                LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT) {
                 PipeAttitudeControl_Fail(
                     control, now_ms, PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+                break;
             }
-            break;
-
-        case PIPE_CALIBRATION_SAMPLE_CENTER:
-            control->center_pitch_deg = average;
-            if (PipeAttitudeControl_SetPointState(
-                    control,
-                    PIPE_CALIBRATION_SETTLE_POSITIVE,
-                    PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG,
-                    now_ms,
-                    PIPE_CALIBRATION_EVENT_POSITIVE) == 0U) {
-                PipeAttitudeControl_Fail(
-                    control, now_ms, PIPE_CALIBRATION_EVENT_FAILED_RANGE);
-            }
-            break;
-
-        case PIPE_CALIBRATION_SAMPLE_POSITIVE:
-            control->positive_pitch_deg = average;
-            if (PipeAttitudeControl_SetPointState(
-                    control,
-                    PIPE_CALIBRATION_SETTLE_RETURN,
-                    PIPE_ATTITUDE_CALIBRATION_CENTER_DEG,
-                    now_ms,
-                    PIPE_CALIBRATION_EVENT_RETURN) == 0U) {
-                PipeAttitudeControl_Fail(
-                    control, now_ms, PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+            control->mapping_pitch_deg[
+                control->calibration_point_index] = average;
+            if ((uint8_t) (control->calibration_point_index + 1U) <
+                LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT) {
+                if (PipeAttitudeControl_SetMappingPointState(
+                        control,
+                        (uint8_t) (control->calibration_point_index + 1U),
+                        now_ms) == 0U) {
+                    PipeAttitudeControl_Fail(
+                        control, now_ms,
+                        PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+                }
+            } else {
+                control->negative_pitch_deg = control->mapping_pitch_deg[0];
+                control->center_pitch_deg = control->mapping_pitch_deg[
+                    LINKAGE_KINEMATICS_LEVEL_POINT_INDEX];
+                control->positive_pitch_deg = control->mapping_pitch_deg[
+                    LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U];
+                if (PipeAttitudeControl_SetPointState(
+                        control,
+                        PIPE_CALIBRATION_SETTLE_RETURN,
+                        PIPE_ATTITUDE_CALIBRATION_CENTER_DEG,
+                        now_ms,
+                        PIPE_CALIBRATION_EVENT_RETURN) == 0U) {
+                    PipeAttitudeControl_Fail(
+                        control, now_ms,
+                        PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+                }
             }
             break;
 
@@ -384,8 +405,14 @@ static void PipeAttitudeControl_FinishMapping(PipeAttitudeControl *control,
     float raw_span;
     float normalized_span;
     float return_error;
+    float first_model_pitch_deg;
+    float last_model_pitch_deg;
+    float servo_angle_deg;
+    uint8_t index;
 
-    raw_span = control->positive_pitch_deg - control->negative_pitch_deg;
+    raw_span = control->mapping_pitch_deg[
+        LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U] -
+        control->mapping_pitch_deg[0];
     if (PipeAttitudeControl_Abs(raw_span) < 0.01f) {
         PipeAttitudeControl_Fail(control,
                                  now_ms,
@@ -394,23 +421,49 @@ static void PipeAttitudeControl_FinishMapping(PipeAttitudeControl *control,
     }
 
     control->imu_pitch_sign = (raw_span > 0.0f) ? 1 : -1;
-    control->negative_pitch_deg *= (float) control->imu_pitch_sign;
-    control->center_pitch_deg *= (float) control->imu_pitch_sign;
-    control->positive_pitch_deg *= (float) control->imu_pitch_sign;
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        control->mapping_pitch_deg[index] *=
+            (float) control->imu_pitch_sign;
+    }
     control->return_pitch_deg *= (float) control->imu_pitch_sign;
+    control->negative_pitch_deg = control->mapping_pitch_deg[0];
+    control->center_pitch_deg = control->mapping_pitch_deg[
+        LINKAGE_KINEMATICS_LEVEL_POINT_INDEX];
+    control->positive_pitch_deg = control->mapping_pitch_deg[
+        LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U];
+
+    if ((LinkageKinematics_GetCalibrationPoint(
+             0U, &first_model_pitch_deg, &servo_angle_deg) == 0U) ||
+        (LinkageKinematics_GetCalibrationPoint(
+             LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U,
+             &last_model_pitch_deg,
+             &servo_angle_deg) == 0U)) {
+        PipeAttitudeControl_Fail(control,
+                                 now_ms,
+                                 PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+        return;
+    }
+
     normalized_span = control->positive_pitch_deg -
                       control->negative_pitch_deg;
     control->model_scale = normalized_span /
-        (PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG -
-         PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG);
-    /* 非对称标定端点下，对三个采样点的模型残差取平均得到零偏。 */
-    control->model_offset_deg =
-        ((control->negative_pitch_deg -
-          control->model_scale * PIPE_ATTITUDE_CALIBRATION_NEGATIVE_DEG) +
-         control->center_pitch_deg +
-         (control->positive_pitch_deg -
-          control->model_scale * PIPE_ATTITUDE_CALIBRATION_POSITIVE_DEG)) /
-        3.0f;
+        (last_model_pitch_deg - first_model_pitch_deg);
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        if ((index > 0U) &&
+            ((control->mapping_pitch_deg[index] -
+              control->mapping_pitch_deg[index - 1U]) <
+             PIPE_ATTITUDE_MAPPING_MIN_STEP_DEG)) {
+            PipeAttitudeControl_Fail(
+                control, now_ms, PIPE_CALIBRATION_EVENT_FAILED_RANGE);
+            return;
+        }
+    }
+    /* 九点曲线直接参与控制，O仅表示122°水平采样点相对初始零位的偏差。 */
+    control->model_offset_deg = control->center_pitch_deg;
     return_error = PipeAttitudeControl_Abs(control->return_pitch_deg -
                                            control->center_pitch_deg);
 
@@ -520,6 +573,7 @@ static void PipeAttitudeControl_FillOutput(PipeAttitudeControl *control,
     output->imu_pitch_sign = control->imu_pitch_sign;
     output->calibration_state = control->calibration_state;
     output->calibration_event = control->pending_event;
+    output->calibration_point_index = control->calibration_point_index;
     output->calibration_sample_count = control->sample_count;
     output->servo_override_deg = control->servo_override_deg;
     output->servo_target_deg = control->servo_target_deg;
@@ -539,6 +593,9 @@ static void PipeAttitudeControl_FillOutput(PipeAttitudeControl *control,
     output->return_pitch_deg = control->return_pitch_deg;
     output->model_scale = control->model_scale;
     output->model_offset_deg = control->model_offset_deg;
+    memcpy(output->mapping_pitch_deg,
+           control->mapping_pitch_deg,
+           sizeof(output->mapping_pitch_deg));
 
     control->event_pending = 0U;
     control->pending_event = PIPE_CALIBRATION_EVENT_NONE;
@@ -687,34 +744,12 @@ void PipeAttitudeControl_Update(PipeAttitudeControl *control,
             }
             break;
 
-        case PIPE_CALIBRATION_SETTLE_NEGATIVE:
+        case PIPE_CALIBRATION_SETTLE_MAPPING_POINT:
             if (PipeAttitudeControl_SettleElapsed(
                     control, now_ms, PIPE_ATTITUDE_POINT_SETTLE_MS) != 0U) {
                 PipeAttitudeControl_SetState(
                     control,
-                    PIPE_CALIBRATION_SAMPLE_NEGATIVE,
-                    now_ms,
-                    PIPE_CALIBRATION_EVENT_NONE);
-            }
-            break;
-
-        case PIPE_CALIBRATION_SETTLE_CENTER:
-            if (PipeAttitudeControl_SettleElapsed(
-                    control, now_ms, PIPE_ATTITUDE_POINT_SETTLE_MS) != 0U) {
-                PipeAttitudeControl_SetState(
-                    control,
-                    PIPE_CALIBRATION_SAMPLE_CENTER,
-                    now_ms,
-                    PIPE_CALIBRATION_EVENT_NONE);
-            }
-            break;
-
-        case PIPE_CALIBRATION_SETTLE_POSITIVE:
-            if (PipeAttitudeControl_SettleElapsed(
-                    control, now_ms, PIPE_ATTITUDE_POINT_SETTLE_MS) != 0U) {
-                PipeAttitudeControl_SetState(
-                    control,
-                    PIPE_CALIBRATION_SAMPLE_POSITIVE,
+                    PIPE_CALIBRATION_SAMPLE_MAPPING_POINT,
                     now_ms,
                     PIPE_CALIBRATION_EVENT_NONE);
             }
@@ -731,9 +766,7 @@ void PipeAttitudeControl_Update(PipeAttitudeControl *control,
             }
             break;
 
-        case PIPE_CALIBRATION_SAMPLE_NEGATIVE:
-        case PIPE_CALIBRATION_SAMPLE_CENTER:
-        case PIPE_CALIBRATION_SAMPLE_POSITIVE:
+        case PIPE_CALIBRATION_SAMPLE_MAPPING_POINT:
             if (state_elapsed_ms > PIPE_ATTITUDE_POINT_TIMEOUT_MS) {
                 PipeAttitudeControl_Fail(
                     control,

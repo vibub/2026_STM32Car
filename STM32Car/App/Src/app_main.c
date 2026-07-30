@@ -80,6 +80,7 @@ volatile uint8_t g_app_pipe_calibration_valid;
 volatile uint8_t g_app_pipe_attitude_valid;
 volatile uint8_t g_app_pipe_accel_trusted;
 volatile int8_t g_app_pipe_imu_pitch_sign;
+volatile uint8_t g_app_pipe_calibration_point_index;
 volatile uint16_t g_app_pipe_calibration_sample_count;
 volatile float g_app_pipe_gyro_x_bias_dps;
 volatile float g_app_pipe_accel_zero_deg;
@@ -95,6 +96,8 @@ volatile float g_app_pipe_positive_pitch_deg;
 volatile float g_app_pipe_return_pitch_deg;
 volatile float g_app_pipe_model_scale;
 volatile float g_app_pipe_model_offset_deg;
+volatile float g_app_pipe_mapping_pitch_deg[
+    LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
 volatile float g_app_pipe_calibration_target_pitch_deg;
 volatile float g_app_pipe_servo_target_deg;
 volatile float g_app_pipe_servo_override_deg;
@@ -193,6 +196,8 @@ static void App_UpdateBallBalanceDebug(void)
 
 static void App_UpdatePipeAttitudeDebug(void)
 {
+    uint8_t index;
+
     g_app_pipe_calibration_state =
         (uint8_t) s_pipe_attitude_output.calibration_state;
     g_app_pipe_calibration_active =
@@ -202,6 +207,8 @@ static void App_UpdatePipeAttitudeDebug(void)
     g_app_pipe_attitude_valid = s_pipe_attitude_output.attitude_valid;
     g_app_pipe_accel_trusted = s_pipe_attitude_output.accel_trusted;
     g_app_pipe_imu_pitch_sign = s_pipe_attitude_output.imu_pitch_sign;
+    g_app_pipe_calibration_point_index =
+        s_pipe_attitude_output.calibration_point_index;
     g_app_pipe_calibration_sample_count =
         s_pipe_attitude_output.calibration_sample_count;
     g_app_pipe_gyro_x_bias_dps = s_pipe_attitude_output.gyro_x_bias_dps;
@@ -223,6 +230,12 @@ static void App_UpdatePipeAttitudeDebug(void)
     g_app_pipe_return_pitch_deg = s_pipe_attitude_output.return_pitch_deg;
     g_app_pipe_model_scale = s_pipe_attitude_output.model_scale;
     g_app_pipe_model_offset_deg = s_pipe_attitude_output.model_offset_deg;
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        g_app_pipe_mapping_pitch_deg[index] =
+            s_pipe_attitude_output.mapping_pitch_deg[index];
+    }
     g_app_pipe_calibration_target_pitch_deg =
         s_pipe_attitude_output.calibration_target_pitch_deg;
     g_app_pipe_servo_target_deg = s_pipe_attitude_output.servo_target_deg;
@@ -270,14 +283,10 @@ static void App_SendPipeCalibrationEvent(PipeCalibrationEvent event)
         case PIPE_CALIBRATION_EVENT_LEVEL:
             Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_LEVEL);
             break;
-        case PIPE_CALIBRATION_EVENT_NEGATIVE:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_NEGATIVE);
-            break;
-        case PIPE_CALIBRATION_EVENT_CENTER:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_CENTER);
-            break;
-        case PIPE_CALIBRATION_EVENT_POSITIVE:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_POSITIVE);
+        case PIPE_CALIBRATION_EVENT_MAPPING_POINT:
+            Protocol_Tjc_SendCalibrationPoint(
+                (uint8_t) (s_pipe_attitude_output.calibration_point_index + 1U),
+                LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT);
             break;
         case PIPE_CALIBRATION_EVENT_RETURN:
             Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_RETURN);
@@ -340,7 +349,8 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
         &s_ball_balance_control,
         s_pipe_attitude_output.calibration_valid,
         s_pipe_attitude_output.model_scale,
-        s_pipe_attitude_output.model_offset_deg);
+        s_pipe_attitude_output.model_offset_deg,
+        s_pipe_attitude_output.mapping_pitch_deg);
     if (s_pipe_attitude_output.status_changed != 0U) {
         App_SendPipeCalibrationEvent(
             s_pipe_attitude_output.calibration_event);

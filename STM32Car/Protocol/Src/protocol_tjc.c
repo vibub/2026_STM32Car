@@ -26,6 +26,9 @@ static const uint8_t s_text_calibration_level[] = {
     0xE9U, 0x87U, 0x87U, 0xE9U, 0x9BU, 0x86U,
     0xE4U, 0xB8U, 0xADU, 0xE4U, 0xBDU, 0x8DU
 };
+static const uint8_t s_text_calibration_point[] = {
+    0xE9U, 0x87U, 0x87U, 0xE9U, 0x9BU, 0x86U
+};
 static const uint8_t s_text_calibration_negative[] = {
     0xE9U, 0x87U, 0x87U, 0xE9U, 0x9BU, 0x86U,
     0x2DU, 0x31U, 0x30U, 0xE5U, 0xBAU, 0xA6U
@@ -314,6 +317,39 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
     if (text != 0) {
         Protocol_Tjc_SendTextFrame(text, text_length);
     }
+}
+
+void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
+                                       uint8_t point_count)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+
+    if ((point_index == 0U) || (point_index > 9U) ||
+        (point_count == 0U) || (point_count > 9U)) {
+        return;
+    }
+
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_prefix,
+        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_text_calibration_point,
+        (uint16_t) sizeof(s_text_calibration_point));
+    frame[length++] = (uint8_t) ('0' + point_index);
+    frame[length++] = (uint8_t) '/';
+    frame[length++] = (uint8_t) ('0' + point_count);
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
 }
 
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,

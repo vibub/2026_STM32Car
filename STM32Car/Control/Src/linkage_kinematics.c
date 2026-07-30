@@ -17,6 +17,18 @@
 #define LINKAGE_REACH_TOLERANCE_CM             0.0001f        /* 可达条件允许的浮点计算误差。 */
 #define LINKAGE_ANGLE_TOLERANCE_DEG            0.01f          /* 反解工作范围允许的浮点角度误差。 */
 
+/* 等舵机角间隔采样，模型角只用于参数化实测曲线，不假设实机严格符合模型。 */
+static const float s_calibration_model_pitch_deg[
+    LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT] = {
+    -10.0000f, -5.9648f, -2.7685f, 0.0000f, 2.3170f,
+      4.1570f,  5.5168f,  6.4150f, 6.8000f
+};
+static const float s_calibration_servo_angle_deg[
+    LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT] = {
+    86.0168f, 98.0000f, 110.0000f, 122.0000f, 134.0000f,
+    146.0000f, 158.0000f, 170.0000f, 178.7746f
+};
+
 static float LinkageKinematics_Abs(float value)
 {
     return (value < 0.0f) ? -value : value;
@@ -179,6 +191,20 @@ uint8_t LinkageKinematics_ServoAngleToPipePitch(float servo_angle_deg,
         theta_deg,
         LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG,
         LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG);
+    return 1U;
+}
+
+uint8_t LinkageKinematics_GetCalibrationPoint(uint8_t index,
+                                              float *model_pitch_deg,
+                                              float *servo_angle_deg)
+{
+    if ((index >= LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT) ||
+        (model_pitch_deg == 0) || (servo_angle_deg == 0)) {
+        return 0U;
+    }
+
+    *model_pitch_deg = s_calibration_model_pitch_deg[index];
+    *servo_angle_deg = s_calibration_servo_angle_deg[index];
     return 1U;
 }
 

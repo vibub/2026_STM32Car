@@ -3,16 +3,14 @@
 
 #include <stdint.h>
 
+#include "linkage_kinematics.h"
+
 typedef enum {
     PIPE_CALIBRATION_IDLE = 0,
     PIPE_CALIBRATION_SETTLE_LEVEL,
     PIPE_CALIBRATION_SAMPLE_LEVEL,
-    PIPE_CALIBRATION_SETTLE_NEGATIVE,
-    PIPE_CALIBRATION_SAMPLE_NEGATIVE,
-    PIPE_CALIBRATION_SETTLE_CENTER,
-    PIPE_CALIBRATION_SAMPLE_CENTER,
-    PIPE_CALIBRATION_SETTLE_POSITIVE,
-    PIPE_CALIBRATION_SAMPLE_POSITIVE,
+    PIPE_CALIBRATION_SETTLE_MAPPING_POINT,
+    PIPE_CALIBRATION_SAMPLE_MAPPING_POINT,
     PIPE_CALIBRATION_SETTLE_RETURN,
     PIPE_CALIBRATION_SAMPLE_RETURN,
     PIPE_CALIBRATION_RETURN_ABORTED,
@@ -25,9 +23,7 @@ typedef enum {
     PIPE_CALIBRATION_EVENT_NONE = 0,
     PIPE_CALIBRATION_EVENT_READY,
     PIPE_CALIBRATION_EVENT_LEVEL,
-    PIPE_CALIBRATION_EVENT_NEGATIVE,
-    PIPE_CALIBRATION_EVENT_CENTER,
-    PIPE_CALIBRATION_EVENT_POSITIVE,
+    PIPE_CALIBRATION_EVENT_MAPPING_POINT,
     PIPE_CALIBRATION_EVENT_RETURN,
     PIPE_CALIBRATION_EVENT_SUCCESS,
     PIPE_CALIBRATION_EVENT_FAILED_IMU,
@@ -58,6 +54,7 @@ typedef struct {
     uint8_t sample_ready;
     uint8_t settle_ready;
     uint8_t task_time_ready;
+    uint8_t calibration_point_index;
     int8_t imu_pitch_sign;
     uint16_t sample_count;
     uint16_t rejected_sample_count;
@@ -80,6 +77,7 @@ typedef struct {
     float return_pitch_deg;
     float model_scale;
     float model_offset_deg;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     float calibration_target_pitch_deg;
     float servo_target_deg;
     float servo_override_deg;
@@ -96,6 +94,7 @@ typedef struct {
     int8_t imu_pitch_sign;
     PipeCalibrationState calibration_state;
     PipeCalibrationEvent calibration_event;
+    uint8_t calibration_point_index;
     uint16_t calibration_sample_count;
     float servo_override_deg;
     float servo_target_deg;
@@ -114,6 +113,7 @@ typedef struct {
     float return_pitch_deg;
     float model_scale;
     float model_offset_deg;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
 } PipeAttitudeOutput;
 
 void PipeAttitudeControl_Init(PipeAttitudeControl *control);

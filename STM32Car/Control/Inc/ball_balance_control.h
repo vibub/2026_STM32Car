@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "linkage_kinematics.h"
+
 typedef struct {
     uint8_t valid;
     int32_t position_d10_mm;
@@ -56,6 +58,7 @@ typedef struct {
     float pipe_d_term_deg;
     float model_scale;
     float model_offset_deg;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     float minimum_pipe_pitch_deg;
     float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
@@ -92,6 +95,7 @@ typedef struct {
     float pipe_d_term_deg;
     float model_scale;
     float model_offset_deg;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     float minimum_pipe_pitch_deg;
     float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
@@ -109,10 +113,13 @@ uint8_t BallBalanceControl_IsEnabled(const BallBalanceControl *control);
 uint8_t BallBalanceControl_IsActive(const BallBalanceControl *control);
 void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
-void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
-                                           uint8_t valid,
-                                           float model_scale,
-                                           float model_offset_deg);
+void BallBalanceControl_SetPipeCalibration(
+    BallBalanceControl *control,
+    uint8_t valid,
+    float model_scale,
+    float model_offset_deg,
+    const float mapping_pitch_deg[
+        LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT]);
 float BallBalanceControl_GetNeutralAngleDeg(void);
 void BallBalanceControl_Update(BallBalanceControl *control,
                                uint32_t now_ms,

@@ -60,6 +60,8 @@ void Protocol_Tjc_SendResult(Tjc_Result result,
                              uint8_t current_mode,
                              uint8_t request);
 void Protocol_Tjc_SendStatusText(Tjc_StatusText status);
+void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
+                                       uint8_t point_count);
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
                                          int16_t offset_x100);
 void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,

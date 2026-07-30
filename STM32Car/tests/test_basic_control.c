@@ -30,6 +30,44 @@ static void assert_float_near_tolerance(float actual,
     assert(test_abs(actual - expected) <= tolerance);
 }
 
+static void build_linear_mapping(float scale,
+                                 float offset_deg,
+                                 float mapping_pitch_deg[
+                                     LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT])
+{
+    float model_pitch_deg;
+    float servo_angle_deg;
+    uint8_t index;
+
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        assert(LinkageKinematics_GetCalibrationPoint(
+                   index, &model_pitch_deg, &servo_angle_deg) != 0U);
+        mapping_pitch_deg[index] = scale * model_pitch_deg + offset_deg;
+    }
+}
+
+static void build_nonlinear_mapping(
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT])
+{
+    float model_pitch_deg;
+    float servo_angle_deg;
+    uint8_t index;
+
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        assert(LinkageKinematics_GetCalibrationPoint(
+                   index, &model_pitch_deg, &servo_angle_deg) != 0U);
+        mapping_pitch_deg[index] =
+            0.42f * model_pitch_deg +
+            0.002f * model_pitch_deg *
+            (model_pitch_deg + 10.0f) *
+            (model_pitch_deg - 6.8f);
+    }
+}
+
 static void assert_targets_in_range(const InfraredLineOutput *output)
 {
     assert(output->left_target_cm_s >= 0.0f);
@@ -372,12 +410,16 @@ static void test_pipe_attitude_control(void)
     assert(output.servo_override_active != 0U);
 
     now_ms = 0U;
-    for (iteration = 0U; iteration < 1000U; iteration++) {
+    for (iteration = 0U; iteration < 2000U; iteration++) {
         now_ms += 20U;
         assert(LinkageKinematics_ServoAngleToPipePitch(
                    servo_angle, &model_pitch_deg) != 0U);
-        /* 模拟远端 IMU 符号反转和柔性水管 0.42 倍角度响应。 */
-        raw_pitch_deg = -0.42f * model_pitch_deg;
+        /* 模拟远端IMU符号反转和不能由单一scale/offset表示的柔性非线性。 */
+        raw_pitch_deg = -(
+            0.42f * model_pitch_deg +
+            0.002f * model_pitch_deg *
+            (model_pitch_deg + 10.0f) *
+            (model_pitch_deg - 6.8f));
         raw_pitch_rate_dps =
             (raw_pitch_deg - previous_raw_pitch_deg) / 0.020f;
         pitch_rad = raw_pitch_deg * TEST_PI / 180.0f;
@@ -413,6 +455,9 @@ static void test_pipe_attitude_control(void)
     assert(output.positive_pitch_deg > 2.7f);
     assert_float_near_tolerance(output.model_scale, 0.42f, 0.03f);
     assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.08f);
+    assert_float_near_tolerance(output.mapping_pitch_deg[1],
+                                -1.891f,
+                                0.08f);
     assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.1f);
 
     now_ms += 20U;
@@ -442,6 +487,7 @@ static void test_ball_balance_control(void)
     BallBalanceMeasurement measurement;
     BallBalanceAttitude attitude;
     BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     float neutral_angle_deg;
     uint32_t now_ms;
     uint8_t index;
@@ -455,7 +501,9 @@ static void test_ball_balance_control(void)
                                 neutral_angle_deg,
                                 0.0002f);
 
-    BallBalanceControl_SetPipeCalibration(&control, 1U, 1.0f, 0.0f);
+    build_linear_mapping(1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
     BallBalanceControl_SetEnabled(&control, 1U, 0U);
     assert(BallBalanceControl_IsEnabled(&control) != 0U);
 
@@ -575,11 +623,14 @@ static void test_flexible_pipe_mapping_limits(void)
     BallBalanceMeasurement measurement;
     BallBalanceAttitude attitude;
     BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     uint32_t now_ms = 0U;
     uint8_t index;
 
     BallBalanceControl_Init(&control);
-    BallBalanceControl_SetPipeCalibration(&control, 1U, 0.42f, 0.38f);
+    build_linear_mapping(0.42f, 0.38f, mapping_pitch_deg);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 0.42f, 0.38f, mapping_pitch_deg);
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
@@ -635,6 +686,65 @@ static void test_flexible_pipe_mapping_limits(void)
     assert(output.desired_model_pitch_deg >= -10.0f);
 }
 
+static void test_nonlinear_mapping_interpolation(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
+    uint32_t now_ms = 0U;
+    uint8_t index;
+
+    BallBalanceControl_Init(&control);
+    build_nonlinear_mapping(mapping_pitch_deg);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 0.42f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_SetEnabled(&control, 1U, now_ms);
+
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.enabled != 0U);
+
+    measurement.valid = 1U;
+    measurement.position_d10_mm = -473;
+    measurement.quality = 80U;
+    measurement.sequence = 1U;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    for (index = 0U; index < 7U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+
+    assert_float_near_tolerance(
+        output.command_pipe_pitch_deg, mapping_pitch_deg[1], 0.02f);
+    assert_float_near_tolerance(
+        output.feedforward_model_pitch_deg, -5.9648f, 0.03f);
+    assert_float_near_tolerance(output.servo_feedforward_deg, 98.0f, 0.05f);
+    assert(output.mapping_fault == 0U);
+}
+
 static void test_speed_pid(void)
 {
     WheelSpeedPid pid;
@@ -660,6 +770,7 @@ int main(void)
     test_pipe_attitude_control();
     test_ball_balance_control();
     test_flexible_pipe_mapping_limits();
+    test_nonlinear_mapping_interpolation();
     test_speed_pid();
     puts("基础控制、IMU 姿态与钢球平衡主机测试通过");
     return 0;

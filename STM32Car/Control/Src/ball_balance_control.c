@@ -33,6 +33,7 @@
 #define BALL_BALANCE_MODEL_SCALE_MAX               1.25f  /* 可接受模型校正比例的最大值。 */
 #define BALL_BALANCE_MODEL_OFFSET_MAX_DEG           0.75f  /* 可接受模型校正零偏的最大绝对值。 */
 #define BALL_BALANCE_CACHE_EPSILON_DEG              0.0001f /* 复用运动学缓存允许的输入误差。 */
+#define BALL_BALANCE_MAPPING_MIN_STEP_DEG             0.05f /* 相邻实测映射点允许的最小角度差。 */
 
 static float BallBalanceControl_Abs(float value)
 {
@@ -113,14 +114,23 @@ static void BallBalanceControl_InvalidateMapping(BallBalanceControl *control)
     BallBalanceControl_ClearVisionState(control, 1U);
 }
 
-static uint8_t BallBalanceControl_ActualPitchToModelPitch(
+static uint8_t BallBalanceControl_MapActualPitch(
     const BallBalanceControl *control,
     float actual_pitch_deg,
-    float *model_pitch_deg)
+    float *model_pitch_deg,
+    float *servo_angle_deg)
 {
-    float converted_pitch;
+    float lower_model_pitch_deg;
+    float upper_model_pitch_deg;
+    float lower_servo_angle_deg;
+    float upper_servo_angle_deg;
+    float lower_actual_pitch_deg;
+    float upper_actual_pitch_deg;
+    float ratio;
+    uint8_t index;
 
-    if ((model_pitch_deg == 0) || (control->mapping_valid == 0U) ||
+    if ((model_pitch_deg == 0) || (servo_angle_deg == 0) ||
+        (control->mapping_valid == 0U) ||
         (control->model_scale < BALL_BALANCE_MODEL_SCALE_MIN) ||
         (control->model_scale > BALL_BALANCE_MODEL_SCALE_MAX)) {
         return 0U;
@@ -128,51 +138,42 @@ static uint8_t BallBalanceControl_ActualPitchToModelPitch(
 
     actual_pitch_deg = BallBalanceControl_LimitActualPitch(
         control, actual_pitch_deg);
-    converted_pitch = (actual_pitch_deg - control->model_offset_deg) /
-                      control->model_scale;
-    *model_pitch_deg = BallBalanceControl_Limit(
-        converted_pitch,
-        LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG,
-        LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG);
-    return 1U;
-}
-
-static uint8_t BallBalanceControl_MapCachedModelPitch(
-    float model_pitch_deg,
-    uint8_t *cache_valid,
-    float *cached_model_pitch_deg,
-    float *cached_servo_angle_deg,
-    float *servo_angle_deg)
-{
-    float mapped_angle_deg;
-
-    if ((cache_valid == 0) || (cached_model_pitch_deg == 0) ||
-        (cached_servo_angle_deg == 0) || (servo_angle_deg == 0)) {
-        return 0U;
+    if (actual_pitch_deg <= control->mapping_pitch_deg[0]) {
+        return LinkageKinematics_GetCalibrationPoint(
+            0U, model_pitch_deg, servo_angle_deg);
     }
 
-    if ((*cache_valid != 0U) &&
-        (BallBalanceControl_Abs(model_pitch_deg -
-                                *cached_model_pitch_deg) <=
-         BALL_BALANCE_CACHE_EPSILON_DEG)) {
-        *servo_angle_deg = *cached_servo_angle_deg;
-        return 1U;
+    for (index = 1U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        upper_actual_pitch_deg = control->mapping_pitch_deg[index];
+        if (actual_pitch_deg <= upper_actual_pitch_deg) {
+            lower_actual_pitch_deg = control->mapping_pitch_deg[index - 1U];
+            if ((LinkageKinematics_GetCalibrationPoint(
+                     (uint8_t) (index - 1U),
+                     &lower_model_pitch_deg,
+                     &lower_servo_angle_deg) == 0U) ||
+                (LinkageKinematics_GetCalibrationPoint(
+                     index,
+                     &upper_model_pitch_deg,
+                     &upper_servo_angle_deg) == 0U) ||
+                (upper_actual_pitch_deg <= lower_actual_pitch_deg)) {
+                return 0U;
+            }
+            ratio = (actual_pitch_deg - lower_actual_pitch_deg) /
+                    (upper_actual_pitch_deg - lower_actual_pitch_deg);
+            *model_pitch_deg = lower_model_pitch_deg + ratio *
+                (upper_model_pitch_deg - lower_model_pitch_deg);
+            *servo_angle_deg = lower_servo_angle_deg + ratio *
+                (upper_servo_angle_deg - lower_servo_angle_deg);
+            return 1U;
+        }
     }
 
-    if (LinkageKinematics_PipePitchToServoAngle(model_pitch_deg,
-                                                 &mapped_angle_deg) == 0U) {
-        return 0U;
-    }
-    if ((mapped_angle_deg < BALL_BALANCE_MIN_ANGLE_DEG) ||
-        (mapped_angle_deg > BALL_BALANCE_MAX_ANGLE_DEG)) {
-        return 0U;
-    }
-
-    *cache_valid = 1U;
-    *cached_model_pitch_deg = model_pitch_deg;
-    *cached_servo_angle_deg = mapped_angle_deg;
-    *servo_angle_deg = mapped_angle_deg;
-    return 1U;
+    return LinkageKinematics_GetCalibrationPoint(
+        LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U,
+        model_pitch_deg,
+        servo_angle_deg);
 }
 
 static uint8_t BallBalanceControl_MapFeedforward(
@@ -180,20 +181,15 @@ static uint8_t BallBalanceControl_MapFeedforward(
     float actual_pitch_deg,
     float *servo_angle_deg)
 {
-    float model_pitch_deg;
-
-    if (BallBalanceControl_ActualPitchToModelPitch(
-            control, actual_pitch_deg, &model_pitch_deg) == 0U) {
-        return 0U;
-    }
-    if (BallBalanceControl_MapCachedModelPitch(
-            model_pitch_deg,
-            &control->feedforward_cache_valid,
+    if (BallBalanceControl_MapActualPitch(
+            control,
+            actual_pitch_deg,
             &control->feedforward_model_pitch_deg,
-            &control->servo_feedforward_deg,
             servo_angle_deg) == 0U) {
         return 0U;
     }
+    control->feedforward_cache_valid = 1U;
+    control->servo_feedforward_deg = *servo_angle_deg;
     return 1U;
 }
 
@@ -202,20 +198,15 @@ static uint8_t BallBalanceControl_MapDesired(
     float actual_pitch_deg,
     float *servo_angle_deg)
 {
-    float model_pitch_deg;
-
-    if (BallBalanceControl_ActualPitchToModelPitch(
-            control, actual_pitch_deg, &model_pitch_deg) == 0U) {
-        return 0U;
-    }
-    if (BallBalanceControl_MapCachedModelPitch(
-            model_pitch_deg,
-            &control->desired_cache_valid,
+    if (BallBalanceControl_MapActualPitch(
+            control,
+            actual_pitch_deg,
             &control->desired_model_pitch_deg,
-            &control->desired_angle_deg,
             servo_angle_deg) == 0U) {
         return 0U;
     }
+    control->desired_cache_valid = 1U;
+    control->desired_angle_deg = *servo_angle_deg;
     return 1U;
 }
 
@@ -539,6 +530,9 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->pipe_d_term_deg = control->pipe_d_term_deg;
     output->model_scale = control->model_scale;
     output->model_offset_deg = control->model_offset_deg;
+    memcpy(output->mapping_pitch_deg,
+           control->mapping_pitch_deg,
+           sizeof(output->mapping_pitch_deg));
     output->minimum_pipe_pitch_deg = control->minimum_pipe_pitch_deg;
     output->maximum_pipe_pitch_deg = control->maximum_pipe_pitch_deg;
     output->feedforward_model_pitch_deg =
@@ -622,53 +616,43 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
     }
 }
 
-void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
-                                           uint8_t valid,
-                                           float model_scale,
-                                           float model_offset_deg)
+void BallBalanceControl_SetPipeCalibration(
+    BallBalanceControl *control,
+    uint8_t valid,
+    float model_scale,
+    float model_offset_deg,
+    const float mapping_pitch_deg[
+        LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT])
 {
     float neutral_model_pitch_deg;
     float neutral_servo_angle_deg;
     float minimum_pipe_pitch_deg;
     float maximum_pipe_pitch_deg;
     uint8_t calibration_valid;
+    uint8_t mapping_changed = 0U;
+    uint8_t index;
 
     if (control == 0) {
         return;
     }
 
     calibration_valid =
-        (uint8_t) ((valid != 0U) &&
+        (uint8_t) ((valid != 0U) && (mapping_pitch_deg != 0) &&
                    (model_scale >= BALL_BALANCE_MODEL_SCALE_MIN) &&
                    (model_scale <= BALL_BALANCE_MODEL_SCALE_MAX) &&
                    (BallBalanceControl_Abs(model_offset_deg) <=
                     BALL_BALANCE_MODEL_OFFSET_MAX_DEG));
     if (calibration_valid != 0U) {
-        neutral_model_pitch_deg = -model_offset_deg / model_scale;
-        minimum_pipe_pitch_deg = BallBalanceControl_Limit(
-            model_scale * LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG +
-            model_offset_deg,
-            BALL_BALANCE_MIN_PIPE_PITCH_DEG,
-            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
-        maximum_pipe_pitch_deg = BallBalanceControl_Limit(
-            model_scale * LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG +
-            model_offset_deg,
-            BALL_BALANCE_MIN_PIPE_PITCH_DEG,
-            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
-        calibration_valid =
-            (uint8_t) ((neutral_model_pitch_deg >=
-                        LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG) &&
-                       (neutral_model_pitch_deg <=
-                        LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG) &&
-                       (minimum_pipe_pitch_deg < 0.0f) &&
-                       (maximum_pipe_pitch_deg > 0.0f) &&
-                       (LinkageKinematics_PipePitchToServoAngle(
-                            neutral_model_pitch_deg,
-                            &neutral_servo_angle_deg) != 0U) &&
-                       (neutral_servo_angle_deg >=
-                        BALL_BALANCE_MIN_ANGLE_DEG) &&
-                       (neutral_servo_angle_deg <=
-                        BALL_BALANCE_MAX_ANGLE_DEG));
+        for (index = 1U;
+             index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+             index++) {
+            if ((mapping_pitch_deg[index] -
+                 mapping_pitch_deg[index - 1U]) <
+                BALL_BALANCE_MAPPING_MIN_STEP_DEG) {
+                calibration_valid = 0U;
+                break;
+            }
+        }
     }
 
     if (calibration_valid == 0U) {
@@ -678,22 +662,65 @@ void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
         return;
     }
 
-    if ((control->mapping_valid != 0U) &&
-        (BallBalanceControl_Abs(control->model_scale - model_scale) <=
-         BALL_BALANCE_CACHE_EPSILON_DEG) &&
-        (BallBalanceControl_Abs(control->model_offset_deg - model_offset_deg) <=
+    minimum_pipe_pitch_deg = BallBalanceControl_Limit(
+        mapping_pitch_deg[0],
+        BALL_BALANCE_MIN_PIPE_PITCH_DEG,
+        BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+    maximum_pipe_pitch_deg = BallBalanceControl_Limit(
+        mapping_pitch_deg[
+            LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT - 1U],
+        BALL_BALANCE_MIN_PIPE_PITCH_DEG,
+        BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+    if ((minimum_pipe_pitch_deg >= 0.0f) ||
+        (maximum_pipe_pitch_deg <= 0.0f)) {
+        if (control->mapping_valid != 0U) {
+            BallBalanceControl_InvalidateMapping(control);
+        }
+        return;
+    }
+
+    if ((control->mapping_valid == 0U) ||
+        (BallBalanceControl_Abs(control->model_scale - model_scale) >
+         BALL_BALANCE_CACHE_EPSILON_DEG) ||
+        (BallBalanceControl_Abs(control->model_offset_deg - model_offset_deg) >
          BALL_BALANCE_CACHE_EPSILON_DEG)) {
+        mapping_changed = 1U;
+    }
+    for (index = 0U;
+         index < LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT;
+         index++) {
+        if (BallBalanceControl_Abs(
+                control->mapping_pitch_deg[index] -
+                mapping_pitch_deg[index]) >
+            BALL_BALANCE_CACHE_EPSILON_DEG) {
+            mapping_changed = 1U;
+        }
+    }
+    if (mapping_changed == 0U) {
         return;
     }
 
     control->model_scale = model_scale;
     control->model_offset_deg = model_offset_deg;
+    memcpy(control->mapping_pitch_deg,
+           mapping_pitch_deg,
+           sizeof(control->mapping_pitch_deg));
     control->minimum_pipe_pitch_deg = minimum_pipe_pitch_deg;
     control->maximum_pipe_pitch_deg = maximum_pipe_pitch_deg;
     control->mapping_valid = 1U;
     control->mapping_fault = 0U;
     control->feedforward_cache_valid = 0U;
     control->desired_cache_valid = 0U;
+
+    if ((BallBalanceControl_MapActualPitch(
+             control,
+             0.0f,
+             &neutral_model_pitch_deg,
+             &neutral_servo_angle_deg) == 0U) ||
+        (neutral_servo_angle_deg < BALL_BALANCE_MIN_ANGLE_DEG) ||
+        (neutral_servo_angle_deg > BALL_BALANCE_MAX_ANGLE_DEG)) {
+        BallBalanceControl_InvalidateMapping(control);
+    }
 }
 
 float BallBalanceControl_GetNeutralAngleDeg(void)
