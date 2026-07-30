@@ -11,7 +11,7 @@
 #define IR_LINE_LARGE_ERROR                  2.00f  /* 进入大偏差降速的误差门槛，单位为厘米。 */
 #define IR_LINE_MEDIUM_SPEED_SCALE           0.82f  /* 中等偏差时基础速度的缩放系数。 */
 #define IR_LINE_LARGE_SPEED_SCALE            0.65f  /* 大偏差时基础速度的缩放系数。 */
-#define IR_LINE_WIDE_SPEED_SCALE             0.50f  /* 八路全黑或宽线时基础速度的缩放系数。 */
+#define IR_LINE_WIDE_SPEED_SCALE             0.45f  /* 八路全黑或宽线时基础速度的缩放系数。 */
 #define IR_LINE_RECOVERY_SPEED_SCALE         0.50f  /* 短时丢线恢复阶段的基础速度缩放系数。 */
 #define IR_LINE_SEARCH_SPEED_SCALE            0.35f /* 长时丢线搜索阶段的基础速度缩放系数。 */
 #define IR_LINE_EDGE_POSITION_CM              4.20f /* 丢线恢复时使用的阵列边缘虚拟位置。 */
@@ -113,6 +113,7 @@ void InfraredLineControl_Init(InfraredLineControl *control)
 void InfraredLineControl_Update(InfraredLineControl *control,
                                 uint32_t now_ms,
                                 uint8_t sensor_mask,
+                                uint8_t force_wide_slowdown,
                                 InfraredLineOutput *output)
 {
     uint32_t line_age_ms;
@@ -140,7 +141,8 @@ void InfraredLineControl_Update(InfraredLineControl *control,
     reported_error = raw_error;
 
     if (active_count != 0U) {
-        output->wide_line = (uint8_t) (sensor_mask == IR_LINE_SENSOR_MASK);
+        output->wide_line = (uint8_t) ((sensor_mask == IR_LINE_SENSOR_MASK) ||
+                                       (force_wide_slowdown != 0U));
         if (control->filter_ready == 0U) {
             control->filtered_error = raw_error;
             control->last_error = raw_error;

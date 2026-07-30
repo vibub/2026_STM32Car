@@ -142,6 +142,8 @@ static void App_ControlStep(uint32_t now_ms)
     uint8_t sensor_mask = 0U;
     uint8_t sensor_read_ok;
     uint8_t sensor_failure_stop = 0U;
+    uint8_t lap_stop_completed = 0U;
+    uint8_t force_wide_slowdown = 0U;
     float left_command;
     float right_command;
     float distance_delta_cm;
@@ -189,29 +191,34 @@ static void App_ControlStep(uint32_t now_ms)
         return;
     }
 
-    InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
-                               &line_output);
-    g_app_line_sensor_mask = line_output.sensor_mask;
-    g_app_line_active_count = line_output.active_count;
-    g_app_line_lost = line_output.line_lost;
-    g_app_line_error = line_output.filtered_error;
-    g_app_line_correction_cm_s = line_output.correction_cm_s;
-
     if (s_line_enabled != 0U) {
         /* 将固定 20 ms 轮速样本还原为本周期左右轮平均行驶距离。 */
         distance_delta_cm = 0.5f *
                             (App_Abs(encoder.left_cm_s) +
                              App_Abs(encoder.right_cm_s)) *
                             ((float) APP_CONTROL_PERIOD_MS / 1000.0f);
-        if (LapStopDetector_Update(&s_lap_stop_detector,
-                                   distance_delta_cm,
-                                   sensor_read_ok,
-                                   sensor_mask) != 0U) {
-            App_UpdateLapStopDebug();
-            App_EnterStopMode(now_ms);
-            return;
+        lap_stop_completed = LapStopDetector_Update(&s_lap_stop_detector,
+                                                    distance_delta_cm,
+                                                    sensor_read_ok,
+                                                    sensor_mask);
+        /* 首次满足终点黑线数量门槛时，先请求巡线控制器降低基础速度。 */
+        if (s_lap_stop_detector.full_black_count != 0U) {
+            force_wide_slowdown = 1U;
         }
         App_UpdateLapStopDebug();
+    }
+
+    InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
+                               force_wide_slowdown, &line_output);
+    g_app_line_sensor_mask = line_output.sensor_mask;
+    g_app_line_active_count = line_output.active_count;
+    g_app_line_lost = line_output.line_lost;
+    g_app_line_error = line_output.filtered_error;
+    g_app_line_correction_cm_s = line_output.correction_cm_s;
+
+    if (lap_stop_completed != 0U) {
+        App_EnterStopMode(now_ms);
+        return;
     }
 
     /* 上电默认停车，收到 TJC 基础巡线命令后才允许闭环输出。 */
