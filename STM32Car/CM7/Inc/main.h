@@ -14,6 +14,12 @@ extern "C" {
 #define MOTOR_LEFT_DIR_PIN   GPIO_PIN_3    /* 左电机方向控制引脚 PA3。 */
 #define MOTOR_LEFT_CHANNEL   TIM_CHANNEL_3 /* 左电机 PWM 使用 TIM2 通道 3。 */
 
+/* SG90 舵机 PWM：TIM4_CH4，PD15，输出频率 50 Hz。 */
+#define SERVO_PWM_INSTANCE TIM4        /* 舵机 PWM 使用的定时器实例。 */
+#define SERVO_PWM_PORT     GPIOD       /* 舵机 PWM 输出 GPIO 端口。 */
+#define SERVO_PWM_PIN      GPIO_PIN_15 /* 舵机 PWM 输出引脚 PD15。 */
+#define SERVO_PWM_CHANNEL  TIM_CHANNEL_4 /* 舵机 PWM 使用 TIM4 通道 4。 */
+
 /* TJC3224T124 串口屏：USART2，PD5 为 STM32 TX，PD6 为 STM32 RX。 */
 #define TJC_UART_INSTANCE USART2     /* TJC 串口使用的外设实例。 */
 #define TJC_UART_IRQn     USART2_IRQn /* TJC 串口对应的中断号。 */
@@ -35,6 +41,7 @@ extern "C" {
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim8;
 extern I2C_HandleTypeDef hi2c4;
 extern UART_HandleTypeDef huart2;

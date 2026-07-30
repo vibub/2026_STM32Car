@@ -1177,6 +1177,9 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\motor_driver.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\servo_driver.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\oled_display.c</name>
                 </file>
             </group>

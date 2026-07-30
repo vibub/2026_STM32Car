@@ -10,6 +10,7 @@
 #include "motor_driver.h"
 #include "oled_display.h"
 #include "protocol_tjc.h"
+#include "servo_driver.h"
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
@@ -263,6 +264,8 @@ void App_Init(void)
     EncoderDriver_Init();
     ImuHeading_Init();
     K230Uart_Init();
+    ServoDriver_Init();
+    ServoDriver_StartContinuousSweep();
     TjcUart_Init();
     Protocol_Tjc_Init();
     OledDisplay_Init();
@@ -289,6 +292,7 @@ void App_Loop(void)
     Protocol_Tjc_Task();
     ImuHeading_Poll();
     now_ms = Board_TimeMs();
+    ServoDriver_Task(now_ms);
     if ((uint32_t) (now_ms - s_last_control_ms) >= APP_CONTROL_PERIOD_MS) {
         /* Do not backfill missed periods with the same encoder sample. */
         s_last_control_ms = now_ms;
