@@ -78,6 +78,7 @@ static float PipeAttitudeControl_AccelNormSquared(
 static float PipeAttitudeControl_AccelPitchDeg(
     const PipeAttitudeMeasurement *measurement)
 {
+    /* 远端安装仍保持 +Y 朝钢球、+Z 向上；水平转向造成的符号反转由三点标定自动识别。 */
     return atan2f(measurement->accel_y_g,
                   measurement->accel_z_g) * PIPE_ATTITUDE_RAD_TO_DEG;
 }
@@ -320,7 +321,8 @@ static void PipeAttitudeControl_CollectPointSample(
         return;
     }
 
-    control->sample_sum += control->pitch_deg;
+    /* 标定点已经静止，直接采集重力角，避免互补滤波滞后低估实际行程。 */
+    control->sample_sum += control->accel_pitch_deg;
     control->sample_count++;
     if (control->sample_count < PIPE_ATTITUDE_POINT_SAMPLE_COUNT) {
         return;

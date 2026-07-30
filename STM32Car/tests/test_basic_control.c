@@ -367,7 +367,7 @@ static void test_pipe_attitude_control(void)
         now_ms += 20U;
         assert(LinkageKinematics_ServoAngleToPipePitch(
                    servo_angle, &model_pitch_deg) != 0U);
-        /* 用反向 IMU 符号验证三点标定能够自动统一为右端抬高为正。 */
+        /* 模拟 IMU 移到另一端后原始符号反转，验证标定仍统一为右端抬高为正。 */
         raw_pitch_deg = -model_pitch_deg;
         raw_pitch_rate_dps =
             (raw_pitch_deg - previous_raw_pitch_deg) / 0.020f;
