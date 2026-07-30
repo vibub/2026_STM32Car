@@ -25,26 +25,23 @@ static const uint8_t s_text_calibration_level[] = {
     0xB2U, 0xC9U, 0xBCU, 0xAFU, 0xD6U, 0xD0U, 0xCEU, 0xBBU
 };
 static const uint8_t s_text_calibration_negative[] = {
-    0xB2U, 0xC9U, 0xBCU, 0xAFU, 0x38U, 0x38U, 0xB6U, 0xC8U
+    0xB2U, 0xC9U, 0xBCU, 0xAFU, 0x2DU, 0x33U, 0xB6U, 0xC8U
 };
 static const uint8_t s_text_calibration_center[] = {
-    0xB8U, 0xB4U, 0xBAU, 0xCBU, 0x39U, 0x30U, 0xB6U, 0xC8U
+    0xB8U, 0xB4U, 0xBAU, 0xCBU, 0x30U, 0xB6U, 0xC8U
 };
 static const uint8_t s_text_calibration_positive[] = {
-    0xB2U, 0xC9U, 0xBCU, 0xAFU, 0x39U, 0x32U, 0xB6U, 0xC8U
+    0xB2U, 0xC9U, 0xBCU, 0xAFU, 0x2BU, 0x33U, 0xB6U, 0xC8U
 };
 static const uint8_t s_text_calibration_return[] = {
     0xBCU, 0xECU, 0xB2U, 0xE9U, 0xBBU, 0xD8U, 0xD6U, 0xD0U
 };
 static const uint8_t s_text_calibration_success[] = {
     0xB1U, 0xEAU, 0xB6U, 0xA8U, 0xB3U, 0xC9U, 0xB9U, 0xA6U,
-    0x20U, 0x4BU, 0x3DU
+    0x20U, 0x53U, 0x3DU
 };
-static const uint8_t s_text_direction_positive[] = {
-    0x20U, 0xD5U, 0xFDU, 0xCFU, 0xF2U
-};
-static const uint8_t s_text_direction_negative[] = {
-    0x20U, 0xB7U, 0xB4U, 0xCFU, 0xF2U
+static const uint8_t s_text_calibration_offset[] = {
+    0x20U, 0x4FU, 0x3DU
 };
 static const uint8_t s_text_calibration_failed_imu[] = {
     0xB1U, 0xEAU, 0xB6U, 0xA8U, 0xCAU, 0xA7U, 0xB0U, 0xDCU,
@@ -128,19 +125,30 @@ static uint16_t Protocol_Tjc_AppendBytes(uint8_t *buffer,
     return (uint16_t) (length + data_length);
 }
 
-static uint16_t Protocol_Tjc_AppendRatio(uint8_t *buffer,
-                                         uint16_t length,
-                                         int16_t ratio_x100)
+static uint16_t Protocol_Tjc_AppendFixedX100(uint8_t *buffer,
+                                             uint16_t length,
+                                             int16_t value_x100,
+                                             uint8_t always_sign)
 {
-    uint16_t magnitude;
+    uint32_t magnitude;
     uint16_t integer_part;
     uint16_t fraction_part;
 
-    magnitude = (ratio_x100 < 0) ?
-        (uint16_t) (-ratio_x100) : (uint16_t) ratio_x100;
+    if (value_x100 < 0) {
+        buffer[length++] = (uint8_t) '-';
+        magnitude = (uint32_t) (-(int32_t) value_x100);
+    } else {
+        if (always_sign != 0U) {
+            buffer[length++] = (uint8_t) '+';
+        }
+        magnitude = (uint32_t) value_x100;
+    }
     integer_part = (uint16_t) (magnitude / 100U);
     fraction_part = (uint16_t) (magnitude % 100U);
 
+    if (integer_part >= 100U) {
+        buffer[length++] = (uint8_t) ('0' + (integer_part / 100U) % 10U);
+    }
     if (integer_part >= 10U) {
         buffer[length++] = (uint8_t) ('0' + (integer_part / 10U) % 10U);
     }
@@ -149,6 +157,27 @@ static uint16_t Protocol_Tjc_AppendRatio(uint8_t *buffer,
     buffer[length++] = (uint8_t) ('0' + fraction_part / 10U);
     buffer[length++] = (uint8_t) ('0' + fraction_part % 10U);
     return length;
+}
+
+static void Protocol_Tjc_SendTextFrame(const uint8_t *text,
+                                       uint16_t text_length)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_prefix,
+        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(frame, length, text, text_length);
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
 }
 
 void Protocol_Tjc_Init(void)
@@ -183,13 +212,10 @@ void Protocol_Tjc_SendResult(Tjc_Result result,
     g_tjc_response_count++;
 }
 
-void Protocol_Tjc_SendStatusText(Tjc_StatusText status,
-                                 int16_t ratio_x100)
+void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
 {
-    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
     const uint8_t *text = 0;
     uint16_t text_length = 0U;
-    uint16_t length = 0U;
 
     switch (status) {
         case TJC_STATUS_CALIBRATION_READY:
@@ -215,6 +241,10 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status,
         case TJC_STATUS_CALIBRATION_RETURN:
             text = s_text_calibration_return;
             text_length = (uint16_t) sizeof(s_text_calibration_return);
+            break;
+        case TJC_STATUS_CALIBRATION_SUCCESS:
+            text = s_text_calibration_success;
+            text_length = (uint16_t) sizeof(s_text_calibration_success);
             break;
         case TJC_STATUS_CALIBRATION_FAILED_IMU:
             text = s_text_calibration_failed_imu;
@@ -252,39 +282,38 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status,
             text = s_text_balance_disabled;
             text_length = (uint16_t) sizeof(s_text_balance_disabled);
             break;
-        case TJC_STATUS_CALIBRATION_SUCCESS:
         default:
             break;
     }
+
+    if (text != 0) {
+        Protocol_Tjc_SendTextFrame(text, text_length);
+    }
+}
+
+void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
+                                         int16_t offset_x100)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
 
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
         s_tjc_text_prefix,
         (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
-    if (status == TJC_STATUS_CALIBRATION_SUCCESS) {
-        length = Protocol_Tjc_AppendBytes(
-            frame,
-            length,
-            s_text_calibration_success,
-            (uint16_t) sizeof(s_text_calibration_success));
-        length = Protocol_Tjc_AppendRatio(frame, length, ratio_x100);
-        if (ratio_x100 >= 0) {
-            length = Protocol_Tjc_AppendBytes(
-                frame,
-                length,
-                s_text_direction_positive,
-                (uint16_t) sizeof(s_text_direction_positive));
-        } else {
-            length = Protocol_Tjc_AppendBytes(
-                frame,
-                length,
-                s_text_direction_negative,
-                (uint16_t) sizeof(s_text_direction_negative));
-        }
-    } else if (text != 0) {
-        length = Protocol_Tjc_AppendBytes(frame, length, text, text_length);
-    }
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_text_calibration_success,
+        (uint16_t) sizeof(s_text_calibration_success));
+    length = Protocol_Tjc_AppendFixedX100(frame, length, scale_x100, 0U);
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_text_calibration_offset,
+        (uint16_t) sizeof(s_text_calibration_offset));
+    length = Protocol_Tjc_AppendFixedX100(frame, length, offset_x100, 1U);
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
@@ -380,7 +409,7 @@ static void Protocol_Tjc_ConsumeByte(uint8_t byte)
             } else {
                 g_tjc_invalid_frame_count++;
                 s_rx_state = (byte == TJC_REQUEST_HEADER_0) ?
-                    TJC_RX_WAIT_HEADER_1 : TJC_RX_WAIT_HEADER_0;
+                             TJC_RX_WAIT_HEADER_1 : TJC_RX_WAIT_HEADER_0;
             }
             break;
 
@@ -403,7 +432,6 @@ void Protocol_Tjc_Task(void)
 
     g_tjc_rx_overflow_count = overflow_count;
     g_tjc_rx_error_count = error_count;
-
     while (TjcUart_ReadByte(&byte) != 0U) {
         g_tjc_rx_byte_count++;
         Protocol_Tjc_ConsumeByte(byte);

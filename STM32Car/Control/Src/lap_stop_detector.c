@@ -3,7 +3,7 @@
 #include <string.h>
 
 #define LAP_STOP_ARM_DISTANCE_CM     400.0f /* 累计达到该里程后允许识别返程 A 点。 */
-#define LAP_STOP_MIN_ACTIVE_COUNT   5U      /* 每帧至少识别到 5 路黑线才参与终点确认。 */
+#define LAP_STOP_MIN_ACTIVE_COUNT   4U      /* 每帧至少识别到 4 路黑线才参与终点确认。 */
 #define LAP_STOP_CONFIRM_SAMPLES     2U     /* 连续满足黑线数量门槛的有效采样数。 */
 
 static uint8_t LapStopDetector_CountActiveSensors(uint8_t sensor_mask)

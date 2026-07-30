@@ -14,7 +14,7 @@ extern "C" {
 #define MOTOR_LEFT_DIR_PIN   GPIO_PIN_3    /* 左电机方向控制引脚 PA3。 */
 #define MOTOR_LEFT_CHANNEL   TIM_CHANNEL_3 /* 左电机 PWM 使用 TIM2 通道 3。 */
 
-/* SG90 舵机 PWM：TIM4_CH4，PD15，输出频率 50 Hz。 */
+/* 270°位置舵机 PWM：TIM4_CH4，PD15，输出频率 50 Hz。 */
 #define SERVO_PWM_INSTANCE TIM4          /* 舵机 PWM 使用的定时器实例。 */
 #define SERVO_PWM_PORT     GPIOD         /* 舵机 PWM 输出 GPIO 端口。 */
 #define SERVO_PWM_PIN      GPIO_PIN_15   /* 舵机 PWM 输出引脚 PD15。 */

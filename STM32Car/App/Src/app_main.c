@@ -43,6 +43,7 @@ volatile uint8_t g_app_lap_completed;
 volatile uint8_t g_app_ball_balance_enabled;
 volatile uint8_t g_app_ball_enable_pending;
 volatile uint8_t g_app_ball_imu_fault;
+volatile uint8_t g_app_ball_mapping_fault;
 volatile uint8_t g_app_ball_sample_valid;
 volatile int32_t g_app_ball_position_d10_mm;
 volatile uint8_t g_app_ball_quality;
@@ -64,6 +65,10 @@ volatile float g_app_ball_measured_pipe_rate_dps;
 volatile float g_app_ball_pipe_error_deg;
 volatile float g_app_ball_pipe_p_term_deg;
 volatile float g_app_ball_pipe_d_term_deg;
+volatile float g_app_ball_model_scale;
+volatile float g_app_ball_model_offset_deg;
+volatile float g_app_ball_feedforward_model_pitch_deg;
+volatile float g_app_ball_desired_model_pitch_deg;
 volatile float g_app_ball_servo_feedforward_deg;
 volatile float g_app_ball_desired_angle_deg;
 volatile float g_app_ball_command_angle_deg;
@@ -72,9 +77,13 @@ volatile uint8_t g_app_pipe_calibration_active;
 volatile uint8_t g_app_pipe_calibration_valid;
 volatile uint8_t g_app_pipe_attitude_valid;
 volatile uint8_t g_app_pipe_accel_trusted;
+volatile int8_t g_app_pipe_imu_pitch_sign;
 volatile uint16_t g_app_pipe_calibration_sample_count;
 volatile float g_app_pipe_gyro_x_bias_dps;
 volatile float g_app_pipe_accel_zero_deg;
+volatile float g_app_pipe_raw_accel_pitch_deg;
+volatile float g_app_pipe_raw_pitch_deg;
+volatile float g_app_pipe_raw_pitch_rate_dps;
 volatile float g_app_pipe_accel_pitch_deg;
 volatile float g_app_pipe_pitch_deg;
 volatile float g_app_pipe_pitch_rate_dps;
@@ -82,7 +91,11 @@ volatile float g_app_pipe_negative_pitch_deg;
 volatile float g_app_pipe_center_pitch_deg;
 volatile float g_app_pipe_positive_pitch_deg;
 volatile float g_app_pipe_return_pitch_deg;
-volatile float g_app_pipe_servo_per_pipe_deg;
+volatile float g_app_pipe_model_scale;
+volatile float g_app_pipe_model_offset_deg;
+volatile float g_app_pipe_calibration_target_pitch_deg;
+volatile float g_app_pipe_servo_target_deg;
+volatile float g_app_pipe_servo_override_deg;
 volatile float g_app_chassis_accel_cm_s2;
 volatile uint32_t g_app_k230_overflow_count;
 volatile uint32_t g_app_k230_error_count;
@@ -136,6 +149,7 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_balance_enabled = s_ball_balance_output.enabled;
     g_app_ball_enable_pending = s_ball_balance_output.enable_pending;
     g_app_ball_imu_fault = s_ball_balance_output.imu_fault;
+    g_app_ball_mapping_fault = s_ball_balance_output.mapping_fault;
     g_app_ball_tracking_valid = s_ball_balance_output.tracking_valid;
     g_app_ball_timed_out = s_ball_balance_output.timed_out;
     g_app_ball_measurement_accepted =
@@ -159,6 +173,12 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_pipe_error_deg = s_ball_balance_output.pipe_pitch_error_deg;
     g_app_ball_pipe_p_term_deg = s_ball_balance_output.pipe_p_term_deg;
     g_app_ball_pipe_d_term_deg = s_ball_balance_output.pipe_d_term_deg;
+    g_app_ball_model_scale = s_ball_balance_output.model_scale;
+    g_app_ball_model_offset_deg = s_ball_balance_output.model_offset_deg;
+    g_app_ball_feedforward_model_pitch_deg =
+        s_ball_balance_output.feedforward_model_pitch_deg;
+    g_app_ball_desired_model_pitch_deg =
+        s_ball_balance_output.desired_model_pitch_deg;
     g_app_ball_servo_feedforward_deg =
         s_ball_balance_output.servo_feedforward_deg;
     g_app_ball_desired_angle_deg = s_ball_balance_output.desired_angle_deg;
@@ -175,11 +195,17 @@ static void App_UpdatePipeAttitudeDebug(void)
         s_pipe_attitude_output.calibration_valid;
     g_app_pipe_attitude_valid = s_pipe_attitude_output.attitude_valid;
     g_app_pipe_accel_trusted = s_pipe_attitude_output.accel_trusted;
+    g_app_pipe_imu_pitch_sign = s_pipe_attitude_output.imu_pitch_sign;
     g_app_pipe_calibration_sample_count =
         s_pipe_attitude_output.calibration_sample_count;
     g_app_pipe_gyro_x_bias_dps = s_pipe_attitude_output.gyro_x_bias_dps;
     g_app_pipe_accel_zero_deg =
         s_pipe_attitude_output.accel_pitch_zero_deg;
+    g_app_pipe_raw_accel_pitch_deg =
+        s_pipe_attitude_output.raw_accel_pitch_deg;
+    g_app_pipe_raw_pitch_deg = s_pipe_attitude_output.raw_pitch_deg;
+    g_app_pipe_raw_pitch_rate_dps =
+        s_pipe_attitude_output.raw_pitch_rate_dps;
     g_app_pipe_accel_pitch_deg = s_pipe_attitude_output.accel_pitch_deg;
     g_app_pipe_pitch_deg = s_pipe_attitude_output.pitch_deg;
     g_app_pipe_pitch_rate_dps = s_pipe_attitude_output.pitch_rate_dps;
@@ -189,8 +215,13 @@ static void App_UpdatePipeAttitudeDebug(void)
     g_app_pipe_positive_pitch_deg =
         s_pipe_attitude_output.positive_pitch_deg;
     g_app_pipe_return_pitch_deg = s_pipe_attitude_output.return_pitch_deg;
-    g_app_pipe_servo_per_pipe_deg =
-        s_pipe_attitude_output.servo_deg_per_pipe_deg;
+    g_app_pipe_model_scale = s_pipe_attitude_output.model_scale;
+    g_app_pipe_model_offset_deg = s_pipe_attitude_output.model_offset_deg;
+    g_app_pipe_calibration_target_pitch_deg =
+        s_pipe_attitude_output.calibration_target_pitch_deg;
+    g_app_pipe_servo_target_deg = s_pipe_attitude_output.servo_target_deg;
+    g_app_pipe_servo_override_deg =
+        s_pipe_attitude_output.servo_override_deg;
     g_app_chassis_accel_cm_s2 = s_chassis_accel_cm_s2;
 }
 
@@ -207,12 +238,12 @@ static void App_SendPendingTjcStatus(void)
     }
 
     s_tjc_status_pending = 0U;
-    Protocol_Tjc_SendStatusText(s_pending_tjc_status, 0);
+    Protocol_Tjc_SendStatusText(s_pending_tjc_status);
 }
 
-static int16_t App_PipeRatioToX100(float ratio)
+static int16_t App_ValueToX100(float value)
 {
-    float scaled = ratio * 100.0f;
+    float scaled = value * 100.0f;
 
     if (scaled > 32767.0f) {
         return 32767;
@@ -228,42 +259,41 @@ static void App_SendPipeCalibrationEvent(PipeCalibrationEvent event)
 {
     switch (event) {
         case PIPE_CALIBRATION_EVENT_READY:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_READY, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_READY);
             break;
         case PIPE_CALIBRATION_EVENT_LEVEL:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_LEVEL, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_LEVEL);
             break;
         case PIPE_CALIBRATION_EVENT_NEGATIVE:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_NEGATIVE, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_NEGATIVE);
             break;
         case PIPE_CALIBRATION_EVENT_CENTER:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_CENTER, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_CENTER);
             break;
         case PIPE_CALIBRATION_EVENT_POSITIVE:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_POSITIVE, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_POSITIVE);
             break;
         case PIPE_CALIBRATION_EVENT_RETURN:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_RETURN, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_RETURN);
             break;
         case PIPE_CALIBRATION_EVENT_SUCCESS:
-            Protocol_Tjc_SendStatusText(
-                TJC_STATUS_CALIBRATION_SUCCESS,
-                App_PipeRatioToX100(
-                    s_pipe_attitude_output.servo_deg_per_pipe_deg));
+            Protocol_Tjc_SendCalibrationSuccess(
+                App_ValueToX100(s_pipe_attitude_output.model_scale),
+                App_ValueToX100(s_pipe_attitude_output.model_offset_deg));
             break;
         case PIPE_CALIBRATION_EVENT_FAILED_IMU:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_FAILED_IMU, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_FAILED_IMU);
             break;
         case PIPE_CALIBRATION_EVENT_FAILED_MOTION:
             Protocol_Tjc_SendStatusText(
-                TJC_STATUS_CALIBRATION_FAILED_MOTION, 0);
+                TJC_STATUS_CALIBRATION_FAILED_MOTION);
             break;
         case PIPE_CALIBRATION_EVENT_FAILED_RANGE:
             Protocol_Tjc_SendStatusText(
-                TJC_STATUS_CALIBRATION_FAILED_RANGE, 0);
+                TJC_STATUS_CALIBRATION_FAILED_RANGE);
             break;
         case PIPE_CALIBRATION_EVENT_ABORTED:
-            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_ABORTED, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_CALIBRATION_ABORTED);
             break;
         default:
             break;
@@ -299,7 +329,8 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
     BallBalanceControl_SetPipeCalibration(
         &s_ball_balance_control,
         s_pipe_attitude_output.calibration_valid,
-        s_pipe_attitude_output.servo_deg_per_pipe_deg);
+        s_pipe_attitude_output.model_scale,
+        s_pipe_attitude_output.model_offset_deg);
     if (s_pipe_attitude_output.status_changed != 0U) {
         App_SendPipeCalibrationEvent(
             s_pipe_attitude_output.calibration_event);
@@ -370,10 +401,9 @@ static void App_BallBalanceTask(uint32_t now_ms)
             Protocol_Tjc_SendStatusText(
                 (s_last_ball_imu_fault != 0U) ?
                 TJC_STATUS_BALANCE_RECOVERED :
-                TJC_STATUS_BALANCE_ENABLED,
-                0);
+                TJC_STATUS_BALANCE_ENABLED);
         } else if (s_ball_balance_output.imu_fault != 0U) {
-            Protocol_Tjc_SendStatusText(TJC_STATUS_BALANCE_IMU_FAULT, 0);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_BALANCE_IMU_FAULT);
         }
     }
     s_last_ball_active = s_ball_balance_output.enabled;
@@ -714,8 +744,8 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
     } else {
         if (PipeAttitudeControl_IsCalibrationActive(
                 &s_pipe_attitude_control) != 0U) {
-            PipeAttitudeControl_AbortCalibration(&s_pipe_attitude_control);
-            ServoDriver_SetAngle(BallBalanceControl_GetNeutralAngleDeg());
+            PipeAttitudeControl_AbortCalibration(&s_pipe_attitude_control,
+                                                  now_ms);
         }
         BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U, now_ms);
         App_QueueTjcStatus(TJC_STATUS_BALANCE_DISABLED);
@@ -740,7 +770,8 @@ uint8_t App_StartPipeCalibration(void)
                                  Board_TimeMs());
     return PipeAttitudeControl_StartCalibration(
         &s_pipe_attitude_control,
-        Board_TimeMs());
+        Board_TimeMs(),
+        ServoDriver_GetAngle());
 }
 
 uint8_t App_GetPipeCalibrationActive(void)

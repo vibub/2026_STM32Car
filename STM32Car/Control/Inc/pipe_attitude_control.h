@@ -15,6 +15,8 @@ typedef enum {
     PIPE_CALIBRATION_SAMPLE_POSITIVE,
     PIPE_CALIBRATION_SETTLE_RETURN,
     PIPE_CALIBRATION_SAMPLE_RETURN,
+    PIPE_CALIBRATION_RETURN_ABORTED,
+    PIPE_CALIBRATION_RETURN_FAILED,
     PIPE_CALIBRATION_SUCCESS,
     PIPE_CALIBRATION_FAILED
 } PipeCalibrationState;
@@ -54,15 +56,21 @@ typedef struct {
     uint8_t filter_ready;
     uint8_t accel_trusted;
     uint8_t sample_ready;
+    uint8_t settle_ready;
+    uint8_t task_time_ready;
+    int8_t imu_pitch_sign;
     uint16_t sample_count;
     uint16_t rejected_sample_count;
     uint32_t state_started_ms;
+    uint32_t settle_started_ms;
     uint32_t last_sample_ms;
+    uint32_t last_task_ms;
     float sample_sum;
     float gyro_bias_sum;
     float accel_pitch_sum;
     float gyro_x_bias_dps;
     float accel_pitch_zero_deg;
+    float raw_accel_pitch_deg;
     float accel_pitch_deg;
     float pitch_deg;
     float pitch_rate_dps;
@@ -70,7 +78,11 @@ typedef struct {
     float center_pitch_deg;
     float positive_pitch_deg;
     float return_pitch_deg;
-    float servo_deg_per_pipe_deg;
+    float model_scale;
+    float model_offset_deg;
+    float calibration_target_pitch_deg;
+    float servo_target_deg;
+    float servo_override_deg;
 } PipeAttitudeControl;
 
 typedef struct {
@@ -81,12 +93,18 @@ typedef struct {
     uint8_t calibration_valid;
     uint8_t servo_override_active;
     uint8_t status_changed;
+    int8_t imu_pitch_sign;
     PipeCalibrationState calibration_state;
     PipeCalibrationEvent calibration_event;
     uint16_t calibration_sample_count;
     float servo_override_deg;
+    float servo_target_deg;
+    float calibration_target_pitch_deg;
     float gyro_x_bias_dps;
     float accel_pitch_zero_deg;
+    float raw_accel_pitch_deg;
+    float raw_pitch_deg;
+    float raw_pitch_rate_dps;
     float accel_pitch_deg;
     float pitch_deg;
     float pitch_rate_dps;
@@ -94,13 +112,16 @@ typedef struct {
     float center_pitch_deg;
     float positive_pitch_deg;
     float return_pitch_deg;
-    float servo_deg_per_pipe_deg;
+    float model_scale;
+    float model_offset_deg;
 } PipeAttitudeOutput;
 
 void PipeAttitudeControl_Init(PipeAttitudeControl *control);
 uint8_t PipeAttitudeControl_StartCalibration(PipeAttitudeControl *control,
-                                             uint32_t now_ms);
-void PipeAttitudeControl_AbortCalibration(PipeAttitudeControl *control);
+                                             uint32_t now_ms,
+                                             float current_servo_angle_deg);
+void PipeAttitudeControl_AbortCalibration(PipeAttitudeControl *control,
+                                          uint32_t now_ms);
 uint8_t PipeAttitudeControl_IsCalibrationActive(
     const PipeAttitudeControl *control);
 uint8_t PipeAttitudeControl_IsCalibrationValid(

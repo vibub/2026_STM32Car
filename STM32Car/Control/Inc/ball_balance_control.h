@@ -26,9 +26,12 @@ typedef struct {
     uint8_t sequence_ready;
     uint8_t task_time_ready;
     uint8_t mapping_valid;
+    uint8_t mapping_fault;
     uint8_t attitude_ready;
     uint8_t attitude_stable_ready;
     uint8_t imu_fault;
+    uint8_t feedforward_cache_valid;
+    uint8_t desired_cache_valid;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
     uint32_t last_valid_ms;
@@ -51,7 +54,10 @@ typedef struct {
     float pipe_pitch_error_deg;
     float pipe_p_term_deg;
     float pipe_d_term_deg;
-    float servo_deg_per_pipe_deg;
+    float model_scale;
+    float model_offset_deg;
+    float feedforward_model_pitch_deg;
+    float desired_model_pitch_deg;
     float servo_feedforward_deg;
     float desired_angle_deg;
     float command_angle_deg;
@@ -67,6 +73,7 @@ typedef struct {
     uint8_t attitude_valid;
     uint8_t imu_fault;
     uint8_t mapping_valid;
+    uint8_t mapping_fault;
     float target_mm;
     float filtered_position_mm;
     float velocity_mm_s;
@@ -81,7 +88,10 @@ typedef struct {
     float pipe_pitch_error_deg;
     float pipe_p_term_deg;
     float pipe_d_term_deg;
-    float servo_deg_per_pipe_deg;
+    float model_scale;
+    float model_offset_deg;
+    float feedforward_model_pitch_deg;
+    float desired_model_pitch_deg;
     float servo_feedforward_deg;
     float desired_angle_deg;
     float command_angle_deg;
@@ -97,7 +107,8 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
 void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
                                            uint8_t valid,
-                                           float servo_deg_per_pipe_deg);
+                                           float model_scale,
+                                           float model_offset_deg);
 float BallBalanceControl_GetNeutralAngleDeg(void);
 void BallBalanceControl_Update(BallBalanceControl *control,
                                uint32_t now_ms,
