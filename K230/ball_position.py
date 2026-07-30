@@ -1,9 +1,4 @@
-"""K230 红色位置标记与钢珠（临时圆环）位置识别。
-
-画面约定为 640x360，导轨沿 x 轴放置；每个已知位置在导轨上下各画一条红线。
-算法至少找到 -5/0/+5 cm 三组红线后，才会在导轨中寻找目标并输出毫米位置。
-本文件不导入 K230 硬件模块，几何和评分逻辑可直接在 PC 上做单元测试。
-"""
+"""K230 red marker calibration and ball-position geometry."""
 
 IMAGE_WIDTH = 640
 IMAGE_HEIGHT = 360
@@ -12,21 +7,30 @@ IMAGE_HEIGHT = 360
 # LAB 顺序为 (L_min, L_max, A_min, A_max, B_min, B_max)。
 SCALE_THRESHOLDS = (
     (18, 100, 18, 127, 5, 127),
+    (24, 100, 8, 127, -10, 127),
 )
-SCALE_SEARCH_ROI = (8, 8, 624, 344)
+SCALE_SEARCH_ROI = (0, 135, 640, 135)
 MARKER_INTERVAL_MM = 50.0
-MARKER_MIN_COLUMNS = 2
-MARKER_MAX_COLUMNS = 5
-MARKER_ZERO_HINT_X = IMAGE_WIDTH * 0.5
-MARKER_MIN_WIDTH = 2
+MARKER_TARGET_COLUMNS = 4
+MARKER_MIN_COLUMNS = MARKER_TARGET_COLUMNS
+MARKER_MIN_VISIBLE_COLUMNS = 3
+MARKER_MAX_COLUMNS = MARKER_TARGET_COLUMNS
+MARKER_ZERO_HINT_X = IMAGE_WIDTH * 0.62
+MARKER_ROW_HINT_Y = 188
+MARKER_ROW_HINT_HALF_HEIGHT = 54
+MARKER_ZERO_SEARCH_HALF_WIDTH = 90
+MARKER_EXPECTED_SPACING_PX = 150
+MARKER_OPEN_LOOP_STEPS = (-2, -1, 0, 1)
+MARKER_SPACING_SEARCH_HALF_WIDTH = 88
+MARKER_MIN_WIDTH = 1
 MARKER_MAX_WIDTH = 36
-MARKER_MIN_HEIGHT = 3
+MARKER_MIN_HEIGHT = 2
 MARKER_MAX_HEIGHT = 52
-MARKER_MAX_WIDTH_HEIGHT_RATIO = 2.8
+MARKER_MAX_WIDTH_HEIGHT_RATIO = 2.4
 MARKER_MIN_ROW_GAP_PX = 24
 MARKER_MAX_ROW_GAP_PX = 180
 MARKER_MAX_PAIR_X_ERROR_PX = 18
-MARKER_MAX_ROW_Y_SPREAD_PX = 32
+MARKER_MAX_ROW_Y_SPREAD_PX = 38
 MARKER_MIN_SPACING_PX = 45
 MARKER_MAX_SPACING_ERROR_RATIO = 0.32
 SCALE_MIN_SPAN_RATIO = 0.52
@@ -39,8 +43,8 @@ SCALE_ROW_CLUSTER_HALF_HEIGHT = 22
 SCALE_MIN_FRAGMENT_WIDTH = 2
 SCALE_MAX_FRAGMENT_HEIGHT_RATIO = 0.20
 SCALE_MIN_HORIZONTAL_COVERAGE = 0.08
-SCALE_MIN_BLOB_PIXELS = 12
-SCALE_MIN_BLOB_AREA = 20
+SCALE_MIN_BLOB_PIXELS = 3
+SCALE_MIN_BLOB_AREA = 4
 SCALE_MERGE_MARGIN = 4
 SCALE_REFRESH_FRAMES = 10
 SCALE_HOLD_FRAMES = 30
@@ -194,43 +198,28 @@ class DualScaleCalibration:
         return left, top, right - left, bottom - top
 
 
-class MarkerColumn:
-    """同一物理刻度在导轨上下边缘形成的一对红色短线。"""
+class SingleRowMarker:
+    __slots__ = ("rect", "center_x", "center_y", "pixels")
 
-    __slots__ = (
-        "upper_rect",
-        "lower_rect",
-        "upper_x",
-        "lower_x",
-        "upper_y",
-        "lower_y",
-        "pair_error_x",
-    )
+    def __init__(self, blob, rect, pixels=None):
+        self.rect = tuple(int(value) for value in rect)
+        self.center_x = self.rect[0] + self.rect[2] * 0.5
+        self.center_y = self.rect[1] + self.rect[3] * 0.5
+        self.pixels = _blob_pixels(blob) if pixels is None else int(pixels)
 
-    def __init__(self, upper_rect, lower_rect):
-        self.upper_rect = tuple(int(value) for value in upper_rect)
-        self.lower_rect = tuple(int(value) for value in lower_rect)
-        self.upper_x = self.upper_rect[0] + self.upper_rect[2] * 0.5
-        self.lower_x = self.lower_rect[0] + self.lower_rect[2] * 0.5
-        self.upper_y = self.upper_rect[1] + self.upper_rect[3] * 0.5
-        self.lower_y = self.lower_rect[1] + self.lower_rect[3] * 0.5
-        self.pair_error_x = abs(self.upper_x - self.lower_x)
-
-    @property
-    def center_x(self):
-        return (self.upper_x + self.lower_x) * 0.5
-
-    def x_at_y(self, pixel_y):
-        fraction = (
-            (float(pixel_y) - self.upper_y)
-            / max(1.0, self.lower_y - self.upper_y)
+    @classmethod
+    def projected(cls, center_x, center_y, width=4, height=12):
+        rect = (
+            int(round(center_x - width * 0.5)),
+            int(round(center_y - height * 0.5)),
+            int(width),
+            int(height),
         )
-        fraction = _clip(fraction, 0.0, 1.0)
-        return self.upper_x + fraction * (self.lower_x - self.upper_x)
+        return cls(None, rect, pixels=0)
 
 
 class MarkerScaleCalibration:
-    """用 -10/-5/0/5/10 cm 红色标记建立分段位置映射。"""
+    """Single-row red marker calibration for a fixed camera/pipe setup."""
 
     __slots__ = (
         "marker_columns",
@@ -238,6 +227,7 @@ class MarkerScaleCalibration:
         "zero_index",
         "quality",
         "marker_count",
+        "row_y",
     )
 
     def __init__(self, marker_columns, marker_values_mm, zero_index, quality):
@@ -247,81 +237,62 @@ class MarkerScaleCalibration:
             raise ValueError("marker values must match marker columns")
         self.marker_columns = sorted(marker_columns, key=lambda column: column.center_x)
         self.marker_values_mm = [float(value) for value in marker_values_mm]
+        direction = 1.0 if self.marker_values_mm[-1] > self.marker_values_mm[0] else -1.0
         for index in range(len(self.marker_values_mm) - 1):
-            if self.marker_values_mm[index + 1] <= self.marker_values_mm[index]:
-                raise ValueError("marker values must increase")
+            if (self.marker_values_mm[index + 1] - self.marker_values_mm[index]) * direction <= 0.0:
+                raise ValueError("marker values must be monotonic")
         self.zero_index = int(zero_index)
         self.quality = int(_clip(round(quality), 0, 100))
         self.marker_count = len(self.marker_columns)
+        self.row_y = sum(column.center_y for column in self.marker_columns) / self.marker_count
 
-    def _pixel_positions(self, pixel_y):
-        return [column.x_at_y(pixel_y) for column in self.marker_columns]
+    def _pixel_positions(self, _pixel_y=None):
+        return [column.center_x for column in self.marker_columns]
 
     def pixel_to_mm(self, pixel_x, pixel_y=None):
-        if pixel_y is None:
-            pixel_y = self._rail_center_y()
-        pixels = self._pixel_positions(pixel_y)
+        del pixel_y
+        pixels = self._pixel_positions()
         index = 0
         while index + 2 < len(pixels) and float(pixel_x) > pixels[index + 1]:
             index += 1
         left_mm = self.marker_values_mm[index]
-        interval_mm = (
-            self.marker_values_mm[index + 1]
-            - self.marker_values_mm[index]
-        )
-        fraction = (float(pixel_x) - pixels[index]) / (
-            pixels[index + 1] - pixels[index]
-        )
+        interval_mm = self.marker_values_mm[index + 1] - self.marker_values_mm[index]
+        fraction = (float(pixel_x) - pixels[index]) / (pixels[index + 1] - pixels[index])
         return left_mm + fraction * interval_mm
 
     def pixels_per_mm(self, pixel_y=None):
-        if pixel_y is None:
-            pixel_y = self._rail_center_y()
-        pixels = self._pixel_positions(pixel_y)
+        del pixel_y
+        pixels = self._pixel_positions()
         scales = []
         for index in range(len(pixels) - 1):
             interval_mm = self.marker_values_mm[index + 1] - self.marker_values_mm[index]
             scales.append((pixels[index + 1] - pixels[index]) / interval_mm)
         return _median(scales)
 
-    def _pixel_at_mm(self, value_mm, pixel_y):
+    def _pixel_at_mm(self, value_mm, pixel_y=None):
+        del pixel_y
         index = 0
         while (
             index + 2 < len(self.marker_values_mm)
             and float(value_mm) > self.marker_values_mm[index + 1]
         ):
             index += 1
-        pixels = self._pixel_positions(pixel_y)
+        pixels = self._pixel_positions()
         fraction = (
             (float(value_mm) - self.marker_values_mm[index])
             / (self.marker_values_mm[index + 1] - self.marker_values_mm[index])
         )
         return pixels[index] + fraction * (pixels[index + 1] - pixels[index])
 
-    def _rail_center_y(self):
-        upper_y = sum(column.upper_y for column in self.marker_columns) / self.marker_count
-        lower_y = sum(column.lower_y for column in self.marker_columns) / self.marker_count
-        return (upper_y + lower_y) * 0.5
-
     def target_roi(self, image_width=IMAGE_WIDTH, image_height=IMAGE_HEIGHT):
-        upper_y = sum(column.upper_y for column in self.marker_columns) / self.marker_count
-        lower_y = sum(column.lower_y for column in self.marker_columns) / self.marker_count
-        top = int(_clip(round(upper_y + TARGET_ROI_INSET_PX), 0, image_height - 1))
-        bottom = int(_clip(round(lower_y - TARGET_ROI_INSET_PX), top + 1, image_height))
-
-        center_y = (upper_y + lower_y) * 0.5
-        spacing = self.pixels_per_mm(center_y) * MARKER_INTERVAL_MM
-        zero_x = self._pixel_at_mm(0.0, center_y)
+        spacing = self.pixels_per_mm() * MARKER_INTERVAL_MM
+        zero_x = self._pixel_at_mm(0.0)
         left = int(_clip(round(zero_x - 2.25 * spacing), 0, image_width - 1))
         right = int(_clip(round(zero_x + 2.25 * spacing), left + 1, image_width))
-        return left, top, right - left, bottom - top
+        return left, 0, right - left, image_height
 
     def marker_rects(self):
-        rects = []
-        for column in self.marker_columns:
-            rects.append(column.upper_rect)
-            rects.append(column.lower_rect)
-        return rects
+        return [column.rect for column in self.marker_columns]
 
 
 def _median(values):
@@ -351,59 +322,258 @@ def _red_marker_candidates(blobs):
     return candidates
 
 
-def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE_HEIGHT):
-    """把上下对齐的红色 blob 配成刻度列，中央一列自动定义为 0。"""
-    del image_height
-    candidates = _red_marker_candidates(blobs)
-    pair_candidates = []
-    for first_index in range(len(candidates)):
-        first_rect = candidates[first_index][1]
-        first_x = first_rect[0] + first_rect[2] * 0.5
-        first_y = first_rect[1] + first_rect[3] * 0.5
-        for second_index in range(first_index + 1, len(candidates)):
-            second_rect = candidates[second_index][1]
-            second_x = second_rect[0] + second_rect[2] * 0.5
-            second_y = second_rect[1] + second_rect[3] * 0.5
-            if first_y > second_y:
-                upper_rect, lower_rect = second_rect, first_rect
-                row_gap = first_y - second_y
-            else:
-                upper_rect, lower_rect = first_rect, second_rect
-                row_gap = second_y - first_y
-            x_error = abs(first_x - second_x)
-            if not (MARKER_MIN_ROW_GAP_PX <= row_gap <= MARKER_MAX_ROW_GAP_PX):
-                continue
-            if x_error > MARKER_MAX_PAIR_X_ERROR_PX:
-                continue
-            pair_candidates.append((x_error, abs(row_gap - 70.0), first_index, second_index, upper_rect, lower_rect))
+def _single_row_columns(candidates, anchor_y):
+    row_candidates = [
+        candidate
+        for candidate in candidates
+        if abs(candidate.center_y - anchor_y) <= MARKER_MAX_ROW_Y_SPREAD_PX
+    ]
+    if len(row_candidates) < MARKER_MIN_VISIBLE_COLUMNS:
+        return []
 
-    used = set()
-    columns = []
-    for pair in sorted(pair_candidates, key=lambda item: (item[0], item[1])):
-        first_index, second_index = pair[2], pair[3]
-        if first_index in used or second_index in used:
-            continue
-        used.add(first_index)
-        used.add(second_index)
-        columns.append(MarkerColumn(pair[4], pair[5]))
-
-    columns.sort(key=lambda column: column.center_x)
+    row_candidates.sort(key=lambda candidate: (candidate.center_x, -candidate.pixels))
     deduplicated = []
-    for column in columns:
-        if deduplicated and column.center_x - deduplicated[-1].center_x < MARKER_MIN_SPACING_PX:
-            if column.pair_error_x < deduplicated[-1].pair_error_x:
-                deduplicated[-1] = column
+    for candidate in row_candidates:
+        if deduplicated and candidate.center_x - deduplicated[-1].center_x < MARKER_MIN_SPACING_PX:
+            if candidate.pixels > deduplicated[-1].pixels:
+                deduplicated[-1] = candidate
         else:
-            deduplicated.append(column)
-    columns = deduplicated[:MARKER_MAX_COLUMNS]
-    if len(columns) < MARKER_MIN_COLUMNS:
+            deduplicated.append(candidate)
+    return deduplicated
+
+
+def _pick_nearest_marker(candidates, expected_x, used):
+    best = None
+    best_error = None
+    for candidate in candidates:
+        if candidate in used:
+            continue
+        error = abs(candidate.center_x - expected_x)
+        if error > MARKER_SPACING_SEARCH_HALF_WIDTH:
+            continue
+        if best_error is None or error < best_error:
+            best = candidate
+            best_error = error
+    return best
+
+
+def _candidate_grid_from_zero(row_candidates, zero_marker):
+    picked = []
+    used = set()
+    spacing_errors = []
+    for step in MARKER_OPEN_LOOP_STEPS:
+        expected_x = zero_marker.center_x + step * MARKER_EXPECTED_SPACING_PX
+        if step == 0:
+            marker = zero_marker
+        else:
+            marker = _pick_nearest_marker(row_candidates, expected_x, used)
+        if marker is None:
+            continue
+        picked.append(marker)
+        used.add(marker)
+        spacing_errors.append(abs(marker.center_x - expected_x))
+
+    if len(picked) != MARKER_TARGET_COLUMNS:
+        return [], 0.0
+
+    picked.sort(key=lambda candidate: candidate.center_x)
+    average_spacing_error = sum(spacing_errors) / float(len(spacing_errors))
+    line_error = _line_fit_error(picked)
+    span = picked[-1].center_x - picked[0].center_x
+    support = sum(candidate.pixels for candidate in picked)
+    score = (
+        100.0 * len(picked)
+        + 0.08 * span
+        + 0.30 * support
+        - 2.4 * average_spacing_error
+        - 5.0 * line_error
+        - 0.10 * abs(zero_marker.center_x - MARKER_ZERO_HINT_X)
+    )
+    return picked, score
+
+
+def _line_fit_error(columns):
+    count = float(len(columns))
+    mean_x = sum(column.center_x for column in columns) / count
+    mean_y = sum(column.center_y for column in columns) / count
+    variance_x = sum((column.center_x - mean_x) ** 2 for column in columns)
+    if variance_x <= 0.0:
+        return 0.0
+    slope = sum(
+        (column.center_x - mean_x) * (column.center_y - mean_y)
+        for column in columns
+    ) / variance_x
+    intercept = mean_y - slope * mean_x
+    return max(
+        abs(column.center_y - (slope * column.center_x + intercept))
+        for column in columns
+    )
+
+
+def _score_four_marker_columns(columns, image_width):
+    if len(columns) != MARKER_TARGET_COLUMNS:
+        return None
+    columns = sorted(columns, key=lambda candidate: candidate.center_x)
+    spacings = [columns[index + 1].center_x - columns[index].center_x for index in range(len(columns) - 1)]
+    median_spacing = _median(spacings)
+    if median_spacing < MARKER_MIN_SPACING_PX:
+        return None
+    spacing_error = max(abs(spacing - median_spacing) for spacing in spacings)
+    if spacing_error / median_spacing > MARKER_MAX_SPACING_ERROR_RATIO:
         return None
 
-    upper_ys = [column.upper_y for column in columns]
-    lower_ys = [column.lower_y for column in columns]
-    if max(upper_ys) - min(upper_ys) > MARKER_MAX_ROW_Y_SPREAD_PX:
+    line_error = _line_fit_error(columns)
+    if line_error > 8.0:
         return None
-    if max(lower_ys) - min(lower_ys) > MARKER_MAX_ROW_Y_SPREAD_PX:
+
+    zero_index = min(
+        range(len(columns)),
+        key=lambda index: abs(columns[index].center_x - MARKER_ZERO_HINT_X),
+    )
+    if zero_index <= 0 or zero_index >= len(columns) - 1:
+        return None
+
+    center_error = abs(columns[zero_index].center_x - MARKER_ZERO_HINT_X)
+    support = sum(candidate.pixels for candidate in columns)
+    span = columns[-1].center_x - columns[0].center_x
+    return (
+        180.0
+        - 1.8 * spacing_error
+        - 5.0 * line_error
+        - 0.10 * center_error
+        + 0.18 * support
+        + 20.0 * _clip(span / max(1.0, image_width * 0.70), 0.0, 1.0)
+    )
+
+
+def _best_four_marker_columns(candidates, image_width):
+    best = []
+    best_score = None
+    for first in range(len(candidates) - 3):
+        for second in range(first + 1, len(candidates) - 2):
+            for third in range(second + 1, len(candidates) - 1):
+                for fourth in range(third + 1, len(candidates)):
+                    columns = [
+                        candidates[first],
+                        candidates[second],
+                        candidates[third],
+                        candidates[fourth],
+                    ]
+                    score = _score_four_marker_columns(columns, image_width)
+                    if score is None:
+                        continue
+                    if best_score is None or score > best_score:
+                        best = columns
+                        best_score = score
+    return best
+
+def _line_fit_params(columns):
+    count = float(len(columns))
+    mean_x = sum(column.center_x for column in columns) / count
+    mean_y = sum(column.center_y for column in columns) / count
+    variance_x = sum((column.center_x - mean_x) ** 2 for column in columns)
+    if variance_x <= 0.0:
+        return 0.0, mean_y
+    slope = sum(
+        (column.center_x - mean_x) * (column.center_y - mean_y)
+        for column in columns
+    ) / variance_x
+    return slope, mean_y - slope * mean_x
+
+
+def _project_four_from_three(columns, visible_steps, image_width):
+    columns = sorted(columns, key=lambda candidate: candidate.center_x)
+    visible_steps = list(visible_steps)
+    spacings = []
+    for first in range(len(columns) - 1):
+        for second in range(first + 1, len(columns)):
+            step_gap = visible_steps[second] - visible_steps[first]
+            if step_gap <= 0:
+                continue
+            spacings.append((columns[second].center_x - columns[first].center_x) / float(step_gap))
+    spacing = _median(spacings)
+    if spacing < MARKER_MIN_SPACING_PX:
+        return []
+    if abs(spacing - MARKER_EXPECTED_SPACING_PX) > MARKER_SPACING_SEARCH_HALF_WIDTH:
+        return []
+
+    grid_x0 = sum(
+        columns[index].center_x - visible_steps[index] * spacing
+        for index in range(len(columns))
+    ) / float(len(columns))
+    slope, intercept = _line_fit_params(columns)
+    real_by_step = {visible_steps[index]: columns[index] for index in range(len(columns))}
+    projected = []
+    widths = [column.rect[2] for column in columns]
+    heights = [column.rect[3] for column in columns]
+    width = max(2, int(round(_median(widths))))
+    height = max(4, int(round(_median(heights))))
+    for step in range(MARKER_TARGET_COLUMNS):
+        marker = real_by_step.get(step)
+        if marker is None:
+            center_x = grid_x0 + step * spacing
+            if center_x < 0.0 or center_x >= float(image_width):
+                return []
+            marker = SingleRowMarker.projected(
+                center_x,
+                slope * center_x + intercept,
+                width,
+                height,
+            )
+        projected.append(marker)
+    return projected
+
+
+def _best_projected_four_marker_columns(candidates, image_width):
+    best = []
+    best_score = None
+    step_sets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+    for first in range(len(candidates) - 2):
+        for second in range(first + 1, len(candidates) - 1):
+            for third in range(second + 1, len(candidates)):
+                visible = [candidates[first], candidates[second], candidates[third]]
+                for visible_steps in step_sets:
+                    columns = _project_four_from_three(visible, visible_steps, image_width)
+                    if not columns:
+                        continue
+                    score = _score_four_marker_columns(columns, image_width)
+                    if score is None:
+                        continue
+                    score -= 18.0
+                    if best_score is None or score > best_score:
+                        best = columns
+                        best_score = score
+    return best
+
+def _fixed_single_row_columns(candidates):
+    row_candidates = [
+        candidate
+        for candidate in candidates
+        if abs(candidate.center_y - MARKER_ROW_HINT_Y) <= MARKER_ROW_HINT_HALF_HEIGHT
+    ]
+    if len(row_candidates) < MARKER_MIN_VISIBLE_COLUMNS:
+        return []
+
+    zero_candidates = [
+        candidate
+        for candidate in row_candidates
+        if abs(candidate.center_x - MARKER_ZERO_HINT_X) <= MARKER_ZERO_SEARCH_HALF_WIDTH
+    ]
+    if not zero_candidates:
+        return []
+
+    best_columns = []
+    best_score = None
+    for zero_marker in zero_candidates:
+        columns, score = _candidate_grid_from_zero(row_candidates, zero_marker)
+        if best_score is None or score > best_score:
+            best_columns = columns
+            best_score = score
+    return best_columns
+
+
+def _build_single_row_calibration(columns, image_width):
+    if len(columns) < MARKER_MIN_COLUMNS:
         return None
 
     spacings = [columns[index + 1].center_x - columns[index].center_x for index in range(len(columns) - 1)]
@@ -412,57 +582,43 @@ def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE
         return None
     maximum_spacing_error = max(abs(spacing - median_spacing) for spacing in spacings)
     spacing_error_ratio = maximum_spacing_error / median_spacing
-    if spacing_error_ratio > MARKER_MAX_SPACING_ERROR_RATIO:
+    if len(columns) >= 3 and spacing_error_ratio > MARKER_MAX_SPACING_ERROR_RATIO:
         return None
 
-    if len(columns) == 2:
-        midpoint_x = (columns[0].center_x + columns[1].center_x) * 0.5
-        nearest_zero_index = min(
-            range(2),
-            key=lambda index: abs(columns[index].center_x - MARKER_ZERO_HINT_X),
-        )
-        nearest_error = abs(columns[nearest_zero_index].center_x - MARKER_ZERO_HINT_X)
-        midpoint_error = abs(midpoint_x - MARKER_ZERO_HINT_X)
-        if midpoint_error < nearest_error:
-            # 0 标记被钢球遮挡：可见的两组按 -5/+5 cm 处理。
-            zero_index = -1
-            marker_values_mm = [-MARKER_INTERVAL_MM, MARKER_INTERVAL_MM]
-            estimated_zero_x = midpoint_x
-        elif nearest_zero_index == 0:
-            zero_index = 0
-            marker_values_mm = [0.0, MARKER_INTERVAL_MM]
-            estimated_zero_x = columns[0].center_x
-        else:
-            zero_index = 1
-            marker_values_mm = [-MARKER_INTERVAL_MM, 0.0]
-            estimated_zero_x = columns[1].center_x
-    else:
-        zero_index = min(
-            range(len(columns)),
-            key=lambda index: abs(columns[index].center_x - MARKER_ZERO_HINT_X),
-        )
-        if zero_index <= 0 or zero_index >= len(columns) - 1:
-            return None
-        marker_values_mm = [
-            (index - zero_index) * MARKER_INTERVAL_MM
-            for index in range(len(columns))
-        ]
-        estimated_zero_x = columns[zero_index].center_x
+    if len(columns) != MARKER_TARGET_COLUMNS:
+        return None
+    zero_index = 1
+    marker_values_mm = [
+        MARKER_INTERVAL_MM,
+        0.0,
+        -MARKER_INTERVAL_MM,
+        -2.0 * MARKER_INTERVAL_MM,
+    ]
+    estimated_zero_x = columns[zero_index].center_x
 
-    pair_error = sum(column.pair_error_x for column in columns) / len(columns)
-    count_score = _clip((len(columns) - 2) / 3.0, 0.0, 1.0)
+    count_score = _clip(float(len(columns)) / float(MARKER_TARGET_COLUMNS), 0.0, 1.0)
     spacing_score = 1.0 - _clip(spacing_error_ratio / MARKER_MAX_SPACING_ERROR_RATIO, 0.0, 1.0)
-    pair_score = 1.0 - _clip(pair_error / MARKER_MAX_PAIR_X_ERROR_PX, 0.0, 1.0)
     center_score = 1.0 - _clip(
         abs(estimated_zero_x - image_width * 0.5) / (image_width * 0.25),
         0.0,
         1.0,
     )
+    support_score = _clip(
+        sum(column.pixels for column in columns) / max(1.0, 24.0 * len(columns)),
+        0.0,
+        1.0,
+    )
+    span_score = _clip(
+        (columns[-1].center_x - columns[0].center_x) / max(1.0, image_width * 0.55),
+        0.0,
+        1.0,
+    )
     quality = 100.0 * (
-        0.30 * count_score
-        + 0.30 * spacing_score
-        + 0.25 * pair_score
-        + 0.15 * center_score
+        0.25 * count_score
+        + 0.25 * spacing_score
+        + 0.20 * center_score
+        + 0.15 * support_score
+        + 0.15 * span_score
     )
     if len(columns) == 2:
         quality = min(65.0, quality)
@@ -472,6 +628,58 @@ def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE
         zero_index,
         quality,
     )
+
+
+def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE_HEIGHT):
+    """Build calibration from fixed zero-first single-row marker blobs."""
+    del image_height
+    candidates = [
+        SingleRowMarker(blob, rect)
+        for blob, rect in _red_marker_candidates(blobs)
+    ]
+    if len(candidates) < MARKER_MIN_VISIBLE_COLUMNS:
+        return None
+
+    fixed_columns = _fixed_single_row_columns(candidates)
+    fixed_calibration = _build_single_row_calibration(fixed_columns, image_width)
+    if fixed_calibration is not None:
+        return fixed_calibration
+
+    hinted_row = _single_row_columns(candidates, MARKER_ROW_HINT_Y)
+    hinted_columns = _best_four_marker_columns(hinted_row, image_width)
+    hinted_calibration = _build_single_row_calibration(hinted_columns, image_width)
+    if hinted_calibration is not None:
+        return hinted_calibration
+    hinted_columns = _best_projected_four_marker_columns(hinted_row, image_width)
+    hinted_calibration = _build_single_row_calibration(hinted_columns, image_width)
+    if hinted_calibration is not None:
+        return hinted_calibration
+
+    best = None
+    best_score = None
+    tried_rows = []
+    for anchor in candidates:
+        if any(abs(anchor.center_y - row_y) <= MARKER_MAX_ROW_Y_SPREAD_PX for row_y in tried_rows):
+            continue
+        tried_rows.append(anchor.center_y)
+        row_columns = _single_row_columns(candidates, anchor.center_y)
+        columns = _best_four_marker_columns(row_columns, image_width)
+        calibration = _build_single_row_calibration(columns, image_width)
+        if calibration is None:
+            columns = _best_projected_four_marker_columns(row_columns, image_width)
+            calibration = _build_single_row_calibration(columns, image_width)
+        if calibration is None:
+            continue
+        row_span = columns[-1].center_x - columns[0].center_x
+        row_score = (
+            calibration.quality
+            + 10.0 * len(columns)
+            + 20.0 * _clip(row_span / max(1.0, image_width * 0.65), 0.0, 1.0)
+        )
+        if best_score is None or row_score > best_score:
+            best = calibration
+            best_score = row_score
+    return best
 
 
 def _interval_union_length(intervals):

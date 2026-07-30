@@ -1,4 +1,4 @@
-"""CanMV K230 红色位置标记 + 圆环/钢珠识别独立联调入口。"""
+"""CanMV K230 ball-position entry point."""
 
 import gc
 import os
@@ -54,9 +54,9 @@ STEEL_BALL_NMS_THRESHOLD = 0.45
 K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
 K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 200               # OSD 降至 5 Hz，减少 800×480 图层刷新开销。
-CALIBRATION_INTERVAL_MS = 250       # 红色刻度标定最多每秒刷新 4 次。
-CALIBRATION_HOLD_UPDATES = 12       # 连续标定失败约 3 秒后清除旧标定。
+OSD_INTERVAL_MS = 100               # OSD 降至 10 Hz，减少 800×480 图层刷新开销。
+CALIBRATION_INTERVAL_MS = 100       # 红色刻度标定最多每秒刷新 10 次。
+CALIBRATION_HOLD_UPDATES = 200       # 连续标定失败约 20 秒后清除旧标定。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 30             # 主循环周期性垃圾回收间隔。
 
@@ -91,6 +91,24 @@ def _target_thresholds():
         return STEEL_BALL_TARGET_THRESHOLDS
     raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
+
+def _video_streamer_needs_frame(video_streamer, now_ms):
+    if video_streamer is None:
+        return False
+    needs_frame = getattr(video_streamer, "needs_frame", None)
+    if needs_frame is not None:
+        return needs_frame(now_ms)
+
+    clients = getattr(video_streamer, "clients", None)
+    if not clients:
+        return False
+    last_frame_ms = getattr(video_streamer, "last_frame_ms", 0)
+    frame_interval_ms = getattr(
+        video_streamer,
+        "frame_interval_ms",
+        max(1, 1000 // VIDEO_AP_FPS),
+    )
+    return time.ticks_diff(now_ms, last_frame_ms) >= frame_interval_ms
 
 def _resolve_steel_ball_model_path():
     for path in STEEL_BALL_MODEL_PATHS:
@@ -151,13 +169,42 @@ def _draw_overlay(
     yellow = (255, 255, 0)
     cyan = (0, 255, 255)
     white = (255, 255, 255)
+    black = (0, 0, 0)
 
     calibration = detector.calibration
     if calibration is not None:
         if hasattr(calibration, "marker_columns"):
+            marker_centers = []
+            marker_rects = []
             for rect in calibration.marker_rects():
                 x, y, width, height = _scale_rect(rect)
                 osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+                marker_centers.append((x + width // 2, y + height // 2))
+                marker_rects.append((x, y, width, height))
+            marker_labels = ("+50", "0", "-50", "-100")
+            ordered_markers = sorted(
+                zip(marker_centers, marker_rects),
+                key=lambda item: item[0][0],
+            )
+            for index, marker in enumerate(ordered_markers[:len(marker_labels)]):
+                center, rect = marker
+                osd.draw_string_advanced(
+                    rect[0],
+                    max(0, rect[1] - 18),
+                    14,
+                    marker_labels[index],
+                    color=black,
+                )
+            if len(marker_centers) >= 2:
+                marker_centers.sort(key=lambda point: point[0])
+                osd.draw_line(
+                    marker_centers[0][0],
+                    marker_centers[0][1],
+                    marker_centers[-1][0],
+                    marker_centers[-1][1],
+                    color=black,
+                    thickness=3,
+                )
         else:
             for row in (calibration.upper, calibration.lower):
                 x, y, width, height = _scale_rect(row.rect)
@@ -188,7 +235,7 @@ def _draw_overlay(
         position_text = "--.- mm"
     osd.draw_string_advanced(
         8, 8, 20,
-        "MARK {}/5 Q{}".format(marker_count, result.scale_quality),
+        "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
         color=cyan if scale_ok else red,
     )
     osd.draw_string_advanced(
@@ -307,9 +354,9 @@ def run():
                     time.ticks_diff(now_ms, last_calibration_ms)
                     >= CALIBRATION_INTERVAL_MS
                 )
-                video_frame_due = (
-                    video_streamer is not None and
-                    video_streamer.needs_frame(now_ms)
+                video_frame_due = _video_streamer_needs_frame(
+                    video_streamer,
+                    now_ms,
                 )
 
                 # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
