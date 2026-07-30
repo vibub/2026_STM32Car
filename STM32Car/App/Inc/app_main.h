@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+extern volatile uint8_t g_app_init_step;
+
 #define APP_MODE_STOP       0x00U /* 停车模式编号。 */
 #define APP_MODE_BASIC_LINE 0x01U /* 基础八路红外巡线模式编号。 */
 

@@ -17,6 +17,7 @@
 #include "wheel_speed_pid.h"
 
 /* Debug variables for IAR Watch only; they do not drive module control. */
+volatile uint8_t g_app_init_step;
 volatile uint8_t g_app_line_command_valid;
 volatile uint8_t g_app_motor_fault;
 volatile uint8_t g_app_line_sensor_mask;
@@ -352,7 +353,9 @@ void App_Init(void)
     InfraredLineSensor_Init();
     MotorDriver_Init();
     EncoderDriver_Init();
+#if APP_USE_IMU
     ImuHeading_Init();
+#endif
     K230Uart_Init();
     ServoDriver_Init(BallBalanceControl_GetNeutralAngleDeg());
     TjcUart_Init();
@@ -385,6 +388,7 @@ void App_Init(void)
     App_UpdateBallBalanceDebug();
     App_UpdateLapStopDebug();
     App_StopClosedLoop();
+    g_app_init_step = 100U;
 }
 
 void App_Loop(void)
@@ -392,7 +396,9 @@ void App_Loop(void)
     uint32_t now_ms;
 
     Protocol_Tjc_Task();
+#if APP_USE_IMU
     ImuHeading_Poll();
+#endif
     now_ms = Board_TimeMs();
     App_BallBalanceTask(now_ms);
     if ((uint32_t) (now_ms - s_last_control_ms) >= APP_CONTROL_PERIOD_MS) {
