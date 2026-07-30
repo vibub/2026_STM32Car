@@ -27,7 +27,7 @@
 #define PIPE_ATTITUDE_CHASSIS_ACCEL_GATE_CM_S2      50.0f     /* 禁用 Accel 校正的底盘加速度门槛。 */
 #define PIPE_ATTITUDE_LEVEL_GYRO_LIMIT_DPS            3.0f    /* 水平零偏标定允许的最大角速度。 */
 #define PIPE_ATTITUDE_POINT_GYRO_LIMIT_DPS            2.0f    /* 标定点平均允许的最大俯仰角速度。 */
-#define PIPE_ATTITUDE_MODEL_SCALE_MIN                  0.75f   /* 模型校正比例允许的最小值。 */
+#define PIPE_ATTITUDE_MODEL_SCALE_MIN                  0.35f   /* 柔性水管模型校正比例允许的最小值。 */
 #define PIPE_ATTITUDE_MODEL_SCALE_MAX                  1.25f   /* 模型校正比例允许的最大值。 */
 #define PIPE_ATTITUDE_MODEL_OFFSET_MAX_DEG             0.75f   /* 模型校正零偏允许的最大绝对值。 */
 #define PIPE_ATTITUDE_MAX_RETURN_ERROR_DEG             0.60f   /* 回到模型水平点后允许的最大回差。 */

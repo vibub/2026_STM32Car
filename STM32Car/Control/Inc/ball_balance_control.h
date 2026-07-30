@@ -56,6 +56,8 @@ typedef struct {
     float pipe_d_term_deg;
     float model_scale;
     float model_offset_deg;
+    float minimum_pipe_pitch_deg;
+    float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
     float desired_model_pitch_deg;
     float servo_feedforward_deg;
@@ -90,6 +92,8 @@ typedef struct {
     float pipe_d_term_deg;
     float model_scale;
     float model_offset_deg;
+    float minimum_pipe_pitch_deg;
+    float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
     float desired_model_pitch_deg;
     float servo_feedforward_deg;

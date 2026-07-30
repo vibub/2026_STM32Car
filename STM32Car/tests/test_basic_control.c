@@ -367,8 +367,8 @@ static void test_pipe_attitude_control(void)
         now_ms += 20U;
         assert(LinkageKinematics_ServoAngleToPipePitch(
                    servo_angle, &model_pitch_deg) != 0U);
-        /* 模拟 IMU 移到另一端后原始符号反转，验证标定仍统一为右端抬高为正。 */
-        raw_pitch_deg = -model_pitch_deg;
+        /* 模拟远端 IMU 符号反转和柔性水管 0.42 倍角度响应。 */
+        raw_pitch_deg = -0.42f * model_pitch_deg;
         raw_pitch_rate_dps =
             (raw_pitch_deg - previous_raw_pitch_deg) / 0.020f;
         pitch_rad = raw_pitch_deg * TEST_PI / 180.0f;
@@ -398,11 +398,11 @@ static void test_pipe_attitude_control(void)
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
     assert(output.imu_pitch_sign == -1);
     assert_float_near_tolerance(output.gyro_x_bias_dps, 0.40f, 0.001f);
-    assert(output.negative_pitch_deg < -4.8f);
+    assert(output.negative_pitch_deg < -2.0f);
     assert(output.center_pitch_deg > -0.1f);
     assert(output.center_pitch_deg < 0.1f);
-    assert(output.positive_pitch_deg > 4.8f);
-    assert_float_near_tolerance(output.model_scale, 1.0f, 0.03f);
+    assert(output.positive_pitch_deg > 2.0f);
+    assert_float_near_tolerance(output.model_scale, 0.42f, 0.03f);
     assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.08f);
     assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.1f);
 
@@ -559,6 +559,72 @@ static void test_ball_balance_control(void)
     assert(output.enabled == 0U);
 }
 
+static void test_flexible_pipe_mapping_limits(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    uint32_t now_ms = 0U;
+    uint8_t index;
+
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetPipeCalibration(&control, 1U, 0.42f, 0.38f);
+    BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
+    assert(output.mapping_valid != 0U);
+    assert_float_near_tolerance(
+        output.minimum_pipe_pitch_deg, -2.14f, 0.01f);
+    assert_float_near_tolerance(
+        output.maximum_pipe_pitch_deg, 2.90f, 0.01f);
+
+    BallBalanceControl_SetEnabled(&control, 1U, now_ms);
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.enabled != 0U);
+
+    measurement.valid = 1U;
+    measurement.position_d10_mm = 1000;
+    measurement.quality = 80U;
+    measurement.sequence = 1U;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert_float_near_tolerance(
+        output.desired_pipe_pitch_deg, 2.90f, 0.01f);
+    assert(output.mapping_valid != 0U);
+    assert(output.mapping_fault == 0U);
+    assert(output.desired_model_pitch_deg <= 6.0f);
+
+    now_ms += 220U;
+    measurement.position_d10_mm = -1000;
+    measurement.sequence = 2U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert_float_near_tolerance(
+        output.desired_pipe_pitch_deg, -2.14f, 0.01f);
+    assert(output.mapping_valid != 0U);
+    assert(output.mapping_fault == 0U);
+    assert(output.desired_model_pitch_deg >= -6.0f);
+}
+
 static void test_speed_pid(void)
 {
     WheelSpeedPid pid;
@@ -583,6 +649,7 @@ int main(void)
     test_linkage_kinematics();
     test_pipe_attitude_control();
     test_ball_balance_control();
+    test_flexible_pipe_mapping_limits();
     test_speed_pid();
     puts("基础控制、IMU 姿态与钢球平衡主机测试通过");
     return 0;

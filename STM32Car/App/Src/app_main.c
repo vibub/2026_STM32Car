@@ -67,6 +67,8 @@ volatile float g_app_ball_pipe_p_term_deg;
 volatile float g_app_ball_pipe_d_term_deg;
 volatile float g_app_ball_model_scale;
 volatile float g_app_ball_model_offset_deg;
+volatile float g_app_ball_minimum_pipe_pitch_deg;
+volatile float g_app_ball_maximum_pipe_pitch_deg;
 volatile float g_app_ball_feedforward_model_pitch_deg;
 volatile float g_app_ball_desired_model_pitch_deg;
 volatile float g_app_ball_servo_feedforward_deg;
@@ -175,6 +177,10 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_pipe_d_term_deg = s_ball_balance_output.pipe_d_term_deg;
     g_app_ball_model_scale = s_ball_balance_output.model_scale;
     g_app_ball_model_offset_deg = s_ball_balance_output.model_offset_deg;
+    g_app_ball_minimum_pipe_pitch_deg =
+        s_ball_balance_output.minimum_pipe_pitch_deg;
+    g_app_ball_maximum_pipe_pitch_deg =
+        s_ball_balance_output.maximum_pipe_pitch_deg;
     g_app_ball_feedforward_model_pitch_deg =
         s_ball_balance_output.feedforward_model_pitch_deg;
     g_app_ball_desired_model_pitch_deg =

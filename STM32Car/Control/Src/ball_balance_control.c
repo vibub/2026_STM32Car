@@ -28,7 +28,7 @@
 #define BALL_BALANCE_DT_MAX_S                     0.100f /* 视觉测量和任务 dt 的最大值。 */
 #define BALL_BALANCE_POSITION_FILTER_TAU_S        0.050f /* 钢球位置低通滤波时间常数。 */
 #define BALL_BALANCE_VELOCITY_FILTER_TAU_S        0.080f /* 钢球速度低通滤波时间常数。 */
-#define BALL_BALANCE_MODEL_SCALE_MIN               0.75f  /* 可接受模型校正比例的最小值。 */
+#define BALL_BALANCE_MODEL_SCALE_MIN               0.35f  /* 柔性水管可接受模型校正比例的最小值。 */
 #define BALL_BALANCE_MODEL_SCALE_MAX               1.25f  /* 可接受模型校正比例的最大值。 */
 #define BALL_BALANCE_MODEL_OFFSET_MAX_DEG           0.75f  /* 可接受模型校正零偏的最大绝对值。 */
 #define BALL_BALANCE_CACHE_EPSILON_DEG              0.0001f /* 复用运动学缓存允许的输入误差。 */
@@ -49,6 +49,21 @@ static float BallBalanceControl_Limit(float value,
         return minimum;
     }
     return value;
+}
+
+static float BallBalanceControl_LimitActualPitch(
+    const BallBalanceControl *control,
+    float value)
+{
+    if ((control == 0) || (control->mapping_valid == 0U)) {
+        return BallBalanceControl_Limit(
+            value,
+            -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
+            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+    }
+    return BallBalanceControl_Limit(value,
+                                    control->minimum_pipe_pitch_deg,
+                                    control->maximum_pipe_pitch_deg);
 }
 
 static float BallBalanceControl_Approach(float value,
@@ -110,13 +125,14 @@ static uint8_t BallBalanceControl_ActualPitchToModelPitch(
         return 0U;
     }
 
+    actual_pitch_deg = BallBalanceControl_LimitActualPitch(
+        control, actual_pitch_deg);
     converted_pitch = (actual_pitch_deg - control->model_offset_deg) /
                       control->model_scale;
-    if ((converted_pitch < LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG) ||
-        (converted_pitch > LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG)) {
-        return 0U;
-    }
-    *model_pitch_deg = converted_pitch;
+    *model_pitch_deg = BallBalanceControl_Limit(
+        converted_pitch,
+        LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG,
+        LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG);
     return 1U;
 }
 
@@ -211,6 +227,11 @@ static void BallBalanceControl_CalculateOuterTarget(
     float candidate_i_term;
     float candidate_pitch;
     float integral_direction;
+    float minimum_pitch;
+    float maximum_pitch;
+
+    minimum_pitch = control->minimum_pipe_pitch_deg;
+    maximum_pitch = control->maximum_pipe_pitch_deg;
 
     /* 正位置表示钢球偏向右侧，右端抬高的正俯仰可使钢球滚回左侧。 */
     control->error_mm = control->filtered_position_mm - control->target_mm;
@@ -233,11 +254,11 @@ static void BallBalanceControl_CalculateOuterTarget(
     integral_direction = BALL_BALANCE_POSITION_KI_DEG_PER_MM_S *
                          control->error_mm;
     if ((allow_integral != 0U) &&
-        (((candidate_pitch >= -BALL_BALANCE_MAX_PIPE_PITCH_DEG) &&
-          (candidate_pitch <= BALL_BALANCE_MAX_PIPE_PITCH_DEG)) ||
-         ((candidate_pitch > BALL_BALANCE_MAX_PIPE_PITCH_DEG) &&
+        (((candidate_pitch >= minimum_pitch) &&
+          (candidate_pitch <= maximum_pitch)) ||
+         ((candidate_pitch > maximum_pitch) &&
           (integral_direction < 0.0f)) ||
-         ((candidate_pitch < -BALL_BALANCE_MAX_PIPE_PITCH_DEG) &&
+         ((candidate_pitch < minimum_pitch) &&
           (integral_direction > 0.0f)))) {
         control->integral_mm_s = candidate_integral;
     }
@@ -246,8 +267,8 @@ static void BallBalanceControl_CalculateOuterTarget(
                           control->integral_mm_s;
     control->desired_pipe_pitch_deg = BallBalanceControl_Limit(
         control->p_term_deg + control->i_term_deg + control->d_term_deg,
-        -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
-        BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+        minimum_pitch,
+        maximum_pitch);
 }
 
 static uint8_t BallBalanceControl_AcceptMeasurement(
@@ -418,11 +439,10 @@ static void BallBalanceControl_UpdateServoCommand(BallBalanceControl *control,
                                    control->pipe_pitch_error_deg;
         control->pipe_d_term_deg = -BALL_BALANCE_PIPE_KD_S *
                                    control->measured_pipe_rate_dps;
-        corrected_pipe_command = BallBalanceControl_Limit(
+        corrected_pipe_command = BallBalanceControl_LimitActualPitch(
+            control,
             control->command_pipe_pitch_deg + control->pipe_p_term_deg +
-            control->pipe_d_term_deg,
-            -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
-            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+            control->pipe_d_term_deg);
     } else {
         control->pipe_pitch_error_deg = 0.0f;
         control->pipe_p_term_deg = 0.0f;
@@ -518,6 +538,8 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->pipe_d_term_deg = control->pipe_d_term_deg;
     output->model_scale = control->model_scale;
     output->model_offset_deg = control->model_offset_deg;
+    output->minimum_pipe_pitch_deg = control->minimum_pipe_pitch_deg;
+    output->maximum_pipe_pitch_deg = control->maximum_pipe_pitch_deg;
     output->feedforward_model_pitch_deg =
         control->feedforward_model_pitch_deg;
     output->desired_model_pitch_deg = control->desired_model_pitch_deg;
@@ -606,6 +628,8 @@ void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
 {
     float neutral_model_pitch_deg;
     float neutral_servo_angle_deg;
+    float minimum_pipe_pitch_deg;
+    float maximum_pipe_pitch_deg;
     uint8_t calibration_valid;
 
     if (control == 0) {
@@ -620,11 +644,23 @@ void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
                     BALL_BALANCE_MODEL_OFFSET_MAX_DEG));
     if (calibration_valid != 0U) {
         neutral_model_pitch_deg = -model_offset_deg / model_scale;
+        minimum_pipe_pitch_deg = BallBalanceControl_Limit(
+            model_scale * LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG +
+            model_offset_deg,
+            -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
+            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+        maximum_pipe_pitch_deg = BallBalanceControl_Limit(
+            model_scale * LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG +
+            model_offset_deg,
+            -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
+            BALL_BALANCE_MAX_PIPE_PITCH_DEG);
         calibration_valid =
             (uint8_t) ((neutral_model_pitch_deg >=
                         LINKAGE_KINEMATICS_MIN_PIPE_PITCH_DEG) &&
                        (neutral_model_pitch_deg <=
                         LINKAGE_KINEMATICS_MAX_PIPE_PITCH_DEG) &&
+                       (minimum_pipe_pitch_deg < 0.0f) &&
+                       (maximum_pipe_pitch_deg > 0.0f) &&
                        (LinkageKinematics_PipePitchToServoAngle(
                             neutral_model_pitch_deg,
                             &neutral_servo_angle_deg) != 0U) &&
@@ -651,6 +687,8 @@ void BallBalanceControl_SetPipeCalibration(BallBalanceControl *control,
 
     control->model_scale = model_scale;
     control->model_offset_deg = model_offset_deg;
+    control->minimum_pipe_pitch_deg = minimum_pipe_pitch_deg;
+    control->maximum_pipe_pitch_deg = maximum_pipe_pitch_deg;
     control->mapping_valid = 1U;
     control->mapping_fault = 0U;
     control->feedforward_cache_valid = 0U;
@@ -717,10 +755,8 @@ void BallBalanceControl_Update(BallBalanceControl *control,
             control->desired_pipe_pitch_deg,
             maximum_delta);
     }
-    control->command_pipe_pitch_deg = BallBalanceControl_Limit(
-        control->command_pipe_pitch_deg,
-        -BALL_BALANCE_MAX_PIPE_PITCH_DEG,
-        BALL_BALANCE_MAX_PIPE_PITCH_DEG);
+    control->command_pipe_pitch_deg = BallBalanceControl_LimitActualPitch(
+        control, control->command_pipe_pitch_deg);
 
     BallBalanceControl_UpdateServoCommand(control, task_dt_s, now_ms);
     BallBalanceControl_FillOutput(control,
