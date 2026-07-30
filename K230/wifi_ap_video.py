@@ -217,23 +217,34 @@ class WifiApVideoStreamer:
             except OSError:
                 return
 
-            self._set_nonblocking(client)
+            try:
+                client.settimeout(0.2)
+            except AttributeError:
+                pass
             try:
                 request = client.recv(256)
             except OSError:
                 request = b""
+            self._set_nonblocking(client)
 
             if len(self.clients) >= self.max_clients:
                 old = self.clients.pop(0)
                 self._close_socket(old)
 
-            if (not request) or (b"/stream" in request):
+            if b"/stream" in request:
                 self._send_stream_header(client)
                 self.clients.append(client)
                 print("video stream client:", addr)
+            elif (not request) or (b"GET / " in request) or (b"GET /HTTP" in request):
+                try:
+                    _send_all(client, _INDEX_HTML)
+                    print("video index client:", addr)
+                finally:
+                    self._close_socket(client)
             else:
                 try:
                     _send_all(client, _INDEX_HTML)
+                    print("video http client:", addr)
                 finally:
                     self._close_socket(client)
 

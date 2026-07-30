@@ -1,4 +1,4 @@
-"""CanMV K230 红色位置标记 + 圆环/钢珠识别独立联调入口。"""
+"""CanMV K230 ball-position entry point."""
 
 import gc
 import os
@@ -42,6 +42,10 @@ except ImportError:
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
 DISPLAY_SIZE = (800, 480)          # LCD 与 OSD 分辨率。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
+# 钢球只会出现在管道附近；CV 坐标系为 640x360。
+# 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
+STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
+
 STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # 当前钢球 kmodel 的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
     "/sdcard/models/steel_ball_yolo11n_det_320.kmodel",
@@ -54,11 +58,12 @@ STEEL_BALL_NMS_THRESHOLD = 0.45
 K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
 K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 200               # OSD 降至 5 Hz，减少 800×480 图层刷新开销。
-CALIBRATION_INTERVAL_MS = 250       # 红色刻度标定最多每秒刷新 4 次。
-CALIBRATION_HOLD_UPDATES = 12       # 连续标定失败约 3 秒后清除旧标定。
+OSD_INTERVAL_MS = 80                # OSD refresh at up to 12.5 Hz.
+CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
+CALIBRATION_HOLD_UPDATES = 250      # Keep the last calibration for about 20 seconds.
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
-GC_INTERVAL_FRAMES = 30             # 主循环周期性垃圾回收间隔。
+GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
+OSD_TEXT_ENABLE = False             # Hide large debug text in performance mode.
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
 VIDEO_AP_ENABLE = True
@@ -68,7 +73,7 @@ VIDEO_AP_IP = "192.168.4.1"
 VIDEO_AP_PORT = 80
 VIDEO_AP_FPS = 6
 VIDEO_AP_JPEG_QUALITY = 40
-VIDEO_AP_START_DELAY_FRAMES = 20
+VIDEO_AP_START_DELAY_FRAMES = 0
 
 # STEEL_BALL 使用现成 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
@@ -92,6 +97,24 @@ def _target_thresholds():
     raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
 
+def _video_streamer_needs_frame(video_streamer, now_ms):
+    if video_streamer is None:
+        return False
+    needs_frame = getattr(video_streamer, "needs_frame", None)
+    if needs_frame is not None:
+        return needs_frame(now_ms)
+
+    clients = getattr(video_streamer, "clients", None)
+    if not clients:
+        return False
+    last_frame_ms = getattr(video_streamer, "last_frame_ms", 0)
+    frame_interval_ms = getattr(
+        video_streamer,
+        "frame_interval_ms",
+        max(1, 1000 // VIDEO_AP_FPS),
+    )
+    return time.ticks_diff(now_ms, last_frame_ms) >= frame_interval_ms
+
 def _resolve_steel_ball_model_path():
     for path in STEEL_BALL_MODEL_PATHS:
         try:
@@ -104,15 +127,59 @@ def _resolve_steel_ball_model_path():
     )
 
 
+def _ai_roi_from_cv_roi(cv_roi):
+    x, y, width, height = cv_roi
+    return (
+        int(round(x * AI_SIZE[0] / CV_SIZE[0])),
+        int(round(y * AI_SIZE[1] / CV_SIZE[1])),
+        max(1, int(round(width * AI_SIZE[0] / CV_SIZE[0]))),
+        max(1, int(round(height * AI_SIZE[1] / CV_SIZE[1]))),
+    )
+
+
+def _crop_ai_array(ai_array, roi):
+    x, y, width, height = roi
+    shape = getattr(ai_array, "shape", None)
+    if shape is None:
+        return ai_array
+    if len(shape) == 4:
+        return ai_array[:, :, y:y + height, x:x + width]
+    if len(shape) == 3 and shape[0] in (1, 3, 4):
+        return ai_array[:, y:y + height, x:x + width]
+    if len(shape) == 3:
+        return ai_array[y:y + height, x:x + width, :]
+    return ai_array
+
+
+def _scale_roi_detection_box(detection, source_roi, target_roi):
+    if detection is None:
+        return None
+    scaled = scale_detection_box(
+        detection,
+        (source_roi[2], source_roi[3]),
+        (target_roi[2], target_roi[3]),
+    )
+    x, y, width, height, confidence = scaled
+    return (
+        x + target_roi[0],
+        y + target_roi[1],
+        width,
+        height,
+        confidence,
+    )
+
+
 def _create_steel_ball_yolo(pipeline):
     model_path = _resolve_steel_ball_model_path()
+    ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
     print("loading steel-ball YOLO:", model_path)
+    print("steel-ball YOLO ROI cv={} ai={}".format(STEEL_BALL_YOLO_ROI_CV, ai_roi))
     detector = YOLO11(
         task_type="detect",
         mode="video",
         kmodel_path=model_path,
         labels=STEEL_BALL_LABELS,
-        rgb888p_size=list(AI_SIZE),
+        rgb888p_size=[ai_roi[2], ai_roi[3]],
         model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
         display_size=list(pipeline.display_size),
         conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
@@ -144,24 +211,55 @@ def _draw_overlay(
 ):
     osd = pipeline.osd_img
     pipeline.clear_osd()
-    if yolo is not None and yolo_result is not None:
-        yolo.draw_result(yolo_result, osd)
     green = (0, 255, 0)
     red = (255, 0, 0)
     yellow = (255, 255, 0)
     cyan = (0, 255, 255)
     white = (255, 255, 255)
+    black = (0, 0, 0)
 
     calibration = detector.calibration
     if calibration is not None:
         if hasattr(calibration, "marker_columns"):
+            marker_centers = []
+            marker_rects = []
             for rect in calibration.marker_rects():
                 x, y, width, height = _scale_rect(rect)
                 osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+                marker_centers.append((x + width // 2, y + height // 2))
+                marker_rects.append((x, y, width, height))
+            marker_labels = ("+50", "0", "-50", "-100")
+            ordered_markers = sorted(
+                zip(marker_centers, marker_rects),
+                key=lambda item: item[0][0],
+            )
+            for index, marker in enumerate(ordered_markers[:len(marker_labels)]):
+                center, rect = marker
+                osd.draw_string_advanced(
+                    rect[0],
+                    max(0, rect[1] - 18),
+                    14,
+                    marker_labels[index],
+                    color=black,
+                )
+            if len(marker_centers) >= 2:
+                marker_centers.sort(key=lambda point: point[0])
+                osd.draw_line(
+                    marker_centers[0][0],
+                    marker_centers[0][1],
+                    marker_centers[-1][0],
+                    marker_centers[-1][1],
+                    color=black,
+                    thickness=3,
+                )
         else:
             for row in (calibration.upper, calibration.lower):
                 x, y, width, height = _scale_rect(row.rect)
                 osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+
+    if TARGET_PROFILE == "STEEL_BALL":
+        x, y, width, height = _scale_rect(STEEL_BALL_YOLO_ROI_CV)
+        osd.draw_rectangle(x, y, width, height, color=yellow, thickness=1)
 
     if result.target_rect is not None:
         x, y, width, height = _scale_rect(result.target_rect)
@@ -186,32 +284,33 @@ def _draw_overlay(
         )
     else:
         position_text = "--.- mm"
-    osd.draw_string_advanced(
-        8, 8, 20,
-        "MARK {}/5 Q{}".format(marker_count, result.scale_quality),
-        color=cyan if scale_ok else red,
-    )
-    osd.draw_string_advanced(
-        8, 34, 20,
-        "TARGET {} V{} Q{}".format(
-            TARGET_PROFILE,
-            int(result.valid),
-            result.quality,
-        ),
-        color=green if result.valid else yellow,
-    )
-    osd.draw_string_advanced(
-        8, 60, 24,
-        "BALL POS " + position_text,
-        color=green if result.valid else yellow,
-    )
-    osd.draw_string_advanced(
-        8,
-        92,
-        18,
-        "BALL FPS {:.1f}".format(inference_fps),
-        color=white,
-    )
+    if OSD_TEXT_ENABLE:
+        osd.draw_string_advanced(
+            8, 8, 20,
+            "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
+            color=cyan if scale_ok else red,
+        )
+        osd.draw_string_advanced(
+            8, 34, 20,
+            "TARGET {} V{} Q{}".format(
+                TARGET_PROFILE,
+                int(result.valid),
+                result.quality,
+            ),
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8, 60, 24,
+            "BALL POS " + position_text,
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8,
+            92,
+            18,
+            "BALL FPS {:.1f}".format(inference_fps),
+            color=white,
+        )
     pipeline.show_osd()
 
 
@@ -243,6 +342,7 @@ def run():
             cv_size=CV_SIZE,
             ai_size=AI_SIZE,
             display_size=DISPLAY_SIZE,
+            to_ide=True,
         )
         pipeline.create()
         uart = _create_uart()
@@ -307,9 +407,9 @@ def run():
                     time.ticks_diff(now_ms, last_calibration_ms)
                     >= CALIBRATION_INTERVAL_MS
                 )
-                video_frame_due = (
-                    video_streamer is not None and
-                    video_streamer.needs_frame(now_ms)
+                video_frame_due = _video_streamer_needs_frame(
+                    video_streamer,
+                    now_ms,
                 )
 
                 # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
@@ -323,19 +423,25 @@ def run():
                     frame = None
 
                 ai_frame, ai_array = pipeline.capture_ai_frame()
-                yolo_result = yolo.run(ai_array)
+                ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
+                ai_roi_array = _crop_ai_array(ai_array, ai_roi)
+                yolo_result = yolo.run(ai_roi_array)
                 previous_ai_x = None
                 if detector.previous_center_x is not None:
                     previous_ai_x = (
-                        detector.previous_center_x
-                        * float(AI_SIZE[0])
-                        / float(CV_SIZE[0])
+                        (detector.previous_center_x - STEEL_BALL_YOLO_ROI_CV[0])
+                        * float(ai_roi[2])
+                        / float(STEEL_BALL_YOLO_ROI_CV[2])
                     )
                 detection = select_best_yolo_box(
                     yolo_result,
                     previous_ai_x,
                 )
-                detection = scale_detection_box(detection, AI_SIZE, CV_SIZE)
+                detection = _scale_roi_detection_box(
+                    detection,
+                    ai_roi,
+                    STEEL_BALL_YOLO_ROI_CV,
+                )
                 result = detector.result_from_yolo_box(detection)
             else:
                 frame = pipeline.capture_vision_frame()
