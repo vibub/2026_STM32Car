@@ -92,6 +92,18 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
                                     TJC_RESULT_ENTER_FAILED,
                                     App_GetCurrentMode(), command);
         }
+    } else if (command == TJC_COMMAND_BALL_ENABLE) {
+        g_tjc_valid_command_count++;
+        accepted = App_SetBallBalanceEnabled(1U);
+        Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                                TJC_RESULT_ENTER_FAILED,
+                                App_GetCurrentMode(), command);
+    } else if (command == TJC_COMMAND_BALL_DISABLE) {
+        g_tjc_valid_command_count++;
+        accepted = App_SetBallBalanceEnabled(0U);
+        Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                                TJC_RESULT_ENTER_FAILED,
+                                App_GetCurrentMode(), command);
     } else {
         g_tjc_invalid_command_count++;
         Protocol_Tjc_SendResult(TJC_RESULT_INVALID_COMMAND, current_mode,

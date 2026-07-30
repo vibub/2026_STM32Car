@@ -2,12 +2,12 @@
 #include "main.h"
 
 /* TIM4 以 1 MHz 计数，500~2500 us 脉宽映射至 SG90 的 0~180°。 */
-#define SERVO_DRIVER_MIN_PULSE_US       500U
-#define SERVO_DRIVER_MAX_PULSE_US       2500U
-#define SERVO_DRIVER_START_ANGLE_DEG    SERVO_DRIVER_MIN_ANGLE_DEG
-#define SERVO_DRIVER_END_ANGLE_DEG      SERVO_DRIVER_MAX_ANGLE_DEG
-#define SERVO_DRIVER_SWEEP_STEP_DEG     1.0f
-#define SERVO_DRIVER_SWEEP_PERIOD_MS    30U
+#define SERVO_DRIVER_MIN_PULSE_US       500U  /* SG90 最小控制脉宽，单位为微秒。 */
+#define SERVO_DRIVER_MAX_PULSE_US       2500U /* SG90 最大控制脉宽，单位为微秒。 */
+#define SERVO_DRIVER_START_ANGLE_DEG    SERVO_DRIVER_MIN_ANGLE_DEG /* 扫动测试起始角度。 */
+#define SERVO_DRIVER_END_ANGLE_DEG      SERVO_DRIVER_MAX_ANGLE_DEG /* 扫动测试结束角度。 */
+#define SERVO_DRIVER_SWEEP_STEP_DEG     1.0f  /* 每次扫动测试增加或减少的角度。 */
+#define SERVO_DRIVER_SWEEP_PERIOD_MS    30U   /* 扫动测试的角度更新时间。 */
 
 static float s_angle_deg = SERVO_DRIVER_START_ANGLE_DEG;
 static int8_t s_sweep_direction = 1;
@@ -38,16 +38,16 @@ static uint32_t ServoDriver_AngleToPulseUs(float angle_deg)
     return (uint32_t) (pulse_us + 0.5f);
 }
 
-void ServoDriver_Init(void)
+void ServoDriver_Init(float initial_angle_deg)
 {
     s_sweep_active = 0U;
     s_sweep_direction = 1;
     s_last_sweep_ms = 0U;
-    ServoDriver_SetAngle(SERVO_DRIVER_START_ANGLE_DEG);
+    ServoDriver_SetAngle(initial_angle_deg);
     if (HAL_TIM_PWM_Start(&htim4, SERVO_PWM_CHANNEL) != HAL_OK) {
         Error_Handler();
     }
-    ServoDriver_SetAngle(SERVO_DRIVER_START_ANGLE_DEG);
+    ServoDriver_SetAngle(initial_angle_deg);
 }
 
 void ServoDriver_SetAngle(float angle_deg)
