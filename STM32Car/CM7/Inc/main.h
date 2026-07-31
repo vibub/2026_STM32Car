@@ -24,6 +24,10 @@ extern "C" {
 #define SERVO_PWM_PIN      GPIO_PIN_15   /* 舵机 PWM 输出引脚 PD15。 */
 #define SERVO_PWM_CHANNEL  TIM_CHANNEL_4 /* 舵机 PWM 使用 TIM4 通道 4。 */
 
+/* 上位机调试串口：USART1，PB6 为 STM32 TX，PB7 为 STM32 RX，115200 8N1。 */
+#define HOST_DEBUG_UART_INSTANCE USART1      /* 上位机调试串口使用的外设实例。 */
+#define HOST_DEBUG_UART_IRQn     USART1_IRQn /* 上位机调试串口对应的中断号。 */
+
 /* TJC3224T124 串口屏：USART2，PD5 为 STM32 TX，PD6 为 STM32 RX。 */
 #define TJC_UART_INSTANCE USART2      /* TJC 串口使用的外设实例。 */
 #define TJC_UART_IRQn     USART2_IRQn /* TJC 串口对应的中断号。 */
@@ -60,6 +64,7 @@ extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim8;
 extern I2C_HandleTypeDef hi2c2;
 extern I2C_HandleTypeDef hi2c4;
+extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
 extern UART_HandleTypeDef huart4;
 
