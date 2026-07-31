@@ -7,7 +7,7 @@
 
 #define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.012f
 #define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.000f
-#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.015f
+#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.006f
 
 typedef struct {
     uint8_t valid;
@@ -25,12 +25,9 @@ typedef struct {
 
 typedef enum {
     BALL_BALANCE_PHASE_WAIT_PIPE = 0,
-    BALL_BALANCE_PHASE_ACCELERATE = 1,
-    BALL_BALANCE_PHASE_RETURN_LEVEL = 2,
-    BALL_BALANCE_PHASE_COAST = 3,
-    BALL_BALANCE_PHASE_BRAKE = 4,
-    BALL_BALANCE_PHASE_SETTLE = 5,
-    BALL_BALANCE_PHASE_HOLD = 6
+    BALL_BALANCE_PHASE_BREAKAWAY = 1,
+    BALL_BALANCE_PHASE_MOVING = 2,
+    BALL_BALANCE_PHASE_HOLD = 3
 } BallBalancePhase;
 
 typedef struct {
@@ -48,13 +45,16 @@ typedef struct {
     uint8_t imu_fault;
     uint8_t integral_active;
     uint8_t braking_active;
-    int8_t brake_direction;
-    uint8_t outward_recovery_active;
-    uint8_t turnaround_hold_active;
     uint8_t zero_hold_freeze_active;
+    uint8_t turnaround_freeze_active;
+    uint8_t outward_motion_seen;
+    uint8_t previous_error_ready;
+    uint8_t zero_crossed;
     uint8_t pipe_settled;
     uint8_t pipe_settle_timer_ready;
     uint8_t stationary_sample_count;
+    uint8_t moving_sample_count;
+    int8_t moving_direction;
     uint8_t kick_attempt_count;
     uint8_t trajectory_phase;
     uint8_t feedforward_cache_valid;
@@ -69,6 +69,7 @@ typedef struct {
     uint32_t pipe_settle_since_ms;
     uint32_t phase_started_ms;
     uint32_t kick_stage_started_ms;
+    uint32_t turnaround_freeze_started_ms;
     float target_mm;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
@@ -80,6 +81,7 @@ typedef struct {
     float velocity_mm_s;
     float integral_mm_s;
     float error_mm;
+    float previous_error_mm;
     float p_term_deg;
     float i_term_deg;
     float d_term_deg;
@@ -119,7 +121,11 @@ typedef struct {
     uint8_t mapping_fault;
     uint8_t integral_active;
     uint8_t braking_active;
+    uint8_t zero_crossed;
+    uint8_t turnaround_freeze_active;
     uint8_t pipe_settled;
+    uint8_t moving_sample_count;
+    int8_t moving_direction;
     uint8_t kick_attempt_count;
     uint8_t trajectory_phase;
     float target_mm;

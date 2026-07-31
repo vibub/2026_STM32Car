@@ -64,7 +64,11 @@ volatile float g_app_ball_brake_term_deg;
 volatile float g_app_ball_integral_mm_s;
 volatile uint8_t g_app_ball_integral_active;
 volatile uint8_t g_app_ball_braking_active;
+volatile uint8_t g_app_ball_zero_crossed;
+volatile uint8_t g_app_ball_turnaround_freeze_active;
 volatile uint8_t g_app_ball_pipe_settled;
+volatile uint8_t g_app_ball_moving_sample_count;
+volatile int8_t g_app_ball_moving_direction;
 volatile uint8_t g_app_ball_kick_attempt_count;
 volatile uint8_t g_app_ball_trajectory_phase;
 volatile float g_app_ball_phase_pitch_deg;
@@ -203,7 +207,14 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_integral_mm_s = s_ball_balance_output.integral_mm_s;
     g_app_ball_integral_active = s_ball_balance_output.integral_active;
     g_app_ball_braking_active = s_ball_balance_output.braking_active;
+    g_app_ball_zero_crossed = s_ball_balance_output.zero_crossed;
+    g_app_ball_turnaround_freeze_active =
+        s_ball_balance_output.turnaround_freeze_active;
     g_app_ball_pipe_settled = s_ball_balance_output.pipe_settled;
+    g_app_ball_moving_sample_count =
+        s_ball_balance_output.moving_sample_count;
+    g_app_ball_moving_direction =
+        s_ball_balance_output.moving_direction;
     g_app_ball_kick_attempt_count =
         s_ball_balance_output.kick_attempt_count;
     g_app_ball_trajectory_phase = s_ball_balance_output.trajectory_phase;
