@@ -22,7 +22,7 @@ try:
         scale_detection_box,
         select_best_yolo_box,
     )
-    from libs.YOLO import YOLO11
+    from libs.PlatTasks import DetectionApp
     from vision_pipeline import VisionPipeline
     try:
         from wifi_ap_video import WifiApVideoStreamer
@@ -35,7 +35,7 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, vision_pipeline.py and /sdcard/libs/YOLO.py")
+    print("required: ball_position.py, vision_pipeline.py and /sdcard/libs/PlatTasks.py")
     raise
 
 
@@ -48,12 +48,17 @@ STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
 
 STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # 当前钢球 kmodel 的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
-    "/sdcard/models/steel_ball_yolo11n_det_320.kmodel",
-    "/sdcard/yolo11n_det_320.kmodel",
+    "/sdcard/models/steel_ball_anchor_320.kmodel",
 )
-STEEL_BALL_LABELS = {0: "steel_ball"}
-STEEL_BALL_CONFIDENCE_THRESHOLD = 0.60
-STEEL_BALL_NMS_THRESHOLD = 0.45
+STEEL_BALL_LABELS = ["ball"]
+STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40
+STEEL_BALL_NMS_THRESHOLD = 0.50
+STEEL_BALL_ANCHORS = [
+    12, 12, 14, 14, 16, 15,
+    17, 14, 16, 18, 19, 16,
+    18, 18, 22, 16, 21, 19,
+]
+STEEL_BALL_CLASSICAL_FALLBACK = False
 
 K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
 K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
@@ -63,7 +68,7 @@ CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
 CALIBRATION_HOLD_UPDATES = 250      # Keep the last calibration for about 20 seconds.
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
-OSD_TEXT_ENABLE = False             # Hide large debug text in performance mode.
+OSD_TEXT_ENABLE = True             # Hide large debug text in performance mode.
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
 VIDEO_AP_ENABLE = True
@@ -169,22 +174,59 @@ def _scale_roi_detection_box(detection, source_roi, target_roi):
     )
 
 
+def _select_v18_anchor_box(result, previous_center_x=None):
+    """Parse the exact mapping returned by CanMV v1.8 DetectionApp."""
+    if result is None:
+        return None
+    scores = result["scores"]
+    class_ids = result["idx"]
+    boxes = result["boxes"]
+    count = min(len(scores), len(class_ids), len(boxes))
+    best = None
+    best_score = None
+    for index in range(count):
+        if int(class_ids[index]) != 0:
+            continue
+        box = boxes[index]
+        confidence = float(scores[index])
+        x1 = float(box[0])
+        y1 = float(box[1])
+        x2 = float(box[2])
+        y2 = float(box[3])
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0.0 or height <= 0.0:
+            continue
+        center_x = (x1 + x2) * 0.5
+        score = confidence
+        if previous_center_x is not None:
+            score -= abs(center_x - float(previous_center_x)) * 0.0008
+        if best_score is None or score > best_score:
+            best = (
+                int(round(x1)),
+                int(round(y1)),
+                int(round(width)),
+                int(round(height)),
+                confidence,
+            )
+            best_score = score
+    return best
+
+
 def _create_steel_ball_yolo(pipeline):
     model_path = _resolve_steel_ball_model_path()
-    ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
-    print("loading steel-ball YOLO:", model_path)
-    print("steel-ball YOLO ROI cv={} ai={}".format(STEEL_BALL_YOLO_ROI_CV, ai_roi))
-    detector = YOLO11(
-        task_type="detect",
-        mode="video",
-        kmodel_path=model_path,
-        labels=STEEL_BALL_LABELS,
-        rgb888p_size=[ai_roi[2], ai_roi[3]],
-        model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
-        display_size=list(pipeline.display_size),
-        conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
-        nms_thresh=STEEL_BALL_NMS_THRESHOLD,
-        max_boxes_num=5,
+    print("loading steel-ball AnchorBaseDet:", model_path)
+    detector = DetectionApp(
+        "video",
+        model_path,
+        STEEL_BALL_LABELS,
+        STEEL_BALL_MODEL_INPUT_SIZE,
+        STEEL_BALL_ANCHORS,
+        "AnchorBaseDet",
+        STEEL_BALL_CONFIDENCE_THRESHOLD,
+        STEEL_BALL_NMS_THRESHOLD,
+        list(AI_SIZE),
+        list(pipeline.display_size),
         debug_mode=0,
     )
     detector.config_preprocess()
@@ -349,6 +391,10 @@ def run():
         use_yolo = TARGET_PROFILE == "STEEL_BALL"
         detector = BallPositionDetector(
             thresholds=_target_thresholds(),
+            # The classical fallback must search the same pipe band as YOLO;
+            # otherwise dark/red hardware elsewhere in the frame can be
+            # mistaken for the ball.
+            roi=STEEL_BALL_YOLO_ROI_CV if use_yolo else None,
             target_diameter_mm=diameter_mm,
             scale_refresh_frames=1 if use_yolo else 10,
             scale_hold_frames=CALIBRATION_HOLD_UPDATES,
@@ -364,6 +410,7 @@ def run():
         inference_window_start_ms = now_ms
         inference_window_frames = 0
         inference_fps = 0.0
+        anchor_parse_reported = False
         video_ap_started = False
 
         while True:
@@ -420,29 +467,39 @@ def run():
                         last_calibration_ms = now_ms
                     if video_frame_due:
                         video_streamer.tick(frame, now_ms)
-                    frame = None
 
                 ai_frame, ai_array = pipeline.capture_ai_frame()
-                ai_roi = _ai_roi_from_cv_roi(STEEL_BALL_YOLO_ROI_CV)
-                ai_roi_array = _crop_ai_array(ai_array, ai_roi)
-                yolo_result = yolo.run(ai_roi_array)
+                yolo_result = yolo.run(ai_array)
                 previous_ai_x = None
                 if detector.previous_center_x is not None:
                     previous_ai_x = (
-                        (detector.previous_center_x - STEEL_BALL_YOLO_ROI_CV[0])
-                        * float(ai_roi[2])
-                        / float(STEEL_BALL_YOLO_ROI_CV[2])
+                        detector.previous_center_x
+                        * float(AI_SIZE[0])
+                        / float(CV_SIZE[0])
                     )
-                detection = select_best_yolo_box(
+                detection = _select_v18_anchor_box(
                     yolo_result,
                     previous_ai_x,
                 )
-                detection = _scale_roi_detection_box(
+                if detection is not None and not anchor_parse_reported:
+                    print("ANCHOR_PARSED:", detection)
+                    anchor_parse_reported = True
+                detection = scale_detection_box(
                     detection,
-                    ai_roi,
-                    STEEL_BALL_YOLO_ROI_CV,
+                    AI_SIZE,
+                    CV_SIZE,
                 )
                 result = detector.result_from_yolo_box(detection)
+                if (
+                    not result.valid and
+                    STEEL_BALL_CLASSICAL_FALLBACK
+                ):
+                    if frame is None:
+                        frame = pipeline.capture_vision_frame()
+                    fallback_result = detector.detect(frame)
+                    if fallback_result.valid:
+                        result = fallback_result
+                frame = None
             else:
                 frame = pipeline.capture_vision_frame()
                 result = detector.detect(frame)

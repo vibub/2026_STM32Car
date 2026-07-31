@@ -6,12 +6,16 @@
 
 #define BALL_BALANCE_MIN_ANGLE_DEG               0.0f  /* 重新装配后的最小安全舵机内部角。 */
 #define BALL_BALANCE_MAX_ANGLE_DEG             180.0f  /* 重新装配后的最大安全舵机内部角。 */
-#define BALL_BALANCE_MIN_PIPE_PITCH_DEG         -6.0f  /* 钢球外环允许的最大下降目标角。 */
+#define BALL_BALANCE_MIN_PIPE_PITCH_DEG         -6.0f  /* 钢球外环允许的最大下降目标角，仍受九点实测范围裁剪。 */
 #define BALL_BALANCE_MAX_PIPE_PITCH_DEG          3.0f  /* 钢球外环允许的最大抬升目标角。 */
 #define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       7.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
 #define BALL_BALANCE_POSITION_KP_DEG_PER_MM       0.040f /* 钢球位置到目标水管角的比例增益。 */
 #define BALL_BALANCE_POSITION_KI_DEG_PER_MM_S     0.000f /* 钢球位置积分增益，首版保持为 0。 */
-#define BALL_BALANCE_POSITION_KD_DEG_PER_MM_S     0.012f /* 钢球速度到目标水管角的阻尼增益。 */
+#define BALL_BALANCE_POSITION_KD_DEG_PER_MM_S     0.030f /* 提高钢球速度阻尼，抑制秋千式往复振荡。 */
+#define BALL_BALANCE_POSITION_P_LIMIT_DEG          1.50f /* 远距离时限制加速倾角，给后续速度制动留出余量。 */
+#define BALL_BALANCE_POSITION_DEADBAND_MM          3.0f  /* 目标附近不再反复克服静摩擦。 */
+#define BALL_BALANCE_STOPPED_SPEED_MM_S            5.0f  /* 判定钢球基本静止的速度阈值。 */
+#define BALL_BALANCE_BREAKAWAY_PITCH_DEG           0.45f /* 静止且有位置误差时的最小起步倾角。 */
 #define BALL_BALANCE_INTEGRAL_LIMIT_MM_S        200.0f  /* 钢球位置误差积分绝对上限。 */
 #define BALL_BALANCE_PIPE_KP                       0.60f  /* 水管姿态角误差的比例修正系数。 */
 #define BALL_BALANCE_PIPE_KD_S                     0.050f /* 水管俯仰角速度阻尼系数，单位为秒。 */
@@ -221,16 +225,35 @@ static void BallBalanceControl_CalculateOuterTarget(
     float integral_direction;
     float minimum_pitch;
     float maximum_pitch;
+    float position_error_abs;
+    float velocity_abs;
 
     minimum_pitch = control->minimum_pipe_pitch_deg;
     maximum_pitch = control->maximum_pipe_pitch_deg;
 
-    /* 正位置表示钢球偏向右侧，右端抬高的正俯仰可使钢球滚回左侧。 */
-    control->error_mm = control->filtered_position_mm - control->target_mm;
-    control->p_term_deg = BALL_BALANCE_POSITION_KP_DEG_PER_MM *
-                          control->error_mm;
-    control->d_term_deg = BALL_BALANCE_POSITION_KD_DEG_PER_MM_S *
+    /* K230 刻度从左到右为 +50、0、-50、-100，因此正位置实际在目标左侧。
+     * 控制器的正俯仰定义为右端抬高，故位置误差和实测速度都必须反向。 */
+    control->error_mm = control->target_mm - control->filtered_position_mm;
+    position_error_abs = BallBalanceControl_Abs(control->error_mm);
+    velocity_abs = BallBalanceControl_Abs(control->velocity_mm_s);
+    control->p_term_deg = BallBalanceControl_Limit(
+        BALL_BALANCE_POSITION_KP_DEG_PER_MM * control->error_mm,
+        -BALL_BALANCE_POSITION_P_LIMIT_DEG,
+        BALL_BALANCE_POSITION_P_LIMIT_DEG);
+    control->d_term_deg = -BALL_BALANCE_POSITION_KD_DEG_PER_MM_S *
                           control->velocity_mm_s;
+
+    /* 钢球已经停在目标附近时保持水平，避免静摩擦补偿在零点附近来回触发。
+     * 仍在穿越目标时保留速度项制动，不能仅凭位置进入死区。 */
+    if ((position_error_abs <= BALL_BALANCE_POSITION_DEADBAND_MM) &&
+        (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S)) {
+        control->integral_mm_s = 0.0f;
+        control->p_term_deg = 0.0f;
+        control->i_term_deg = 0.0f;
+        control->d_term_deg = 0.0f;
+        control->desired_pipe_pitch_deg = 0.0f;
+        return;
+    }
 
     if (allow_integral != 0U) {
         candidate_integral = BallBalanceControl_Limit(
@@ -261,6 +284,23 @@ static void BallBalanceControl_CalculateOuterTarget(
         control->p_term_deg + control->i_term_deg + control->d_term_deg,
         minimum_pitch,
         maximum_pitch);
+
+    /* 小误差产生的普通 PID 倾角可能不足以克服钢球/轨道静摩擦。
+     * 只在钢球近似静止时施加最小起步倾角；检测到运动后立即交还给 PD，
+     * 避免把该补偿当成持续偏置而造成极限环。 */
+    if ((position_error_abs > BALL_BALANCE_POSITION_DEADBAND_MM) &&
+        (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S) &&
+        (BallBalanceControl_Abs(control->desired_pipe_pitch_deg) <
+         BALL_BALANCE_BREAKAWAY_PITCH_DEG)) {
+        control->desired_pipe_pitch_deg =
+            (control->error_mm > 0.0f) ?
+            BALL_BALANCE_BREAKAWAY_PITCH_DEG :
+            -BALL_BALANCE_BREAKAWAY_PITCH_DEG;
+        control->desired_pipe_pitch_deg = BallBalanceControl_Limit(
+            control->desired_pipe_pitch_deg,
+            minimum_pitch,
+            maximum_pitch);
+    }
 }
 
 static uint8_t BallBalanceControl_AcceptMeasurement(
