@@ -12,7 +12,7 @@
 #define LINKAGE_HORN_GF_CM                     1.9f           /* 舵机摇臂轴心到连接孔的中心距。 */
 #define LINKAGE_CONNECTING_CF_CM               7.0716718f     /* 单连杆 C-F 的名义中心距。 */
 #define LINKAGE_HORN_LEVEL_DEG               116.2342619f     /* 水管水平时由几何模型得到的摇臂绝对角。 */
-#define LINKAGE_SERVO_LEVEL_DEG              122.0f           /* 连接件重新定向后水管水平对应的舵机内部角。 */
+#define LINKAGE_SERVO_LEVEL_DEG              LINKAGE_KINEMATICS_NOMINAL_SERVO_CENTER_DEG /* Trimmed horizontal servo angle. */
 #define LINKAGE_SERVO_DIRECTION               (-1.0f)         /* 内部角增大时摇臂绝对角减小。 */
 #define LINKAGE_REACH_TOLERANCE_CM             0.0001f        /* 可达条件允许的浮点计算误差。 */
 #define LINKAGE_ANGLE_TOLERANCE_DEG            0.01f          /* 反解工作范围允许的浮点角度误差。 */
@@ -25,8 +25,15 @@ static const float s_calibration_model_pitch_deg[
 };
 static const float s_calibration_servo_angle_deg[
     LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT] = {
-    86.0168f, 98.0000f, 110.0000f, 122.0000f, 134.0000f,
-    146.0000f, 158.0000f, 170.0000f, 178.7746f
+    86.0168f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    98.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    110.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    122.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    134.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    146.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    158.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    170.0000f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+    178.7746f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG
 };
 
 static float LinkageKinematics_Abs(float value)

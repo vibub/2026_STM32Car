@@ -13,7 +13,10 @@ for module_dir in ("/sdcard/app", "/sdcard"):
 
 from machine import UART, FPIOA
 
+EXPECTED_BALL_POSITION_MAPPING_VERSION = 2
+
 try:
+    import ball_position as ball_position_module
     from ball_position import (
         BallPositionDetector,
         RING_TARGET_THRESHOLDS,
@@ -37,10 +40,22 @@ except ImportError:
     print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
     raise
 
+actual_mapping_version = getattr(
+    ball_position_module, "BALL_POSITION_MAPPING_VERSION", 0)
+if actual_mapping_version != EXPECTED_BALL_POSITION_MAPPING_VERSION:
+    print(
+        "ball_position.py mapping version mismatch:",
+        actual_mapping_version,
+        "expected:",
+        EXPECTED_BALL_POSITION_MAPPING_VERSION,
+    )
+    print("replace /sdcard/ball_position.py, then power-cycle K230")
+    raise RuntimeError("stale ball_position.py")
+
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
 DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
-DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+DISPLAY_MODE = "ide"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
 IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
@@ -72,7 +87,7 @@ GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop j
 OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
 
 # K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
-VIDEO_AP_ENABLE = True
+VIDEO_AP_ENABLE = False
 VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
 VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
 VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
@@ -254,7 +269,13 @@ def _draw_overlay(
                 osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
                 marker_centers.append((x + width // 2, y + height // 2))
                 marker_rects.append((x, y, width, height))
-            marker_labels = ("+50", "0", "-50", "-100")
+            marker_labels = []
+            for marker_value_mm in calibration.marker_values_mm:
+                marker_value_int = int(round(marker_value_mm))
+                if marker_value_int > 0:
+                    marker_labels.append("+" + str(marker_value_int))
+                else:
+                    marker_labels.append(str(marker_value_int))
             ordered_markers = sorted(
                 zip(marker_centers, marker_rects),
                 key=lambda item: item[0][0],

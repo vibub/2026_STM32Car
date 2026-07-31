@@ -110,9 +110,16 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOF_CLK_ENABLE();
 
-    HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN,
+    /*
+     * Keep the motor bridge inputs low from the first GPIO setup.  TIM2 later
+     * changes PA0/PA2 to alternate function, but its PWM channels are not
+     * started until MotorDriver_Set() receives a non-zero command.
+     */
+    HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN |
+                      MOTOR_RIGHT_PWM_PIN | MOTOR_LEFT_PWM_PIN,
                       GPIO_PIN_RESET);
-    gpio.Pin = MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN;
+    gpio.Pin = MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN |
+               MOTOR_RIGHT_PWM_PIN | MOTOR_LEFT_PWM_PIN;
     gpio.Mode = GPIO_MODE_OUTPUT_PP;
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_LOW;

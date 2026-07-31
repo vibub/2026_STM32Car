@@ -2,6 +2,7 @@
 
 IMAGE_WIDTH = 640
 IMAGE_HEIGHT = 360
+BALL_POSITION_MAPPING_VERSION = 2
 
 # 红色记号笔的 LAB 初值。无需识别数字，只识别上下成对的红色短线。
 # LAB 顺序为 (L_min, L_max, A_min, A_max, B_min, B_max)。
@@ -282,10 +283,8 @@ class MarkerScaleCalibration:
         scales = []
         for index in range(len(pixels) - 1):
             interval_mm = self.marker_values_mm[index + 1] - self.marker_values_mm[index]
-            # Pixel density is a magnitude.  The installed ruler runs from
-            # +50 mm to -100 mm left-to-right, so interval_mm is negative;
-            # preserving that sign reverses the target ROI boundaries and
-            # collapses the allowed region to one pixel.
+            # Pixel density is a magnitude even if a future installation
+            # reverses the ruler direction.
             scales.append(abs((pixels[index + 1] - pixels[index]) / interval_mm))
         return _median(scales)
 
@@ -635,12 +634,12 @@ def _build_single_row_calibration(columns, image_width):
         return None
     if not _marker_line_is_valid(columns):
         return None
-    zero_index = 1
+    zero_index = 2
     marker_values_mm = [
-        MARKER_INTERVAL_MM,
-        0.0,
-        -MARKER_INTERVAL_MM,
         -2.0 * MARKER_INTERVAL_MM,
+        -MARKER_INTERVAL_MM,
+        0.0,
+        MARKER_INTERVAL_MM,
     ]
     estimated_zero_x = columns[zero_index].center_x
 
@@ -679,7 +678,7 @@ def _build_single_row_calibration(columns, image_width):
 
 
 def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE_HEIGHT):
-    """Build calibration from fixed zero-first single-row marker blobs."""
+    """Build calibration from fixed-spacing single-row marker blobs."""
     del image_height
     candidates = [
         SingleRowMarker(blob, rect)

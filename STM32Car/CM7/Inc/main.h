@@ -9,9 +9,13 @@ extern "C" {
 
 #define MOTOR_RIGHT_DIR_PORT GPIOA         /* 右电机方向控制 GPIO 端口。 */
 #define MOTOR_RIGHT_DIR_PIN  GPIO_PIN_1    /* 右电机方向控制引脚 PA1。 */
+#define MOTOR_RIGHT_PWM_PORT GPIOA         /* 右电机 PWM 输出端口。 */
+#define MOTOR_RIGHT_PWM_PIN  GPIO_PIN_0    /* 右电机 PWM 输出引脚 PA0。 */
 #define MOTOR_RIGHT_CHANNEL  TIM_CHANNEL_1 /* 右电机 PWM 使用 TIM2 通道 1。 */
 #define MOTOR_LEFT_DIR_PORT  GPIOA         /* 左电机方向控制 GPIO 端口。 */
 #define MOTOR_LEFT_DIR_PIN   GPIO_PIN_3    /* 左电机方向控制引脚 PA3。 */
+#define MOTOR_LEFT_PWM_PORT  GPIOA         /* 左电机 PWM 输出端口。 */
+#define MOTOR_LEFT_PWM_PIN   GPIO_PIN_2    /* 左电机 PWM 输出引脚 PA2。 */
 #define MOTOR_LEFT_CHANNEL   TIM_CHANNEL_3 /* 左电机 PWM 使用 TIM2 通道 3。 */
 
 /* 270°位置舵机 PWM：TIM4_CH4，PD15，输出频率 50 Hz。 */

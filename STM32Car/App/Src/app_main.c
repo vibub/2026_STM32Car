@@ -144,6 +144,7 @@ volatile float g_app_motion_command_speed_cm_s;
 volatile float g_app_motion_command_accel_cm_s2;
 volatile float g_app_motion_travelled_distance_cm;
 volatile uint8_t g_app_dynamic_run_state;
+volatile uint8_t g_app_dynamic_run_failure;
 volatile uint8_t g_app_ball_limit_warning;
 volatile uint32_t g_app_ball_limit_warning_count;
 volatile uint32_t g_app_k230_overflow_count;
@@ -202,7 +203,8 @@ static uint8_t s_ball_limit_warning;
 static uint8_t s_ball_limit_clear_count;
 
 static void App_DynamicRunTask(uint32_t now_ms);
-static void App_DynamicRunFail(uint32_t now_ms);
+static void App_DynamicRunFail(uint32_t now_ms,
+                               AppDynamicRunFailure failure);
 
 #define APP_LINE_SENSOR_FAILURE_LIMIT       3U    /* 红外 I2C 连续读取失败后停车的次数门槛。 */
 #define APP_BALL_SHUTTLE_POSITIVE_TARGET_MM 50.0f /* 第三题第一阶段的正向目标位置。 */
@@ -891,20 +893,55 @@ static void App_UpdateBallLimitWarning(void)
     }
 }
 
-static void App_DynamicRunFail(uint32_t now_ms)
+static void App_DynamicRunFail(uint32_t now_ms,
+                               AppDynamicRunFailure failure)
 {
     uint8_t was_ab;
+    Tjc_StatusText failure_status;
 
     if (App_DynamicRunIsActive() == 0U) {
         return;
     }
     was_ab = App_DynamicRunIsAb();
+    g_app_dynamic_run_failure = (uint8_t) failure;
+    switch (failure) {
+        case APP_DYNAMIC_FAILURE_IMU:
+            failure_status = TJC_STATUS_RUN_FAILED_IMU;
+            break;
+        case APP_DYNAMIC_FAILURE_MAPPING:
+            failure_status = TJC_STATUS_RUN_FAILED_MAPPING;
+            break;
+        case APP_DYNAMIC_FAILURE_PREPARE_TIMEOUT:
+            failure_status = TJC_STATUS_RUN_FAILED_READY;
+            break;
+        case APP_DYNAMIC_FAILURE_MOTION_START:
+            failure_status = TJC_STATUS_RUN_FAILED_MOTION;
+            break;
+        case APP_DYNAMIC_FAILURE_BALANCE_DISABLED:
+            failure_status = TJC_STATUS_RUN_FAILED_BALANCE;
+            break;
+        case APP_DYNAMIC_FAILURE_VISION:
+            failure_status = TJC_STATUS_RUN_FAILED_VISION;
+            break;
+        case APP_DYNAMIC_FAILURE_LINE_SENSOR:
+            failure_status = TJC_STATUS_RUN_FAILED_SENSOR;
+            break;
+        case APP_DYNAMIC_FAILURE_LINE_LOST:
+            failure_status = TJC_STATUS_RUN_FAILED_LINE;
+            break;
+        case APP_DYNAMIC_FAILURE_MOTOR:
+            failure_status = TJC_STATUS_RUN_FAILED_MOTOR;
+            break;
+        default:
+            failure_status = was_ab ? TJC_STATUS_AB_FAILED :
+                                      TJC_STATUS_ABCD_FAILED;
+            break;
+    }
     s_dynamic_run_state = APP_DYNAMIC_RUN_FAILED;
     App_EnterStopMode(now_ms);
     BallBalanceControl_SetTransportMode(&s_ball_balance_control, 0U);
     BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U, now_ms);
-    App_QueueTjcStatus(was_ab ? TJC_STATUS_AB_FAILED :
-                                TJC_STATUS_ABCD_FAILED);
+    App_QueueTjcStatus(failure_status);
     App_UpdateChassisMotionDebug();
 }
 
@@ -936,11 +973,18 @@ static void App_DynamicRunTask(uint32_t now_ms)
     App_UpdateBallLimitWarning();
     if ((s_dynamic_run_state == APP_DYNAMIC_RUN_AB_PREPARING) ||
         (s_dynamic_run_state == APP_DYNAMIC_RUN_ABCD_PREPARING)) {
-        if ((s_ball_balance_output.imu_fault != 0U) ||
-            (s_ball_balance_output.mapping_fault != 0U) ||
-            ((uint32_t) (now_ms - s_dynamic_prepare_since_ms) >
-             APP_DYNAMIC_PREPARE_TIMEOUT_MS)) {
-            App_DynamicRunFail(now_ms);
+        if (s_ball_balance_output.imu_fault != 0U) {
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_IMU);
+            return;
+        }
+        if (s_ball_balance_output.mapping_fault != 0U) {
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_MAPPING);
+            return;
+        }
+        if ((uint32_t) (now_ms - s_dynamic_prepare_since_ms) >
+            APP_DYNAMIC_PREPARE_TIMEOUT_MS) {
+            App_DynamicRunFail(now_ms,
+                               APP_DYNAMIC_FAILURE_PREPARE_TIMEOUT);
             return;
         }
         if ((s_ball_balance_output.enabled == 0U) ||
@@ -962,7 +1006,8 @@ static void App_DynamicRunTask(uint32_t now_ms)
                                      motion_config,
                                      lap_stop_enabled,
                                      app_mode) == 0U) {
-            App_DynamicRunFail(now_ms);
+            App_DynamicRunFail(now_ms,
+                               APP_DYNAMIC_FAILURE_MOTION_START);
             return;
         }
         if (app_mode == APP_MODE_AB) {
@@ -980,12 +1025,22 @@ static void App_DynamicRunTask(uint32_t now_ms)
         (s_dynamic_run_state == APP_DYNAMIC_RUN_ABCD_RUNNING) ||
         (s_dynamic_run_state == APP_DYNAMIC_RUN_AB_BRAKING) ||
         (s_dynamic_run_state == APP_DYNAMIC_RUN_ABCD_BRAKING)) {
-        if ((s_ball_balance_output.enabled == 0U) ||
-            (s_ball_balance_output.tracking_valid == 0U) ||
-            (s_ball_balance_output.timed_out != 0U) ||
-            (s_ball_balance_output.imu_fault != 0U) ||
-            (s_ball_balance_output.mapping_fault != 0U)) {
-            App_DynamicRunFail(now_ms);
+        if (s_ball_balance_output.enabled == 0U) {
+            App_DynamicRunFail(now_ms,
+                               APP_DYNAMIC_FAILURE_BALANCE_DISABLED);
+            return;
+        }
+        if ((s_ball_balance_output.tracking_valid == 0U) ||
+            (s_ball_balance_output.timed_out != 0U)) {
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_VISION);
+            return;
+        }
+        if (s_ball_balance_output.imu_fault != 0U) {
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_IMU);
+            return;
+        }
+        if (s_ball_balance_output.mapping_fault != 0U) {
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_MAPPING);
             return;
         }
     }
@@ -1064,7 +1119,8 @@ static void App_ControlStep(uint32_t now_ms)
         g_app_line_correction_cm_s = 0.0f;
         g_app_motor_fault = 0U;
         if (App_DynamicRunIsActive() != 0U) {
-            App_DynamicRunFail(now_ms);
+            App_DynamicRunFail(now_ms,
+                               APP_DYNAMIC_FAILURE_LINE_SENSOR);
         } else {
             App_StopClosedLoop();
         }
@@ -1119,7 +1175,8 @@ static void App_ControlStep(uint32_t now_ms)
     if ((s_line_enabled == 0U) || (line_output.command_valid == 0U)) {
         if ((s_line_enabled != 0U) &&
             (App_DynamicRunIsDriving() != 0U)) {
-            App_DynamicRunFail(now_ms);
+            App_DynamicRunFail(now_ms,
+                               APP_DYNAMIC_FAILURE_LINE_LOST);
         } else {
             App_StopClosedLoop();
         }
@@ -1139,7 +1196,7 @@ static void App_ControlStep(uint32_t now_ms)
         (WheelSpeedPid_HasFault(&s_right_speed_pid) != 0U)) {
         g_app_motor_fault = 1U;
         if (App_DynamicRunIsDriving() != 0U) {
-            App_DynamicRunFail(now_ms);
+            App_DynamicRunFail(now_ms, APP_DYNAMIC_FAILURE_MOTOR);
         } else {
             App_StopClosedLoop();
         }
@@ -1211,6 +1268,7 @@ void App_Init(void)
     s_ball_limit_warning = 0U;
     s_ball_limit_clear_count = 0U;
     g_app_dynamic_run_state = (uint8_t) APP_DYNAMIC_RUN_IDLE;
+    g_app_dynamic_run_failure = (uint8_t) APP_DYNAMIC_FAILURE_NONE;
     g_app_ball_limit_warning = 0U;
     g_app_ball_limit_warning_count = 0U;
     s_tjc_status_pending = 0U;
@@ -1355,6 +1413,7 @@ static uint8_t App_StartDynamicRun(AppDynamicRunState preparing_state,
     }
 
     App_SetBallLimitWarning(0U);
+    g_app_dynamic_run_failure = (uint8_t) APP_DYNAMIC_FAILURE_NONE;
     s_dynamic_run_state = preparing_state;
     s_dynamic_prepare_since_ms = now_ms;
     s_current_mode = app_mode;

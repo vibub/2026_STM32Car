@@ -95,7 +95,7 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM2) {
         __HAL_RCC_TIM2_CLK_ENABLE();
         __HAL_RCC_GPIOA_CLK_ENABLE();
-        gpio.Pin = GPIO_PIN_0 | GPIO_PIN_2;
+        gpio.Pin = MOTOR_RIGHT_PWM_PIN | MOTOR_LEFT_PWM_PIN;
         gpio.Mode = GPIO_MODE_AF_PP;
         gpio.Pull = GPIO_NOPULL;
         gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;

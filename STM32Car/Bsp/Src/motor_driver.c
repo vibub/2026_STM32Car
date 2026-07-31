@@ -5,6 +5,55 @@
 
 static float s_left_ratio;
 static float s_right_ratio;
+static uint8_t s_pwm_outputs_enabled;
+
+static void MotorDriver_LockPwmOutputs(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    __HAL_TIM_SET_COMPARE(&htim2, MOTOR_LEFT_CHANNEL, 0U);
+    __HAL_TIM_SET_COMPARE(&htim2, MOTOR_RIGHT_CHANNEL, 0U);
+    (void) HAL_TIM_PWM_Stop(&htim2, MOTOR_RIGHT_CHANNEL);
+    (void) HAL_TIM_PWM_Stop(&htim2, MOTOR_LEFT_CHANNEL);
+
+    HAL_GPIO_WritePin(MOTOR_RIGHT_PWM_PORT, MOTOR_RIGHT_PWM_PIN,
+                      GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(MOTOR_LEFT_PWM_PORT, MOTOR_LEFT_PWM_PIN,
+                      GPIO_PIN_RESET);
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    gpio.Pin = MOTOR_RIGHT_PWM_PIN;
+    HAL_GPIO_Init(MOTOR_RIGHT_PWM_PORT, &gpio);
+    gpio.Pin = MOTOR_LEFT_PWM_PIN;
+    HAL_GPIO_Init(MOTOR_LEFT_PWM_PORT, &gpio);
+    s_pwm_outputs_enabled = 0U;
+}
+
+static void MotorDriver_EnablePwmOutputs(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    if (s_pwm_outputs_enabled != 0U) {
+        return;
+    }
+
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    gpio.Alternate = GPIO_AF1_TIM2;
+    gpio.Pin = MOTOR_RIGHT_PWM_PIN;
+    HAL_GPIO_Init(MOTOR_RIGHT_PWM_PORT, &gpio);
+    gpio.Pin = MOTOR_LEFT_PWM_PIN;
+    HAL_GPIO_Init(MOTOR_LEFT_PWM_PORT, &gpio);
+    if (HAL_TIM_PWM_Start(&htim2, MOTOR_RIGHT_CHANNEL) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_TIM_PWM_Start(&htim2, MOTOR_LEFT_CHANNEL) != HAL_OK) {
+        Error_Handler();
+    }
+    s_pwm_outputs_enabled = 1U;
+}
 
 static float MotorDriver_Limit(float ratio)
 {
@@ -44,20 +93,27 @@ static void MotorDriver_SetOne(float ratio, uint32_t channel,
 
 void MotorDriver_Init(void)
 {
-    MotorDriver_Stop();
-    if (HAL_TIM_PWM_Start(&htim2, MOTOR_RIGHT_CHANNEL) != HAL_OK) {
-        Error_Handler();
-    }
-    if (HAL_TIM_PWM_Start(&htim2, MOTOR_LEFT_CHANNEL) != HAL_OK) {
-        Error_Handler();
-    }
-    MotorDriver_Stop();
+    s_left_ratio = 0.0f;
+    s_right_ratio = 0.0f;
+    HAL_GPIO_WritePin(MOTOR_LEFT_DIR_PORT, MOTOR_LEFT_DIR_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(MOTOR_RIGHT_DIR_PORT, MOTOR_RIGHT_DIR_PIN, GPIO_PIN_RESET);
+    /*
+     * TIM2 is configured by MX_TIM2_Init() before this function runs.  Do not
+     * merely leave its compare registers at zero: actively detach PA0/PA2
+     * from TIM2 and drive both PWM pins low until a motion command arrives.
+     */
+    MotorDriver_LockPwmOutputs();
 }
 
 void MotorDriver_Set(float left_ratio, float right_ratio)
 {
     s_left_ratio = MotorDriver_Limit(left_ratio);
     s_right_ratio = MotorDriver_Limit(right_ratio);
+    if ((s_left_ratio == 0.0f) && (s_right_ratio == 0.0f)) {
+        MotorDriver_Stop();
+        return;
+    }
+    MotorDriver_EnablePwmOutputs();
     MotorDriver_SetOne(s_left_ratio, MOTOR_LEFT_CHANNEL,
                        MOTOR_LEFT_DIR_PORT, MOTOR_LEFT_DIR_PIN);
     MotorDriver_SetOne(s_right_ratio, MOTOR_RIGHT_CHANNEL,
@@ -72,6 +128,9 @@ void MotorDriver_Stop(void)
     __HAL_TIM_SET_COMPARE(&htim2, MOTOR_RIGHT_CHANNEL, 0U);
     HAL_GPIO_WritePin(MOTOR_LEFT_DIR_PORT, MOTOR_LEFT_DIR_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(MOTOR_RIGHT_DIR_PORT, MOTOR_RIGHT_DIR_PIN, GPIO_PIN_RESET);
+    if (s_pwm_outputs_enabled != 0U) {
+        MotorDriver_LockPwmOutputs();
+    }
 }
 
 float MotorDriver_GetLeftRatio(void)

@@ -135,6 +135,15 @@ static const uint8_t s_text_abcd_preparing[] = "ABCD PREPARING";
 static const uint8_t s_text_abcd_running[] = "ABCD RUNNING";
 static const uint8_t s_text_abcd_passed[] = "ABCD PASSED";
 static const uint8_t s_text_abcd_failed[] = "ABCD FAILED";
+static const uint8_t s_text_run_failed_imu[] = "FAIL IMU";
+static const uint8_t s_text_run_failed_mapping[] = "FAIL MAP";
+static const uint8_t s_text_run_failed_ready[] = "FAIL READY";
+static const uint8_t s_text_run_failed_motion[] = "FAIL PROFILE";
+static const uint8_t s_text_run_failed_balance[] = "FAIL BALANCE";
+static const uint8_t s_text_run_failed_vision[] = "FAIL VISION";
+static const uint8_t s_text_run_failed_sensor[] = "FAIL SENSOR";
+static const uint8_t s_text_run_failed_line[] = "FAIL LINE";
+static const uint8_t s_text_run_failed_motor[] = "FAIL MOTOR";
 
 static const uint8_t s_tjc_command_suffix[] = {0xFFU, 0xFFU, 0xFFU};
 static const uint8_t s_tjc_warning_circle_100[] =
@@ -411,6 +420,42 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
         case TJC_STATUS_ABCD_FAILED:
             text = s_text_abcd_failed;
             text_length = (uint16_t) (sizeof(s_text_abcd_failed) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_IMU:
+            text = s_text_run_failed_imu;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_imu) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_MAPPING:
+            text = s_text_run_failed_mapping;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_mapping) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_READY:
+            text = s_text_run_failed_ready;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_ready) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_MOTION:
+            text = s_text_run_failed_motion;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_motion) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_BALANCE:
+            text = s_text_run_failed_balance;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_balance) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_VISION:
+            text = s_text_run_failed_vision;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_vision) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_SENSOR:
+            text = s_text_run_failed_sensor;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_sensor) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_LINE:
+            text = s_text_run_failed_line;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_line) - 1U);
+            break;
+        case TJC_STATUS_RUN_FAILED_MOTOR:
+            text = s_text_run_failed_motor;
+            text_length = (uint16_t) (sizeof(s_text_run_failed_motor) - 1U);
             break;
         default:
             break;

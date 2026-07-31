@@ -387,7 +387,9 @@ static void test_linkage_kinematics(void)
     uint8_t index;
 
     assert_float_near_tolerance(
-        LinkageKinematics_GetNominalServoCenterDeg(), 122.0f, 0.0002f);
+        LinkageKinematics_GetNominalServoCenterDeg(),
+        122.0f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+        0.0002f);
     for (index = 0U; index < 13U; index++) {
         pitch_deg = (int8_t) index - 6;
         assert(LinkageKinematics_PipePitchToHornAngle(
@@ -395,7 +397,8 @@ static void test_linkage_kinematics(void)
         assert(LinkageKinematics_PipePitchToServoAngle(
                    (float) pitch_deg, &servo_angle_deg) != 0U);
         assert_float_near_tolerance(servo_angle_deg,
-                                    expected_servo_angles[index],
+                                    expected_servo_angles[index] +
+                                    LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
                                     0.002f);
         assert(LinkageKinematics_ServoAngleToPipePitch(
                    servo_angle_deg, &recovered_pitch_deg) != 0U);
@@ -405,16 +408,23 @@ static void test_linkage_kinematics(void)
     }
     assert(LinkageKinematics_PipePitchToServoAngle(
                -10.0f, &servo_angle_deg) != 0U);
-    assert_float_near_tolerance(servo_angle_deg, 86.0168f, 0.002f);
+    assert_float_near_tolerance(
+        servo_angle_deg,
+        86.0168f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+        0.002f);
     assert(LinkageKinematics_PipePitchToServoAngle(
                6.8f, &servo_angle_deg) != 0U);
-    assert_float_near_tolerance(servo_angle_deg, 178.7746f, 0.002f);
+    assert_float_near_tolerance(
+        servo_angle_deg,
+        178.7746f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+        0.002f);
     assert(LinkageKinematics_PipePitchToServoAngle(-10.1f,
                                                     &servo_angle_deg) == 0U);
     assert(LinkageKinematics_PipePitchToServoAngle(6.9f,
                                                     &servo_angle_deg) == 0U);
     assert(LinkageKinematics_ServoAngleToPipePitch(
-               90.0f, &recovered_pitch_deg) != 0U);
+               90.0f + LINKAGE_KINEMATICS_SERVO_LEVEL_TRIM_DEG,
+               &recovered_pitch_deg) != 0U);
     assert_float_near_tolerance(recovered_pitch_deg,
                                 -8.4121f,
                                 0.002f);

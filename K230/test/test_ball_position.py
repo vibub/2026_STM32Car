@@ -10,6 +10,7 @@ if str(K230_DIR) not in sys.path:
     sys.path.insert(0, str(K230_DIR))
 
 from ball_position import (  # noqa: E402
+    BALL_POSITION_MAPPING_VERSION,
     BallPositionDetector,
     SCALE_THRESHOLDS,
     scale_detection_box,
@@ -31,6 +32,9 @@ class FakeBlob:
         return self._pixels
 
 class BallPositionOptimizationTest(unittest.TestCase):
+    def test_ball_position_mapping_version(self):
+        self.assertEqual(BALL_POSITION_MAPPING_VERSION, 2)
+
     def test_anchor_detection_is_converted_to_xywh(self):
         detection = select_best_anchor_box([
             [0, 0.82, 40, 50, 70, 78],
@@ -192,13 +196,14 @@ class BallPositionOptimizationTest(unittest.TestCase):
         calibration = select_marker_calibration(blobs)
         centers = [column.center_x for column in calibration.marker_columns]
 
-        self.assertEqual(calibration.marker_values_mm, [50.0, 0.0, -50.0, -100.0])
-        self.assertAlmostEqual(calibration.pixel_to_mm(centers[0]), 50.0)
-        self.assertAlmostEqual(calibration.pixel_to_mm(centers[1]), 0.0)
-        self.assertAlmostEqual(calibration.pixel_to_mm(centers[2]), -50.0)
-        self.assertAlmostEqual(calibration.pixel_to_mm(centers[3]), -100.0)
+        self.assertEqual(calibration.zero_index, 2)
+        self.assertEqual(calibration.marker_values_mm, [-100.0, -50.0, 0.0, 50.0])
+        self.assertAlmostEqual(calibration.pixel_to_mm(centers[0]), -100.0)
+        self.assertAlmostEqual(calibration.pixel_to_mm(centers[1]), -50.0)
+        self.assertAlmostEqual(calibration.pixel_to_mm(centers[2]), 0.0)
+        self.assertAlmostEqual(calibration.pixel_to_mm(centers[3]), 50.0)
 
-    def test_descending_marker_values_produce_a_nonempty_target_roi(self):
+    def test_ascending_marker_values_produce_a_nonempty_target_roi(self):
         blobs = [
             FakeBlob((100, 184, 4, 12), pixels=16),
             FakeBlob((250, 184, 4, 12), pixels=16),
@@ -210,9 +215,11 @@ class BallPositionOptimizationTest(unittest.TestCase):
         left, top, width, height = calibration.target_roi(640, 360)
 
         self.assertGreater(calibration.pixels_per_mm(), 0.0)
-        self.assertGreater(width, 500)
+        self.assertGreater(width, 550)
         self.assertEqual((top, height), (0, 360))
-        self.assertLessEqual(left, 1)
+        self.assertGreater(left, 50)
+        self.assertLess(left, 80)
+        self.assertEqual(left + width, 640)
 
     def test_scale_thresholds_include_pale_red_markers(self):
         self.assertIn((24, 100, 8, 127, -10, 127), SCALE_THRESHOLDS)
