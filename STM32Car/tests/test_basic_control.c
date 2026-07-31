@@ -290,10 +290,25 @@ static void test_lap_stop_detector(void)
     LapStopDetector detector;
 
     LapStopDetector_Init(&detector);
+
+    /* 上电位于 A 点横线时不得直接认为已经驶离起点。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
+    assert(detector.left_start_line == 0U);
+    assert(detector.leave_clear_count == 0U);
+
+    /* 驶离条件必须来自连续有效样本，无效 I2C 采样会清零确认计数。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x03U) == 0U);
+    assert(detector.leave_clear_count == 1U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0x03U) == 0U);
+    assert(detector.leave_clear_count == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x03U) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x01U) == 0U);
+    assert(detector.left_start_line != 0U);
+
+    /* 未达到 400 cm 时，即使再次出现横线也不能触发返程完成。 */
     assert(LapStopDetector_Update(&detector, 399.0f, 1U, 0xFFU) == 0U);
     assert(detector.armed == 0U);
     assert(detector.full_black_count == 0U);
-
     assert(LapStopDetector_Update(&detector, -10.0f, 1U, 0xFFU) == 0U);
     assert_float_near(detector.distance_cm, 399.0f);
 
@@ -313,7 +328,7 @@ static void test_lap_stop_detector(void)
     assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0x0FU) == 0U);
     assert(detector.full_black_count == 0U);
 
-    /* 4 路和 8 路黑线均满足门槛，连续两帧后完成停车。 */
+    /* 4 路和 8 路黑线均满足门槛，连续两帧后确认返程通过 A 点。 */
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) != 0U);
     assert(detector.completed != 0U);
@@ -323,6 +338,8 @@ static void test_lap_stop_detector(void)
 
     LapStopDetector_Init(&detector);
     assert_float_near(detector.distance_cm, 0.0f);
+    assert(detector.left_start_line == 0U);
+    assert(detector.leave_clear_count == 0U);
     assert(detector.armed == 0U);
     assert(detector.full_black_count == 0U);
     assert(detector.completed == 0U);

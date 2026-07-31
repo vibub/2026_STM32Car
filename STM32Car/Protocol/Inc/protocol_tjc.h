@@ -65,7 +65,13 @@ typedef enum {
     TJC_STATUS_RUN_FAILED_VISION,
     TJC_STATUS_RUN_FAILED_SENSOR,
     TJC_STATUS_RUN_FAILED_LINE,
-    TJC_STATUS_RUN_FAILED_MOTOR
+    TJC_STATUS_RUN_FAILED_MOTOR,
+    TJC_STATUS_RUN_COMMAND_LOCKED,
+    TJC_STATUS_RUN_REJECT_STOP,
+    TJC_STATUS_RUN_REJECT_CALIBRATING,
+    TJC_STATUS_RUN_REJECT_CALIBRATION,
+    TJC_STATUS_RUN_REJECT_BUSY,
+    TJC_STATUS_RUN_REJECT_BALANCE
 } Tjc_StatusText;
 
 extern volatile uint32_t g_tjc_rx_byte_count;
@@ -85,6 +91,10 @@ void Protocol_Tjc_SendResult(Tjc_Result result,
                              uint8_t current_mode,
                              uint8_t request);
 void Protocol_Tjc_SendStatusText(Tjc_StatusText status);
+void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
+                                       uint8_t run_result,
+                                       uint32_t elapsed_ms,
+                                       float maximum_abs_error_mm);
 void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
                                        uint8_t point_count);
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
