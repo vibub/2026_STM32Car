@@ -26,13 +26,15 @@ MARKER_MIN_WIDTH = 1
 MARKER_MAX_WIDTH = 36
 MARKER_MIN_HEIGHT = 2
 MARKER_MAX_HEIGHT = 52
-MARKER_MAX_WIDTH_HEIGHT_RATIO = 2.4
+MARKER_MAX_WIDTH_HEIGHT_RATIO = 1.15
 MARKER_MIN_ROW_GAP_PX = 24
 MARKER_MAX_ROW_GAP_PX = 180
 MARKER_MAX_PAIR_X_ERROR_PX = 18
 MARKER_MAX_ROW_Y_SPREAD_PX = 38
 MARKER_MIN_SPACING_PX = 45
-MARKER_MAX_SPACING_ERROR_RATIO = 0.32
+MARKER_MAX_SPACING_ERROR_RATIO = 0.18
+MARKER_MAX_LINE_SLOPE = 0.08
+MARKER_MAX_LINE_ERROR_PX = 4.0
 SCALE_MIN_SPAN_RATIO = 0.52
 SCALE_MAX_HEIGHT_RATIO = 0.30
 SCALE_MIN_ASPECT = 4.0
@@ -50,6 +52,7 @@ SCALE_REFRESH_FRAMES = 10
 SCALE_HOLD_FRAMES = 30
 SCALE_TRACK_ROI_PAD_X = 36
 SCALE_TRACK_ROI_PAD_Y = 28
+SCALE_MAX_MARKER_DRIFT_PX = 10
 
 # 样图刻度为 -12 cm 到 +12 cm；内部统一使用 mm。
 SCALE_MIN_MM = -120.0
@@ -68,9 +71,11 @@ TARGET_MIN_BLOB_AREA = 36
 TARGET_MERGE_MARGIN = 5
 TARGET_MIN_DIAMETER_PX = 7
 TARGET_MAX_DIAMETER_PX = 110
-TARGET_MAX_ASPECT_ERROR = 0.44
+TARGET_MAX_ASPECT_ERROR = 0.30
 TARGET_MAX_TRACK_JUMP_PX = 110
 TARGET_ROI_INSET_PX = 2
+TARGET_MIN_EXPECTED_DIAMETER_RATIO = 0.55
+TARGET_MAX_EXPECTED_DIAMETER_RATIO = 1.65
 
 
 def _clip(value, minimum, maximum):
@@ -268,7 +273,11 @@ class MarkerScaleCalibration:
         scales = []
         for index in range(len(pixels) - 1):
             interval_mm = self.marker_values_mm[index + 1] - self.marker_values_mm[index]
-            scales.append((pixels[index + 1] - pixels[index]) / interval_mm)
+            # Pixel density is a magnitude.  The installed ruler runs from
+            # +50 mm to -100 mm left-to-right, so interval_mm is negative;
+            # preserving that sign reverses the target ROI boundaries and
+            # collapses the allowed region to one pixel.
+            scales.append(abs((pixels[index + 1] - pixels[index]) / interval_mm))
         return _median(scales)
 
     def _pixel_at_mm(self, value_mm, pixel_y=None):
@@ -390,6 +399,8 @@ def _candidate_grid_from_zero(row_candidates, zero_marker):
         return [], 0.0
 
     picked.sort(key=lambda candidate: candidate.center_x)
+    if not _marker_line_is_valid(picked):
+        return [], 0.0
     average_spacing_error = sum(spacing_errors) / float(len(spacing_errors))
     line_error = _line_fit_error(picked)
     span = picked[-1].center_x - picked[0].center_x
@@ -423,6 +434,17 @@ def _line_fit_error(columns):
     )
 
 
+def _marker_line_is_valid(columns):
+    """Require marker centers to form one nearly horizontal straight line."""
+    if len(columns) < 3:
+        return False
+    slope, _ = _line_fit_params(columns)
+    return (
+        abs(slope) <= MARKER_MAX_LINE_SLOPE
+        and _line_fit_error(columns) <= MARKER_MAX_LINE_ERROR_PX
+    )
+
+
 def _score_four_marker_columns(columns, image_width):
     if len(columns) != MARKER_TARGET_COLUMNS:
         return None
@@ -435,9 +457,9 @@ def _score_four_marker_columns(columns, image_width):
     if spacing_error / median_spacing > MARKER_MAX_SPACING_ERROR_RATIO:
         return None
 
-    line_error = _line_fit_error(columns)
-    if line_error > 8.0:
+    if not _marker_line_is_valid(columns):
         return None
+    line_error = _line_fit_error(columns)
 
     zero_index = min(
         range(len(columns)),
@@ -496,6 +518,8 @@ def _line_fit_params(columns):
 
 def _project_four_from_three(columns, visible_steps, image_width):
     columns = sorted(columns, key=lambda candidate: candidate.center_x)
+    if not _marker_line_is_valid(columns):
+        return []
     visible_steps = list(visible_steps)
     spacings = []
     for first in range(len(columns) - 1):
@@ -599,6 +623,8 @@ def _build_single_row_calibration(columns, image_width):
         return None
 
     if len(columns) != MARKER_TARGET_COLUMNS:
+        return None
+    if not _marker_line_is_valid(columns):
         return None
     zero_index = 1
     marker_values_mm = [
@@ -1009,6 +1035,11 @@ def select_ball_blob(blobs, previous_center_x=None, expected_diameter_px=24.0):
         aspect_error = abs(width - height) / float(max(width, height))
         if aspect_error > TARGET_MAX_ASPECT_ERROR:
             continue
+        if (
+            diameter < expected_diameter_px * TARGET_MIN_EXPECTED_DIAMETER_RATIO
+            or diameter > expected_diameter_px * TARGET_MAX_EXPECTED_DIAMETER_RATIO
+        ):
+            continue
 
         center_x = x + width * 0.5
         center_y = y + height * 0.5
@@ -1075,6 +1106,102 @@ def select_best_yolo_box(yolo_result, previous_center_x=None):
     return best
 
 
+def select_best_anchor_box(detections, previous_center_x=None):
+    """Normalize old and new DetectionApp AnchorBaseDet result formats."""
+    if not detections:
+        return None
+
+    # CanMV v1.8 may expose the result as a dict-like native object whose
+    # concrete type is not MicroPython's built-in ``dict``.
+    if hasattr(detections, "get"):
+        boxes = detections.get("boxes")
+        if boxes is None:
+            boxes = detections.get("bboxes")
+        scores = detections.get("scores")
+        if scores is None:
+            scores = detections.get("confidences")
+        classes = detections.get("class_ids")
+        if classes is None:
+            classes = detections.get("classes")
+        if classes is None:
+            classes = detections.get("labels")
+        if classes is None:
+            classes = detections.get("idx")
+        if boxes is None or scores is None:
+            detections = [detections]
+        else:
+            normalized = []
+            count = min(len(boxes), len(scores))
+            for index in range(count):
+                box = boxes[index]
+                if len(box) < 4:
+                    continue
+                class_id = 0 if classes is None else classes[index]
+                normalized.append([
+                    class_id,
+                    scores[index],
+                    box[0],
+                    box[1],
+                    box[2],
+                    box[3],
+                ])
+            detections = normalized
+
+    best = None
+    best_score = None
+    for item in detections:
+        if hasattr(item, "get"):
+            class_id = item.get("class_id", item.get("class", item.get("label", 0)))
+            confidence = item.get("score", item.get("confidence", 0.0))
+            x1 = item.get("x1")
+            y1 = item.get("y1")
+            x2 = item.get("x2")
+            y2 = item.get("y2")
+            if None in (x1, y1, x2, y2):
+                continue
+        else:
+            if not hasattr(item, "__len__") or len(item) < 6:
+                continue
+            class_id = item[0]
+            confidence = item[1]
+            x1, y1, x2, y2 = item[2], item[3], item[4], item[5]
+
+        if isinstance(class_id, str):
+            if class_id.lower() not in ("0", "ball", "steel_ball"):
+                continue
+        else:
+            try:
+                if int(class_id) != 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+        confidence = float(confidence)
+        x1 = float(x1)
+        y1 = float(y1)
+        x2 = float(x2)
+        y2 = float(y2)
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0.0 or height <= 0.0:
+            continue
+        center_x = (x1 + x2) * 0.5
+        continuity_penalty = 0.0
+        if previous_center_x is not None:
+            continuity_penalty = abs(center_x - float(previous_center_x)) * 0.0008
+        score = confidence - continuity_penalty
+        if best_score is None or score > best_score:
+            best = (
+                int(round(x1)),
+                int(round(y1)),
+                int(round(width)),
+                int(round(height)),
+                confidence,
+            )
+            best_score = score
+    return best
+
+
 class BallPositionDetector:
     """先锁定双排刻度，再检测圆环/钢珠并输出相对位置。"""
 
@@ -1127,6 +1254,25 @@ class BallPositionDetector:
         detected = detect_scale_calibration(img, search_roi)
         if detected is None and search_roi is not None:
             detected = detect_scale_calibration(img)
+
+        if (
+            detected is not None
+            and self.calibration is not None
+            and hasattr(detected, "marker_columns")
+            and hasattr(self.calibration, "marker_columns")
+        ):
+            old_columns = self.calibration.marker_columns
+            new_columns = detected.marker_columns
+            compatible = len(old_columns) == len(new_columns)
+            if compatible:
+                compatible = all(
+                    abs(old.center_x - new.center_x) <= SCALE_MAX_MARKER_DRIFT_PX
+                    and abs(old.center_y - new.center_y) <= SCALE_MAX_MARKER_DRIFT_PX
+                    for old, new in zip(old_columns, new_columns)
+                )
+            if not compatible:
+                self.scale_missing_frames = 0
+                return self.calibration
 
         if detected is not None:
             self.calibration = detected

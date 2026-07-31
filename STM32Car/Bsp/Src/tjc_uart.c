@@ -4,6 +4,7 @@
 
 #define TJC_UART_RX_BUFFER_SIZE 64U                            /* TJC UART 接收环形缓冲区容量。 */
 #define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U) /* 环形缓冲区下标回绕掩码。 */
+#define TJC_UART_TX_TIMEOUT_MS  100U                           /* 9600 波特率下最长文本帧的发送超时。 */
 
 /**
  * @brief 淘晶驰串口屏按钮“弹起事件”需要发送的命令。
@@ -41,7 +42,10 @@ void TjcUart_Init(void)
 
 void TjcUart_SendByte(uint8_t byte)
 {
-    (void) HAL_UART_Transmit(&huart2, &byte, 1U, 10U);
+    if (HAL_UART_Transmit(&huart2, &byte, 1U,
+                          TJC_UART_TX_TIMEOUT_MS) != HAL_OK) {
+        s_error_count++;
+    }
 }
 
 void TjcUart_SendData(const uint8_t *data, uint16_t length)
@@ -49,7 +53,10 @@ void TjcUart_SendData(const uint8_t *data, uint16_t length)
     if ((data == 0) || (length == 0U)) {
         return;
     }
-    (void) HAL_UART_Transmit(&huart2, (uint8_t *) data, length, 10U);
+    if (HAL_UART_Transmit(&huart2, (uint8_t *) data, length,
+                          TJC_UART_TX_TIMEOUT_MS) != HAL_OK) {
+        s_error_count++;
+    }
 }
 
 uint8_t TjcUart_ReadByte(uint8_t *byte)
