@@ -258,7 +258,8 @@ static void test_runtime_line_base_speed(void)
     InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
     average_target = 0.5f *
                      (output.left_target_cm_s + output.right_target_cm_s);
-    assert_near(average_target, 39.4f, 0.01f);
+    /* 大偏差降速先平滑建立减速度，不再从40 cm/s直接跳到缩放速度。 */
+    assert_near(average_target, 39.96f, 0.01f);
 
     InfraredLineControl_Init(&control);
     InfraredLineControl_SetBaseSpeed(&control, 12.0f);
@@ -280,6 +281,78 @@ static void test_runtime_line_base_speed(void)
     assert_near(output.right_target_cm_s, 0.0f, 0.001f);
 }
 
+static void test_dynamic_line_speed_uses_task_motion_limits(void)
+{
+    InfraredLineControl control;
+    InfraredLineOutput output;
+    float previous_speed = 0.0f;
+    float previous_accel = 0.0f;
+    float average_target;
+    float speed_delta;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetMotionLimits(&control,
+                                        8.0f,  /* 第五题最大加速度。 */
+                                        8.0f,  /* 第五题最大减速度。 */
+                                        24.0f  /* 第五题最大jerk。 */);
+    InfraredLineControl_SetBaseSpeed(&control, 0.0f);
+    InfraredLineControl_Update(&control, now_ms, 0x18U, 0U, &output);
+    InfraredLineControl_SetBaseSpeed(&control, 26.0f);
+
+    for (index = 0U; index < 250U; index++) {
+        now_ms += 20U;
+        InfraredLineControl_Update(&control, now_ms, 0x18U, 0U, &output);
+        average_target = 0.5f *
+                         (output.left_target_cm_s +
+                          output.right_target_cm_s);
+        speed_delta = average_target - previous_speed;
+        assert(speed_delta <= 8.0f * 0.020f + TEST_EPSILON);
+        assert(speed_delta >= -8.0f * 0.020f - TEST_EPSILON);
+        assert(test_abs(control.applied_base_accel_cm_s2 -
+                        previous_accel) <=
+               24.0f * 0.020f + TEST_EPSILON);
+        previous_speed = average_target;
+        previous_accel = control.applied_base_accel_cm_s2;
+    }
+    assert_near(previous_speed, 26.0f, 0.01f);
+
+    /* 第五题检测到宽线以及离开宽线时，减速和恢复都不能发生速度阶跃。 */
+    for (index = 0U; index < 80U; index++) {
+        now_ms += 20U;
+        InfraredLineControl_Update(&control, now_ms, 0x18U, 1U, &output);
+        average_target = 0.5f *
+                         (output.left_target_cm_s +
+                          output.right_target_cm_s);
+        speed_delta = average_target - previous_speed;
+        assert(speed_delta <= 8.0f * 0.020f + TEST_EPSILON);
+        assert(speed_delta >= -8.0f * 0.020f - TEST_EPSILON);
+        assert(test_abs(control.applied_base_accel_cm_s2 -
+                        previous_accel) <=
+               24.0f * 0.020f + TEST_EPSILON);
+        previous_speed = average_target;
+        previous_accel = control.applied_base_accel_cm_s2;
+    }
+
+    for (index = 0U; index < 180U; index++) {
+        now_ms += 20U;
+        InfraredLineControl_Update(&control, now_ms, 0x18U, 0U, &output);
+        average_target = 0.5f *
+                         (output.left_target_cm_s +
+                          output.right_target_cm_s);
+        speed_delta = average_target - previous_speed;
+        assert(speed_delta <= 8.0f * 0.020f + TEST_EPSILON);
+        assert(speed_delta >= -8.0f * 0.020f - TEST_EPSILON);
+        assert(test_abs(control.applied_base_accel_cm_s2 -
+                        previous_accel) <=
+               24.0f * 0.020f + TEST_EPSILON);
+        previous_speed = average_target;
+        previous_accel = control.applied_base_accel_cm_s2;
+    }
+    assert_near(previous_speed, 26.0f, 0.01f);
+}
+
 int main(void)
 {
     test_motion_profile_smooth_start();
@@ -290,6 +363,7 @@ int main(void)
     test_motion_profile_rejects_invalid_config();
     test_chassis_accel_estimator();
     test_runtime_line_base_speed();
+    test_dynamic_line_speed_uses_task_motion_limits();
     puts("平滑底盘速度轨迹与加速度估计测试通过");
     return 0;
 }

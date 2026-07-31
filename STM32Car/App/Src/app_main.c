@@ -888,6 +888,12 @@ static uint8_t App_StartLineRunInternal(
     }
 
     InfraredLineControl_Init(&s_line_control);
+    /* 路况降速后的恢复过程沿用本任务的加速度和jerk限制，避免二次突然加速。 */
+    InfraredLineControl_SetMotionLimits(
+        &s_line_control,
+        motion_config.maximum_accel_cm_s2,
+        motion_config.maximum_decel_cm_s2,
+        motion_config.maximum_jerk_cm_s3);
     if (ChassisMotionProfile_Start(&s_motion_profile,
                                    now_ms,
                                    initial_speed_cm_s,

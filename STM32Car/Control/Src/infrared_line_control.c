@@ -6,7 +6,9 @@
 #define IR_LINE_KP                           3.00f  /* 巡线位置误差的比例增益。 */
 #define IR_LINE_KD                           1.80f  /* 巡线误差变化量的微分增益。 */
 #define IR_LINE_CORRECTION_LIMIT_CM_S       10.00f /* 左右轮差速修正量的绝对上限。 */
-#define IR_LINE_CORRECTION_SLEW_CM_S         2.50f /* 每个控制周期允许的差速修正变化量。 */
+#define IR_LINE_CORRECTION_SLEW_CM_S         0.80f /* 每20 ms允许的差速变化量，抑制单轮目标突变。 */
+#define IR_LINE_SPEED_RESPONSE_TIME_S         0.25f /* 路况速度目标转换为期望加速度的响应时间。 */
+#define IR_LINE_SPEED_ERROR_EPSILON_CM_S      0.01f /* 判定基础速度已到达目标的误差范围。 */
 #define IR_LINE_MEDIUM_ERROR                 1.00f  /* 进入中等偏差降速的误差门槛，单位为厘米。 */
 #define IR_LINE_LARGE_ERROR                  2.00f  /* 进入大偏差降速的误差门槛，单位为厘米。 */
 #define IR_LINE_MEDIUM_SPEED_SCALE           0.82f  /* 中等偏差时基础速度的缩放系数。 */
@@ -48,31 +50,55 @@ static float InfraredLine_LimitDelta(float value, float previous, float delta)
 
 static float InfraredLine_ApplyBaseSpeedSlew(InfraredLineControl *control,
                                               float target_speed_cm_s,
-                                              uint8_t immediate_slowdown)
+                                              uint8_t urgent_slowdown)
 {
-    float maximum_delta;
+    float dt_s = (float) APP_CONTROL_PERIOD_MS * 0.001f;
+    float speed_error;
+    float desired_accel_cm_s2;
+    float maximum_accel_delta_cm_s2;
+    float next_speed_cm_s;
 
     if (control->base_speed_ready == 0U) {
         control->base_speed_ready = 1U;
         control->applied_base_speed_cm_s = target_speed_cm_s;
+        control->applied_base_accel_cm_s2 = 0.0f;
         return target_speed_cm_s;
     }
 
-    if ((immediate_slowdown != 0U) &&
-        (target_speed_cm_s < control->applied_base_speed_cm_s)) {
-        control->applied_base_speed_cm_s = target_speed_cm_s;
-        return target_speed_cm_s;
+    speed_error = target_speed_cm_s - control->applied_base_speed_cm_s;
+    if ((urgent_slowdown != 0U) && (speed_error < 0.0f)) {
+        desired_accel_cm_s2 = -control->maximum_decel_cm_s2;
+    } else {
+        desired_accel_cm_s2 = speed_error /
+                              IR_LINE_SPEED_RESPONSE_TIME_S;
     }
+    desired_accel_cm_s2 = InfraredLine_Limit(
+        desired_accel_cm_s2,
+        -control->maximum_decel_cm_s2,
+        control->maximum_accel_cm_s2);
 
-    maximum_delta = ((target_speed_cm_s >=
-                      control->applied_base_speed_cm_s) ?
-                     APP_LINE_MAX_ACCEL_CM_S2 :
-                     APP_LINE_MAX_DECEL_CM_S2) *
-                    ((float) APP_CONTROL_PERIOD_MS * 0.001f);
-    control->applied_base_speed_cm_s = InfraredLine_LimitDelta(
-        target_speed_cm_s,
-        control->applied_base_speed_cm_s,
-        maximum_delta);
+    maximum_accel_delta_cm_s2 = control->maximum_jerk_cm_s3 * dt_s;
+    control->applied_base_accel_cm_s2 += InfraredLine_Limit(
+        desired_accel_cm_s2 - control->applied_base_accel_cm_s2,
+        -maximum_accel_delta_cm_s2,
+        maximum_accel_delta_cm_s2);
+    control->applied_base_accel_cm_s2 = InfraredLine_Limit(
+        control->applied_base_accel_cm_s2,
+        -control->maximum_decel_cm_s2,
+        control->maximum_accel_cm_s2);
+
+    next_speed_cm_s = control->applied_base_speed_cm_s +
+                      control->applied_base_accel_cm_s2 * dt_s;
+    if (((speed_error > 0.0f) &&
+         (next_speed_cm_s > target_speed_cm_s)) ||
+        ((speed_error < 0.0f) &&
+         (next_speed_cm_s < target_speed_cm_s)) ||
+        (InfraredLine_Abs(speed_error) <=
+         IR_LINE_SPEED_ERROR_EPSILON_CM_S)) {
+        next_speed_cm_s = target_speed_cm_s;
+    }
+    control->applied_base_speed_cm_s = InfraredLine_Limit(
+        next_speed_cm_s, 0.0f, IR_LINE_TARGET_MAX_CM_S);
     return control->applied_base_speed_cm_s;
 }
 
@@ -150,7 +176,27 @@ void InfraredLineControl_Init(InfraredLineControl *control)
     if (control != 0) {
         memset(control, 0, sizeof(*control));
         control->base_speed_cm_s = APP_BASE_SPEED_CM_S;
+        control->maximum_accel_cm_s2 = APP_LINE_MAX_ACCEL_CM_S2;
+        control->maximum_decel_cm_s2 = APP_LINE_MAX_DECEL_CM_S2;
+        control->maximum_jerk_cm_s3 = APP_LINE_MAX_JERK_CM_S3;
     }
+}
+
+void InfraredLineControl_SetMotionLimits(InfraredLineControl *control,
+                                         float maximum_accel_cm_s2,
+                                         float maximum_decel_cm_s2,
+                                         float maximum_jerk_cm_s3)
+{
+    if ((control == 0) ||
+        (maximum_accel_cm_s2 <= 0.0f) ||
+        (maximum_decel_cm_s2 <= 0.0f) ||
+        (maximum_jerk_cm_s3 <= 0.0f)) {
+        return;
+    }
+
+    control->maximum_accel_cm_s2 = maximum_accel_cm_s2;
+    control->maximum_decel_cm_s2 = maximum_decel_cm_s2;
+    control->maximum_jerk_cm_s3 = maximum_jerk_cm_s3;
 }
 
 void InfraredLineControl_SetBaseSpeed(InfraredLineControl *control,
