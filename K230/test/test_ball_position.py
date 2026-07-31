@@ -14,6 +14,7 @@ from ball_position import (  # noqa: E402
     SCALE_THRESHOLDS,
     scale_detection_box,
     select_best_anchor_box,
+    select_best_yolo_box,
     select_ball_blob,
     select_marker_calibration,
 )
@@ -45,6 +46,42 @@ class BallPositionOptimizationTest(unittest.TestCase):
         })
 
         self.assertEqual(detection, (20, 30, 26, 28, 0.76))
+
+    def test_yolov5_detection_preserves_top_left_xywh(self):
+        detection = select_best_yolo_box((
+            [[40, 50, 30, 28]],
+            [0],
+            [0.82],
+        ))
+
+        self.assertEqual(detection, (40, 50, 30, 28, 0.82))
+
+    def test_yolov5_detection_ignores_other_classes(self):
+        detection = select_best_yolo_box((
+            [[10, 20, 30, 30], [80, 50, 20, 20]],
+            [1, 0],
+            [0.99, 0.75],
+        ))
+
+        self.assertEqual(detection, (80, 50, 20, 20, 0.75))
+
+    def test_yolo_detection_rejects_invalid_confidence(self):
+        detection = select_best_yolo_box((
+            [[0, 0, 467, 533]],
+            [0],
+            [float("inf")],
+        ), image_size=(320, 180))
+
+        self.assertIsNone(detection)
+
+    def test_yolo_detection_is_clipped_to_ai_frame(self):
+        detection = select_best_yolo_box((
+            [[300, 160, 40, 40]],
+            [0],
+            [0.80],
+        ), image_size=(320, 180))
+
+        self.assertEqual(detection, (300, 160, 20, 20, 0.80))
 
     def test_ai_detection_is_scaled_to_cv_coordinates(self):
         detection = (80, 30, 20, 10, 0.875)

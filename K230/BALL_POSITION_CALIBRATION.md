@@ -1,8 +1,8 @@
 # K230 红色标记与钢珠位置识别联调
 
-运行 `main.py`。程序使用 640×360 传统视觉通道识别红色标记和提供 Wi-Fi 图传，同时使用 320×180 AI 通道运行钢球 YOLO；YOLO 检测框会转换到 640×360 标定坐标系。导轨沿画面水平方向放置。
+运行 `main.py`。程序使用 640×360 传统视觉通道识别红色标记和提供 Wi-Fi 图传，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 192×192 后运行钢球 YOLOv5n；检测框会转换到 640×360 标定坐标系。导轨沿画面水平方向放置。
 
-`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_video.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/steel_ball_yolo11n_det_320.kmodel`；也兼容原工程的 `/sdcard/yolo11n_det_320.kmodel`。入口会显式把 `/sdcard` 加入模块搜索路径。
+`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_video.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_yolov5n_192.kmodel`，并确保 `/sdcard/libs/YOLO.py` 可用。该模型虽然命名为 YOLOv5n，但输出为 anchor-free 转置布局，运行时使用 `YOLOv8` 类完成匹配的后处理。入口会显式把 `/sdcard` 加入模块搜索路径。
 
 ## 红色位置标记
 
@@ -44,11 +44,12 @@ LCD/IDE 叠加层中：
 
 ## 钢球 YOLO 与圆环模式
 
-默认配置使用现成钢球 YOLO：
+默认配置使用 192×192 YOLOv5n 钢球模型：
 
 ```python
 TARGET_PROFILE = "STEEL_BALL"
-STEEL_BALL_CONFIDENCE_THRESHOLD = 0.60
+STEEL_BALL_MODEL_INPUT_SIZE = [192, 192]
+STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40
 ```
 
 没有钢球、需要用金色圆环联调时改为：
@@ -64,7 +65,7 @@ RING_DIAMETER_MM = 18.0
 
 - 红线漏检：用 CanMV IDE 阈值编辑器重新标定 `ball_position.py` 的 `SCALE_THRESHOLDS`，只保留红色记号笔。
 - 红线粘连：缩小每条线宽，擦除附近其他红色污迹，或减小 `SCALE_MERGE_MARGIN`。
-- YOLO 漏检钢球：先确认模型路径，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.60 逐步降至 0.50；误检时提高阈值。
+- YOLO 漏检钢球：先确认模型路径和 `/sdcard/libs/YOLO.py`，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.40 逐步降至 0.30；误检时提高阈值。
 - 金色圆环漏检：调整 `RING_TARGET_THRESHOLDS`；圆环被分成多块时把 `TARGET_MERGE_MARGIN` 从 5 增大到 6～8。
 - 位置整体偏移：调整相机，使 0 标记位于画面中心附近；相机和导轨固定后锁定曝光、白平衡与焦距。
 
