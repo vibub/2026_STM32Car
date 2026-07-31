@@ -6,6 +6,7 @@
 #define CHASSIS_MOTION_SPEED_RESPONSE_TIME_S    0.250f /* 速度误差换算为期望加速度时使用的响应时间。 */
 #define CHASSIS_MOTION_SPEED_TOLERANCE_CM_S     0.50f  /* 判定进入巡航状态的速度误差范围。 */
 #define CHASSIS_MOTION_ACCEL_TOLERANCE_CM_S2    1.00f  /* 判定进入巡航状态的命令加速度范围。 */
+#define CHASSIS_MOTION_STOP_ACCEL_EPSILON_CM_S2 0.01f  /* 停稳前让减速度按 jerk 自然回零，避免末端突变。 */
 
 static float ChassisMotionProfile_Abs(float value)
 {
@@ -41,6 +42,9 @@ static void ChassisMotionProfile_FillOutput(
     output->state = profile->state;
     output->active = profile->active;
     output->distance_reached = profile->distance_reached;
+    output->stop_requested = profile->stop_requested;
+    output->stopped = (uint8_t) (
+        profile->state == CHASSIS_MOTION_STATE_STOPPED);
     output->target_speed_cm_s = profile->config.target_speed_cm_s;
     output->command_speed_cm_s = profile->command_speed_cm_s;
     output->command_accel_cm_s2 = profile->command_accel_cm_s2;
@@ -98,9 +102,20 @@ void ChassisMotionProfile_SetTargetSpeed(ChassisMotionProfile *profile,
 
     profile->config.target_speed_cm_s =
         (target_speed_cm_s > 0.0f) ? target_speed_cm_s : 0.0f;
-    if (profile->distance_reached == 0U) {
+    if (profile->stop_requested == 0U) {
         profile->state = CHASSIS_MOTION_STATE_RAMPING;
     }
+}
+
+void ChassisMotionProfile_RequestStop(ChassisMotionProfile *profile)
+{
+    if ((profile == 0) || (profile->active == 0U)) {
+        return;
+    }
+
+    profile->stop_requested = 1U;
+    profile->config.target_speed_cm_s = 0.0f;
+    profile->state = CHASSIS_MOTION_STATE_BRAKING;
 }
 
 void ChassisMotionProfile_Update(ChassisMotionProfile *profile,
@@ -173,12 +188,25 @@ void ChassisMotionProfile_Update(ChassisMotionProfile *profile,
         ((speed_error < 0.0f) &&
          (next_speed < profile->config.target_speed_cm_s))) {
         next_speed = profile->config.target_speed_cm_s;
-        profile->command_accel_cm_s2 = 0.0f;
+        if (profile->stop_requested == 0U) {
+            profile->command_accel_cm_s2 = 0.0f;
+        }
     }
     profile->command_speed_cm_s =
         (next_speed > 0.0f) ? next_speed : 0.0f;
 
-    if (profile->distance_reached == 0U) {
+    if (profile->stop_requested != 0U) {
+        if ((profile->command_speed_cm_s <=
+             CHASSIS_MOTION_SPEED_TOLERANCE_CM_S) &&
+            (ChassisMotionProfile_Abs(profile->command_accel_cm_s2) <=
+             CHASSIS_MOTION_STOP_ACCEL_EPSILON_CM_S2)) {
+            profile->command_speed_cm_s = 0.0f;
+            profile->command_accel_cm_s2 = 0.0f;
+            profile->state = CHASSIS_MOTION_STATE_STOPPED;
+        } else {
+            profile->state = CHASSIS_MOTION_STATE_BRAKING;
+        }
+    } else if (profile->distance_reached == 0U) {
         speed_error = profile->config.target_speed_cm_s -
                       profile->command_speed_cm_s;
         if ((ChassisMotionProfile_Abs(speed_error) <=

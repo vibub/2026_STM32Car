@@ -1504,6 +1504,69 @@ static void test_speed_pid(void)
     assert(WheelSpeedPid_Step(&pid, 10.0f) == 0.0f);
 }
 
+static void test_ball_balance_transport_mode(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
+    uint32_t now_ms = 0U;
+    uint8_t index;
+
+    build_linear_mapping(1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_SetTransportMode(&control, 1U);
+    BallBalanceControl_SetEnabled(&control, 1U, now_ms);
+
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    }
+    assert(output.enabled != 0U);
+    assert(output.transport_mode_enabled != 0U);
+
+    BallBalanceControl_SetTransportInputs(&control, 8.0f, 0.80f, 1U);
+    measurement.valid = 1U;
+    measurement.position_d10_mm = 0;
+    measurement.quality = 80U;
+    measurement.sequence = 1U;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    measurement.sequence = 2U;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert(output.transport_feedforward_pitch_deg < -0.45f);
+    assert(output.transport_feedforward_pitch_deg > -0.75f);
+    assert_float_near_tolerance(
+        output.transport_feedback_pitch_deg, 0.0f, 0.01f);
+    assert(output.desired_pipe_pitch_deg < 0.0f);
+
+    BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
+    measurement.position_d10_mm = 300;
+    for (index = 0U; index < 8U; index++) {
+        measurement.sequence++;
+        now_ms += 100U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(
+            &control, now_ms, &measurement, &attitude, &output);
+    }
+    assert(output.transport_feedback_pitch_deg > 0.0f);
+    assert(output.transport_feedback_pitch_deg <= 0.45f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
+    assert(output.integral_active == 0U);
+}
+
 int main(void)
 {
     test_infrared_eight_positions();
@@ -1523,6 +1586,7 @@ int main(void)
     test_flexible_pipe_mapping_limits();
     test_extended_downward_pipe_limit();
     test_nonlinear_mapping_interpolation();
+    test_ball_balance_transport_mode();
     test_speed_pid();
     puts("基础控制、IMU 姿态与钢球平衡主机测试通过");
     return 0;

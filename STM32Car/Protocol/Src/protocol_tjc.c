@@ -127,6 +127,25 @@ static const uint8_t s_text_shuttle_failed[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
     0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
 };
+static const uint8_t s_text_ab_preparing[] = "AB PREPARING";
+static const uint8_t s_text_ab_running[] = "AB RUNNING";
+static const uint8_t s_text_ab_passed[] = "AB PASSED";
+static const uint8_t s_text_ab_failed[] = "AB FAILED";
+static const uint8_t s_text_abcd_preparing[] = "ABCD PREPARING";
+static const uint8_t s_text_abcd_running[] = "ABCD RUNNING";
+static const uint8_t s_text_abcd_passed[] = "ABCD PASSED";
+static const uint8_t s_text_abcd_failed[] = "ABCD FAILED";
+
+static const uint8_t s_tjc_command_suffix[] = {0xFFU, 0xFFU, 0xFFU};
+static const uint8_t s_tjc_warning_circle_100[] =
+    "cir 160,120,100,63488";
+static const uint8_t s_tjc_warning_circle_99[] =
+    "cir 160,120,99,63488";
+static const uint8_t s_tjc_warning_circle_98[] =
+    "cir 160,120,98,63488";
+static const uint8_t s_tjc_warning_circle_97[] =
+    "cir 160,120,97,63488";
+static const uint8_t s_tjc_refresh_page[] = "ref 0";
 
 static Tjc_RxState s_rx_state;
 static uint8_t s_rx_command;
@@ -226,6 +245,17 @@ static void Protocol_Tjc_SendTextFrame(const uint8_t *text,
         (uint16_t) sizeof(s_tjc_text_suffix));
     TjcUart_SendData(frame, length);
     g_tjc_status_text_count++;
+}
+
+static void Protocol_Tjc_SendAsciiCommand(const uint8_t *command,
+                                          uint16_t command_length)
+{
+    if ((command == 0) || (command_length == 0U)) {
+        return;
+    }
+    TjcUart_SendData(command, command_length);
+    TjcUart_SendData(s_tjc_command_suffix,
+                     (uint16_t) sizeof(s_tjc_command_suffix));
 }
 
 void Protocol_Tjc_Init(void)
@@ -350,12 +380,66 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
             text = s_text_shuttle_failed;
             text_length = (uint16_t) sizeof(s_text_shuttle_failed);
             break;
+        case TJC_STATUS_AB_PREPARING:
+            text = s_text_ab_preparing;
+            text_length = (uint16_t) (sizeof(s_text_ab_preparing) - 1U);
+            break;
+        case TJC_STATUS_AB_RUNNING:
+            text = s_text_ab_running;
+            text_length = (uint16_t) (sizeof(s_text_ab_running) - 1U);
+            break;
+        case TJC_STATUS_AB_PASSED:
+            text = s_text_ab_passed;
+            text_length = (uint16_t) (sizeof(s_text_ab_passed) - 1U);
+            break;
+        case TJC_STATUS_AB_FAILED:
+            text = s_text_ab_failed;
+            text_length = (uint16_t) (sizeof(s_text_ab_failed) - 1U);
+            break;
+        case TJC_STATUS_ABCD_PREPARING:
+            text = s_text_abcd_preparing;
+            text_length = (uint16_t) (sizeof(s_text_abcd_preparing) - 1U);
+            break;
+        case TJC_STATUS_ABCD_RUNNING:
+            text = s_text_abcd_running;
+            text_length = (uint16_t) (sizeof(s_text_abcd_running) - 1U);
+            break;
+        case TJC_STATUS_ABCD_PASSED:
+            text = s_text_abcd_passed;
+            text_length = (uint16_t) (sizeof(s_text_abcd_passed) - 1U);
+            break;
+        case TJC_STATUS_ABCD_FAILED:
+            text = s_text_abcd_failed;
+            text_length = (uint16_t) (sizeof(s_text_abcd_failed) - 1U);
+            break;
         default:
             break;
     }
 
     if (text != 0) {
         Protocol_Tjc_SendTextFrame(text, text_length);
+    }
+}
+
+void Protocol_Tjc_SetBallLimitWarning(uint8_t active)
+{
+    if (active != 0U) {
+        Protocol_Tjc_SendAsciiCommand(
+            s_tjc_warning_circle_100,
+            (uint16_t) (sizeof(s_tjc_warning_circle_100) - 1U));
+        Protocol_Tjc_SendAsciiCommand(
+            s_tjc_warning_circle_99,
+            (uint16_t) (sizeof(s_tjc_warning_circle_99) - 1U));
+        Protocol_Tjc_SendAsciiCommand(
+            s_tjc_warning_circle_98,
+            (uint16_t) (sizeof(s_tjc_warning_circle_98) - 1U));
+        Protocol_Tjc_SendAsciiCommand(
+            s_tjc_warning_circle_97,
+            (uint16_t) (sizeof(s_tjc_warning_circle_97) - 1U));
+    } else {
+        Protocol_Tjc_SendAsciiCommand(
+            s_tjc_refresh_page,
+            (uint16_t) (sizeof(s_tjc_refresh_page) - 1U));
     }
 }
 
@@ -516,6 +600,28 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
         Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
                                 TJC_RESULT_ENTER_FAILED,
                                 App_GetCurrentMode(), command);
+    } else if (command == TJC_COMMAND_AB) {
+        g_tjc_valid_command_count++;
+        if (command == current_mode) {
+            Protocol_Tjc_SendResult(TJC_RESULT_ALREADY_ACTIVE,
+                                    current_mode, command);
+        } else {
+            accepted = App_StartAbRun();
+            Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                                    TJC_RESULT_ENTER_FAILED,
+                                    App_GetCurrentMode(), command);
+        }
+    } else if (command == TJC_COMMAND_ABCD) {
+        g_tjc_valid_command_count++;
+        if (command == current_mode) {
+            Protocol_Tjc_SendResult(TJC_RESULT_ALREADY_ACTIVE,
+                                    current_mode, command);
+        } else {
+            accepted = App_StartAbcdRun();
+            Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                                    TJC_RESULT_ENTER_FAILED,
+                                    App_GetCurrentMode(), command);
+        }
     } else {
         g_tjc_invalid_command_count++;
         Protocol_Tjc_SendResult(TJC_RESULT_INVALID_COMMAND, current_mode,

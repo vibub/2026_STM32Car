@@ -113,6 +113,90 @@ static void test_motion_profile_pass_event(void)
     assert(output.command_speed_cm_s > 0.0f);
 }
 
+static void test_motion_profile_soft_stop(void)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionOutput output;
+    ChassisMotionConfig config = build_motion_config(0.0f);
+    float previous_accel = 0.0f;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    config.target_speed_cm_s = 26.0f;
+    config.maximum_accel_cm_s2 = 8.0f;
+    config.maximum_decel_cm_s2 = 8.0f;
+    config.maximum_jerk_cm_s3 = 24.0f;
+    assert(ChassisMotionProfile_Start(&profile, now_ms, 26.0f,
+                                      &config) != 0U);
+    ChassisMotionProfile_Update(&profile, now_ms, 0.0f, &output);
+    ChassisMotionProfile_RequestStop(&profile);
+
+    for (index = 0U; index < 500U; index++) {
+        now_ms += 20U;
+        ChassisMotionProfile_Update(&profile, now_ms, 0.0f, &output);
+        assert(output.command_speed_cm_s >= 0.0f);
+        assert(output.command_accel_cm_s2 >=
+               -config.maximum_decel_cm_s2 - TEST_EPSILON);
+        assert(test_abs(output.command_accel_cm_s2 - previous_accel) <=
+               config.maximum_jerk_cm_s3 * 0.020f + TEST_EPSILON);
+        previous_accel = output.command_accel_cm_s2;
+        if (output.stopped != 0U) {
+            break;
+        }
+    }
+
+    assert(output.stop_requested != 0U);
+    assert(output.stopped != 0U);
+    assert(output.state == CHASSIS_MOTION_STATE_STOPPED);
+    assert_near(output.command_speed_cm_s, 0.0f, TEST_EPSILON);
+    assert_near(output.command_accel_cm_s2, 0.0f, TEST_EPSILON);
+}
+
+static uint32_t simulate_pass_time_ms(const ChassisMotionConfig *config)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionOutput output;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    assert(ChassisMotionProfile_Start(&profile, now_ms, 0.0f,
+                                      config) != 0U);
+    ChassisMotionProfile_Update(&profile, now_ms, 0.0f, &output);
+    for (index = 0U; index < 2000U; index++) {
+        now_ms += 20U;
+        ChassisMotionProfile_Update(
+            &profile,
+            now_ms,
+            output.command_speed_cm_s * 0.020f,
+            &output);
+        if (output.distance_reached != 0U) {
+            return now_ms;
+        }
+    }
+    assert(0);
+    return 0U;
+}
+
+static void test_ab_and_abcd_time_budget(void)
+{
+    ChassisMotionConfig ab_config;
+    ChassisMotionConfig abcd_config;
+
+    ab_config.target_speed_cm_s = 35.0f;
+    ab_config.maximum_accel_cm_s2 = 10.0f;
+    ab_config.maximum_decel_cm_s2 = 8.0f;
+    ab_config.maximum_jerk_cm_s3 = 30.0f;
+    ab_config.completion_distance_cm = 150.0f;
+    assert(simulate_pass_time_ms(&ab_config) <= 8000U);
+
+    abcd_config.target_speed_cm_s = 26.0f;
+    abcd_config.maximum_accel_cm_s2 = 8.0f;
+    abcd_config.maximum_decel_cm_s2 = 8.0f;
+    abcd_config.maximum_jerk_cm_s3 = 24.0f;
+    abcd_config.completion_distance_cm = 614.2f;
+    assert(simulate_pass_time_ms(&abcd_config) <= 30000U);
+}
+
 static void test_motion_profile_rejects_invalid_config(void)
 {
     ChassisMotionProfile profile;
@@ -201,6 +285,8 @@ int main(void)
     test_motion_profile_smooth_start();
     test_motion_profile_target_reduction();
     test_motion_profile_pass_event();
+    test_motion_profile_soft_stop();
+    test_ab_and_abcd_time_budget();
     test_motion_profile_rejects_invalid_config();
     test_chassis_accel_estimator();
     test_runtime_line_base_speed();

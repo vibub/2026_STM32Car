@@ -7,7 +7,9 @@ typedef enum {
     CHASSIS_MOTION_STATE_IDLE = 0,
     CHASSIS_MOTION_STATE_RAMPING,
     CHASSIS_MOTION_STATE_CRUISING,
-    CHASSIS_MOTION_STATE_PASSED
+    CHASSIS_MOTION_STATE_PASSED,
+    CHASSIS_MOTION_STATE_BRAKING,
+    CHASSIS_MOTION_STATE_STOPPED
 } ChassisMotionState;
 
 typedef struct {
@@ -24,6 +26,7 @@ typedef struct {
     uint8_t active;
     uint8_t time_ready;
     uint8_t distance_reached;
+    uint8_t stop_requested;
     uint32_t last_update_ms;
     float command_speed_cm_s;
     float command_accel_cm_s2;
@@ -34,6 +37,8 @@ typedef struct {
     ChassisMotionState state;
     uint8_t active;
     uint8_t distance_reached;
+    uint8_t stop_requested;
+    uint8_t stopped;
     float target_speed_cm_s;
     float command_speed_cm_s;
     float command_accel_cm_s2;
@@ -48,6 +53,7 @@ uint8_t ChassisMotionProfile_Start(ChassisMotionProfile *profile,
 void ChassisMotionProfile_Stop(ChassisMotionProfile *profile);
 void ChassisMotionProfile_SetTargetSpeed(ChassisMotionProfile *profile,
                                          float target_speed_cm_s);
+void ChassisMotionProfile_RequestStop(ChassisMotionProfile *profile);
 void ChassisMotionProfile_Update(ChassisMotionProfile *profile,
                                  uint32_t now_ms,
                                  float distance_delta_cm,

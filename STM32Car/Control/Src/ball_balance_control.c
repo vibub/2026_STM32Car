@@ -69,6 +69,16 @@
 #define BALL_BALANCE_MODEL_OFFSET_MAX_DEG           0.75f  /* 可接受模型校正零偏的最大绝对值。 */
 #define BALL_BALANCE_CACHE_EPSILON_DEG              0.0001f /* 复用运动学缓存允许的输入误差。 */
 #define BALL_BALANCE_MAPPING_MIN_STEP_DEG             0.05f /* 九点实测映射允许的最小单调角度差。 */
+#define BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG       0.058405f /* atan(a/g) 的小角度近似，输入为 cm/s^2。 */
+#define BALL_BALANCE_TRANSPORT_IMU_BLEND              0.35f /* IMU 实测扰动对命令前馈的低频修正比例。 */
+#define BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG           2.00f /* 防止振动或侧向冲击污染纵向补偿。 */
+#define BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG            1.20f /* 起步和停车前馈的最大杆角。 */
+#define BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM          0.012f /* 行驶中小幅位置修正增益。 */
+#define BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S        0.003f /* 行驶中钢珠速度阻尼。 */
+#define BALL_BALANCE_TRANSPORT_DEADBAND_MM              2.0f /* 中心附近不追逐视觉抖动。 */
+#define BALL_BALANCE_TRANSPORT_P_LIMIT_DEG             0.38f /* 弯道位置修正保持小幅。 */
+#define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
+#define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
 
 static uint8_t BallBalanceControl_AttitudeIsFresh(
     const BallBalanceControl *control,
@@ -511,6 +521,69 @@ static float BallBalanceControl_CalculateMovingPitch(
     return pitch_deg;
 }
 
+static void BallBalanceControl_ApplyTransportCommand(
+    BallBalanceControl *control)
+{
+    float expected_disturbance_deg;
+    float effective_disturbance_deg;
+    float feedback_error_mm;
+
+    expected_disturbance_deg = BallBalanceControl_Limit(
+        control->transport_command_accel_cm_s2 *
+        BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
+        -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG);
+    effective_disturbance_deg = expected_disturbance_deg;
+    if (control->transport_imu_valid != 0U) {
+        effective_disturbance_deg += BALL_BALANCE_TRANSPORT_IMU_BLEND *
+            (BallBalanceControl_Limit(
+                 control->transport_imu_disturbance_deg,
+                 -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
+                 BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG) -
+             expected_disturbance_deg);
+    }
+    control->transport_feedforward_pitch_deg = BallBalanceControl_Limit(
+        -effective_disturbance_deg,
+        -BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG);
+
+    feedback_error_mm = control->error_mm;
+    if (BallBalanceControl_Abs(feedback_error_mm) <=
+        BALL_BALANCE_TRANSPORT_DEADBAND_MM) {
+        feedback_error_mm = 0.0f;
+    } else if (feedback_error_mm > 0.0f) {
+        feedback_error_mm -= BALL_BALANCE_TRANSPORT_DEADBAND_MM;
+    } else {
+        feedback_error_mm += BALL_BALANCE_TRANSPORT_DEADBAND_MM;
+    }
+    control->p_term_deg = BallBalanceControl_Limit(
+        BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM * feedback_error_mm,
+        -BALL_BALANCE_TRANSPORT_P_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_P_LIMIT_DEG);
+    control->d_term_deg = BallBalanceControl_Limit(
+        BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S * control->velocity_mm_s,
+        -BALL_BALANCE_TRANSPORT_D_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_D_LIMIT_DEG);
+    control->transport_feedback_pitch_deg = BallBalanceControl_Limit(
+        control->p_term_deg + control->d_term_deg,
+        -BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG);
+    control->i_term_deg = 0.0f;
+    control->integral_mm_s = 0.0f;
+    control->integral_active = 0U;
+    control->brake_term_deg = control->d_term_deg;
+    control->braking_active = (uint8_t) (
+        (control->velocity_mm_s *
+         (BALL_BALANCE_BALL_ACCEL_SIGN_PER_PITCH *
+          control->transport_feedback_pitch_deg)) < 0.0f);
+    control->phase_pitch_deg = BallBalanceControl_LimitActualPitch(
+        control,
+        control->transport_feedforward_pitch_deg +
+        control->transport_feedback_pitch_deg);
+    control->desired_pipe_pitch_deg = control->phase_pitch_deg;
+    control->trajectory_phase = BALL_BALANCE_PHASE_MOVING;
+}
+
 static void BallBalanceControl_UpdatePipeSettled(BallBalanceControl *control,
                                                  uint32_t now_ms)
 {
@@ -562,6 +635,10 @@ static void BallBalanceControl_UpdateTrajectory(
     control->error_mm = control->filtered_position_mm - control->target_mm;
     error_abs = BallBalanceControl_Abs(control->error_mm);
     velocity_abs = BallBalanceControl_Abs(control->velocity_mm_s);
+    if (control->transport_mode_enabled != 0U) {
+        BallBalanceControl_ApplyTransportCommand(control);
+        return;
+    }
     moving_away_from_target = (uint8_t) (
         (control->error_mm * control->velocity_mm_s) > 0.0f);
     kick_stage_elapsed_ms =
@@ -1065,6 +1142,7 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->kick_attempt_count = control->kick_attempt_count;
     output->trajectory_phase = control->trajectory_phase;
     output->endpoint_hold_enabled = control->endpoint_hold_enabled;
+    output->transport_mode_enabled = control->transport_mode_enabled;
     output->target_mm = control->target_mm;
     output->position_kp_deg_per_mm = control->position_kp_deg_per_mm;
     output->position_ki_deg_per_mm_s =
@@ -1081,6 +1159,14 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->i_term_deg = control->i_term_deg;
     output->d_term_deg = control->d_term_deg;
     output->brake_term_deg = control->brake_term_deg;
+    output->transport_command_accel_cm_s2 =
+        control->transport_command_accel_cm_s2;
+    output->transport_imu_disturbance_deg =
+        control->transport_imu_disturbance_deg;
+    output->transport_feedforward_pitch_deg =
+        control->transport_feedforward_pitch_deg;
+    output->transport_feedback_pitch_deg =
+        control->transport_feedback_pitch_deg;
     output->phase_pitch_deg = control->phase_pitch_deg;
     output->stop_distance_mm = control->stop_distance_mm;
     output->desired_pipe_pitch_deg = control->desired_pipe_pitch_deg;
@@ -1143,6 +1229,12 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     }
     if (normalized_enabled == 0U) {
         control->endpoint_hold_enabled = 0U;
+        control->transport_mode_enabled = 0U;
+        control->transport_imu_valid = 0U;
+        control->transport_command_accel_cm_s2 = 0.0f;
+        control->transport_imu_disturbance_deg = 0.0f;
+        control->transport_feedforward_pitch_deg = 0.0f;
+        control->transport_feedback_pitch_deg = 0.0f;
         control->integral_mm_s = 0.0f;
         control->i_term_deg = 0.0f;
         control->integral_active = 0U;
@@ -1223,6 +1315,55 @@ void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
         control->phase_pitch_deg = 0.0f;
         control->desired_pipe_pitch_deg = 0.0f;
     }
+}
+
+void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
+                                         uint8_t enabled)
+{
+    uint8_t normalized_enabled;
+
+    if (control == 0) {
+        return;
+    }
+
+    normalized_enabled = (enabled != 0U) ? 1U : 0U;
+    if (normalized_enabled == control->transport_mode_enabled) {
+        return;
+    }
+
+    control->transport_mode_enabled = normalized_enabled;
+    control->transport_imu_valid = 0U;
+    control->transport_command_accel_cm_s2 = 0.0f;
+    control->transport_imu_disturbance_deg = 0.0f;
+    control->transport_feedforward_pitch_deg = 0.0f;
+    control->transport_feedback_pitch_deg = 0.0f;
+    control->endpoint_hold_enabled = 0U;
+    control->integral_mm_s = 0.0f;
+    control->i_term_deg = 0.0f;
+    control->integral_active = 0U;
+    control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
+    control->phase_pitch_deg = 0.0f;
+    control->desired_pipe_pitch_deg = 0.0f;
+    control->pipe_command_rate_dps = 0.0f;
+}
+
+void BallBalanceControl_SetTransportInputs(
+    BallBalanceControl *control,
+    float command_accel_cm_s2,
+    float imu_disturbance_pitch_deg,
+    uint8_t imu_valid)
+{
+    if (control == 0) {
+        return;
+    }
+
+    control->transport_command_accel_cm_s2 = BallBalanceControl_Limit(
+        command_accel_cm_s2, -100.0f, 100.0f);
+    control->transport_imu_disturbance_deg = BallBalanceControl_Limit(
+        imu_disturbance_pitch_deg,
+        -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG);
+    control->transport_imu_valid = (imu_valid != 0U) ? 1U : 0U;
 }
 
 void BallBalanceControl_SetPidGains(BallBalanceControl *control,

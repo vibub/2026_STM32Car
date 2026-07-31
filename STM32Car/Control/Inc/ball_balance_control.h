@@ -60,6 +60,8 @@ typedef struct {
     uint8_t feedforward_cache_valid;
     uint8_t desired_cache_valid;
     uint8_t endpoint_hold_enabled;
+    uint8_t transport_mode_enabled;
+    uint8_t transport_imu_valid;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
     uint32_t last_valid_ms;
@@ -87,6 +89,10 @@ typedef struct {
     float i_term_deg;
     float d_term_deg;
     float brake_term_deg;
+    float transport_command_accel_cm_s2;
+    float transport_imu_disturbance_deg;
+    float transport_feedforward_pitch_deg;
+    float transport_feedback_pitch_deg;
     float phase_pitch_deg;
     float stop_distance_mm;
     float desired_pipe_pitch_deg;
@@ -130,6 +136,7 @@ typedef struct {
     uint8_t kick_attempt_count;
     uint8_t trajectory_phase;
     uint8_t endpoint_hold_enabled;
+    uint8_t transport_mode_enabled;
     float target_mm;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
@@ -144,6 +151,10 @@ typedef struct {
     float i_term_deg;
     float d_term_deg;
     float brake_term_deg;
+    float transport_command_accel_cm_s2;
+    float transport_imu_disturbance_deg;
+    float transport_feedforward_pitch_deg;
+    float transport_feedback_pitch_deg;
     float phase_pitch_deg;
     float stop_distance_mm;
     float desired_pipe_pitch_deg;
@@ -176,6 +187,13 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
 void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
                                                uint8_t enabled);
+void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
+                                         uint8_t enabled);
+void BallBalanceControl_SetTransportInputs(
+    BallBalanceControl *control,
+    float command_accel_cm_s2,
+    float imu_disturbance_pitch_deg,
+    uint8_t imu_valid);
 void BallBalanceControl_SetPidGains(BallBalanceControl *control,
                                     float kp_deg_per_mm,
                                     float ki_deg_per_mm_s,
