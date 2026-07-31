@@ -107,6 +107,10 @@ static const uint8_t s_text_balance_disabled[] = {
     0xE5U, 0xB7U, 0xB2U, 0xE7U, 0xA6U, 0x81U,
     0xE7U, 0x94U, 0xA8U
 };
+static const uint8_t s_text_shuttle_preparing[] = {
+    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
+    0xE5U, 0x87U, 0x86U, 0xE5U, 0xA4U, 0x87U
+};
 static const uint8_t s_text_shuttle_running[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
     0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU
@@ -325,6 +329,10 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
         case TJC_STATUS_BALANCE_DISABLED:
             text = s_text_balance_disabled;
             text_length = (uint16_t) sizeof(s_text_balance_disabled);
+            break;
+        case TJC_STATUS_SHUTTLE_PREPARING:
+            text = s_text_shuttle_preparing;
+            text_length = (uint16_t) sizeof(s_text_shuttle_preparing);
             break;
         case TJC_STATUS_SHUTTLE_RUNNING:
             text = s_text_shuttle_running;

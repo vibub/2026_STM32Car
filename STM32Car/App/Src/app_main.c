@@ -78,6 +78,7 @@ volatile float g_app_ball_command_angle_deg;
 volatile uint8_t g_app_ball_endpoint_hold_enabled;
 volatile uint8_t g_app_ball_shuttle_state;
 volatile uint8_t g_app_ball_shuttle_failure;
+volatile uint8_t g_app_ball_shuttle_start_pending;
 volatile uint8_t g_app_ball_shuttle_stable_ready;
 volatile uint32_t g_app_ball_shuttle_elapsed_ms;
 volatile uint8_t g_app_pipe_calibration_state;
@@ -138,12 +139,15 @@ static float s_chassis_accel_cm_s2;
 static uint8_t s_chassis_speed_ready;
 static uint8_t s_last_ball_active;
 static uint8_t s_last_ball_imu_fault;
+static uint8_t s_ball_shuttle_start_pending;
+static uint32_t s_ball_shuttle_prepare_since_ms;
 static uint8_t s_tjc_status_pending;
 static Tjc_StatusText s_pending_tjc_status;
 
 #define APP_LINE_SENSOR_FAILURE_LIMIT       3U    /* 红外 I2C 连续读取失败后停车的次数门槛。 */
 #define APP_BALL_SHUTTLE_POSITIVE_TARGET_MM 50.0f /* 第三题第一阶段的正向目标位置。 */
 #define APP_BALL_SHUTTLE_NEGATIVE_TARGET_MM -50.0f /* 第三题折返后的最终目标位置。 */
+#define APP_BALL_SHUTTLE_PREPARE_TIMEOUT_MS 3000U /* 自动启用平衡和等待视觉有效的最长时间。 */
 
 static float App_Abs(float value)
 {
@@ -209,6 +213,7 @@ static void App_UpdateBallShuttleDebug(void)
 {
     g_app_ball_shuttle_state = (uint8_t) s_ball_shuttle_control.state;
     g_app_ball_shuttle_failure = (uint8_t) s_ball_shuttle_control.failure;
+    g_app_ball_shuttle_start_pending = s_ball_shuttle_start_pending;
     g_app_ball_shuttle_stable_ready =
         s_ball_shuttle_control.stable_ready;
     g_app_ball_shuttle_elapsed_ms = s_ball_shuttle_control.elapsed_ms;
@@ -385,6 +390,45 @@ static void App_BallShuttleTask(uint32_t now_ms)
 {
     BallShuttleMeasurement measurement;
     BallShuttleEvent event;
+
+    if (s_ball_shuttle_start_pending != 0U) {
+        if ((s_ball_balance_output.imu_fault != 0U) ||
+            (s_ball_balance_output.mapping_fault != 0U) ||
+            ((uint32_t) (now_ms - s_ball_shuttle_prepare_since_ms) >
+             APP_BALL_SHUTTLE_PREPARE_TIMEOUT_MS)) {
+            s_ball_shuttle_start_pending = 0U;
+            BallBalanceControl_SetEndpointHoldEnabled(
+                &s_ball_balance_control, 0U);
+            BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                          0U,
+                                          now_ms);
+            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
+            App_UpdateBallShuttleDebug();
+            return;
+        }
+        if ((s_ball_balance_output.enabled != 0U) &&
+            (s_ball_balance_output.tracking_valid != 0U) &&
+            (s_ball_balance_output.timed_out == 0U)) {
+            if (BallShuttleControl_Start(
+                    &s_ball_shuttle_control, now_ms) != 0U) {
+                s_ball_shuttle_start_pending = 0U;
+                BallBalanceControl_SetEndpointHoldEnabled(
+                    &s_ball_balance_control, 0U);
+                BallBalanceControl_SetTargetMm(
+                    &s_ball_balance_control,
+                    APP_BALL_SHUTTLE_POSITIVE_TARGET_MM);
+                App_QueueTjcStatus(TJC_STATUS_SHUTTLE_RUNNING);
+            } else {
+                s_ball_shuttle_start_pending = 0U;
+                BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                              0U,
+                                              now_ms);
+                App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
+            }
+        }
+        App_UpdateBallShuttleDebug();
+        return;
+    }
 
     measurement.balance_enabled = s_ball_balance_output.enabled;
     measurement.tracking_valid = s_ball_balance_output.tracking_valid;
@@ -746,6 +790,8 @@ void App_Init(void)
     s_chassis_speed_ready = 0U;
     s_last_ball_active = 0U;
     s_last_ball_imu_fault = 0U;
+    s_ball_shuttle_start_pending = 0U;
+    s_ball_shuttle_prepare_since_ms = 0U;
     s_tjc_status_pending = 0U;
     s_pending_tjc_status = TJC_STATUS_BALANCE_DISABLED;
     PipeAttitudeControl_Update(&s_pipe_attitude_control,
@@ -798,6 +844,7 @@ uint8_t App_RequestMode(uint8_t mode)
     if (mode == APP_MODE_BASIC_LINE) {
         if ((PipeAttitudeControl_IsCalibrationActive(
                  &s_pipe_attitude_control) != 0U) ||
+            (s_ball_shuttle_start_pending != 0U) ||
             (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
             (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
             ((BallBalanceControl_IsEnabled(&s_ball_balance_control) != 0U) &&
@@ -830,12 +877,14 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
                  &s_pipe_attitude_control) != 0U) ||
             (PipeAttitudeControl_IsCalibrationValid(
                  &s_pipe_attitude_control) == 0U) ||
+            (s_ball_shuttle_start_pending != 0U) ||
             (BallShuttleControl_IsRunning(
                  &s_ball_shuttle_control) != 0U) ||
             (BallShuttleControl_IsHolding(
                  &s_ball_shuttle_control) != 0U)) {
             return 0U;
         }
+        s_ball_shuttle_start_pending = 0U;
         BallShuttleControl_Stop(&s_ball_shuttle_control);
         BallBalanceControl_SetEndpointHoldEnabled(
             &s_ball_balance_control, 0U);
@@ -848,6 +897,7 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
             PipeAttitudeControl_AbortCalibration(&s_pipe_attitude_control,
                                                   now_ms);
         }
+        s_ball_shuttle_start_pending = 0U;
         BallShuttleControl_Stop(&s_ball_shuttle_control);
         BallBalanceControl_SetEndpointHoldEnabled(
             &s_ball_balance_control, 0U);
@@ -872,22 +922,25 @@ uint8_t App_StartBallShuttle(void)
              &s_pipe_attitude_control) != 0U) ||
         (PipeAttitudeControl_IsCalibrationValid(
              &s_pipe_attitude_control) == 0U) ||
-        (BallBalanceControl_IsActive(&s_ball_balance_control) == 0U) ||
-        (s_ball_balance_output.tracking_valid == 0U) ||
-        (s_ball_balance_output.timed_out != 0U) ||
-        (s_ball_balance_output.imu_fault != 0U) ||
-        (s_ball_balance_output.mapping_fault != 0U) ||
-        (BallShuttleControl_Start(&s_ball_shuttle_control, now_ms) == 0U)) {
+        (s_ball_shuttle_start_pending != 0U) ||
+        (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
+        (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U)) {
         return 0U;
     }
 
+    BallShuttleControl_Stop(&s_ball_shuttle_control);
     BallBalanceControl_SetEndpointHoldEnabled(
         &s_ball_balance_control, 0U);
-    BallBalanceControl_SetTargetMm(
-        &s_ball_balance_control,
-        APP_BALL_SHUTTLE_POSITIVE_TARGET_MM);
+    BallBalanceControl_SetTargetMm(&s_ball_balance_control, 0.0f);
+    BallBalanceControl_SetEnabled(&s_ball_balance_control, 1U, now_ms);
+    if (BallBalanceControl_IsEnabled(&s_ball_balance_control) == 0U) {
+        return 0U;
+    }
+
+    s_ball_shuttle_start_pending = 1U;
+    s_ball_shuttle_prepare_since_ms = now_ms;
     App_UpdateBallShuttleDebug();
-    App_QueueTjcStatus(TJC_STATUS_SHUTTLE_RUNNING);
+    App_QueueTjcStatus(TJC_STATUS_SHUTTLE_PREPARING);
     return 1U;
 }
 
@@ -899,6 +952,7 @@ uint8_t App_StartPipeCalibration(void)
         return 0U;
     }
 
+    s_ball_shuttle_start_pending = 0U;
     BallShuttleControl_Stop(&s_ball_shuttle_control);
     BallBalanceControl_SetEndpointHoldEnabled(&s_ball_balance_control, 0U);
     BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U,
