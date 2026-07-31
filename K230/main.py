@@ -22,12 +22,12 @@ try:
         scale_detection_box,
         select_best_yolo_box,
     )
-    from libs.PlatTasks import DetectionApp
+    from libs.YOLO import YOLOv8
     from vision_pipeline import VisionPipeline
     try:
-        from wifi_ap_video import WifiApVideoStreamer
+        from wifi_ap_rtsp import WifiApRtspStreamer
     except ImportError:
-        WifiApVideoStreamer = None
+        WifiApRtspStreamer = None
 except ImportError:
     print("K230 module import failed")
     print("sys.path:", sys.path)
@@ -35,52 +35,51 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, vision_pipeline.py and /sdcard/libs/PlatTasks.py")
+    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/YOLO.py")
     raise
 
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
-DISPLAY_SIZE = (800, 480)          # LCD 与 OSD 分辨率。
+DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
+DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
 # 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
 STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
 
-STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # 当前钢球 kmodel 的固定输入尺寸。
+STEEL_BALL_MODEL_INPUT_SIZE = [192, 192]  # YOLOv5n 钢球模型的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
-    "/sdcard/models/steel_ball_anchor_320.kmodel",
+    "/sdcard/models/ball_yolov5n_192.kmodel",
 )
-STEEL_BALL_LABELS = ["ball"]
-STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40
-STEEL_BALL_NMS_THRESHOLD = 0.50
-STEEL_BALL_ANCHORS = [
-    12, 12, 14, 14, 16, 15,
-    17, 14, 16, 18, 19, 16,
-    18, 18, 22, 16, 21, 19,
-]
-STEEL_BALL_CLASSICAL_FALLBACK = False
+STEEL_BALL_LABELS = ["ball"]             # 单类别钢球检测标签。
+STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40   # 钢球检测最低置信度。
+STEEL_BALL_NMS_THRESHOLD = 0.50          # 重叠钢球框的 NMS 阈值。
+STEEL_BALL_MAX_BOXES = 4                 # 单钢球场景仅保留少量候选框。
+STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回退。
 
 K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
 K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 80                # OSD refresh at up to 12.5 Hz.
-CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
-CALIBRATION_HOLD_UPDATES = 250      # Keep the last calibration for about 20 seconds.
+OSD_INTERVAL_MS = 40                # 检测框以 25 Hz 刷新，与 UART 上报周期一致。
+CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
+CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
-OSD_TEXT_ENABLE = True             # Hide large debug text in performance mode.
+OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
 
-# K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
+# K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
 VIDEO_AP_ENABLE = True
-VIDEO_AP_SSID = "K230_VIDEO"
-VIDEO_AP_KEY = "12345678"
-VIDEO_AP_IP = "192.168.4.1"
-VIDEO_AP_PORT = 80
-VIDEO_AP_FPS = 6
-VIDEO_AP_JPEG_QUALITY = 40
-VIDEO_AP_START_DELAY_FRAMES = 0
+VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
+VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
+VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
+VIDEO_RTSP_PORT = 8554              # RTSP 服务端口。
+VIDEO_RTSP_SESSION = "test"        # RTSP 会话名称。
+VIDEO_RTSP_FPS = 15                 # H.264 图传目标帧率。
+VIDEO_RTSP_BITRATE_KBPS = 2048      # 800×480 H.264 高质量目标码率。
+VIDEO_AP_START_DELAY_FRAMES = 0     # 主循环启动后立即开启图传。
 
-# STEEL_BALL 使用现成 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
+# STEEL_BALL 使用 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
 RING_DIAMETER_MM = 18.0
 STEEL_BALL_DIAMETER_MM = 10.0
@@ -101,24 +100,6 @@ def _target_thresholds():
         return STEEL_BALL_TARGET_THRESHOLDS
     raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
-
-def _video_streamer_needs_frame(video_streamer, now_ms):
-    if video_streamer is None:
-        return False
-    needs_frame = getattr(video_streamer, "needs_frame", None)
-    if needs_frame is not None:
-        return needs_frame(now_ms)
-
-    clients = getattr(video_streamer, "clients", None)
-    if not clients:
-        return False
-    last_frame_ms = getattr(video_streamer, "last_frame_ms", 0)
-    frame_interval_ms = getattr(
-        video_streamer,
-        "frame_interval_ms",
-        max(1, 1000 // VIDEO_AP_FPS),
-    )
-    return time.ticks_diff(now_ms, last_frame_ms) >= frame_interval_ms
 
 def _resolve_steel_ball_model_path():
     for path in STEEL_BALL_MODEL_PATHS:
@@ -174,59 +155,23 @@ def _scale_roi_detection_box(detection, source_roi, target_roi):
     )
 
 
-def _select_v18_anchor_box(result, previous_center_x=None):
-    """Parse the exact mapping returned by CanMV v1.8 DetectionApp."""
-    if result is None:
-        return None
-    scores = result["scores"]
-    class_ids = result["idx"]
-    boxes = result["boxes"]
-    count = min(len(scores), len(class_ids), len(boxes))
-    best = None
-    best_score = None
-    for index in range(count):
-        if int(class_ids[index]) != 0:
-            continue
-        box = boxes[index]
-        confidence = float(scores[index])
-        x1 = float(box[0])
-        y1 = float(box[1])
-        x2 = float(box[2])
-        y2 = float(box[3])
-        width = x2 - x1
-        height = y2 - y1
-        if width <= 0.0 or height <= 0.0:
-            continue
-        center_x = (x1 + x2) * 0.5
-        score = confidence
-        if previous_center_x is not None:
-            score -= abs(center_x - float(previous_center_x)) * 0.0008
-        if best_score is None or score > best_score:
-            best = (
-                int(round(x1)),
-                int(round(y1)),
-                int(round(width)),
-                int(round(height)),
-                confidence,
-            )
-            best_score = score
-    return best
-
-
-def _create_steel_ball_yolo(pipeline):
+def _create_steel_ball_yolo():
     model_path = _resolve_steel_ball_model_path()
-    print("loading steel-ball AnchorBaseDet:", model_path)
-    detector = DetectionApp(
-        "video",
-        model_path,
-        STEEL_BALL_LABELS,
-        STEEL_BALL_MODEL_INPUT_SIZE,
-        STEEL_BALL_ANCHORS,
-        "AnchorBaseDet",
-        STEEL_BALL_CONFIDENCE_THRESHOLD,
-        STEEL_BALL_NMS_THRESHOLD,
-        list(AI_SIZE),
-        list(pipeline.display_size),
+    print("loading steel-ball YOLOv5n-192 with anchor-free postprocess:", model_path)
+    detector = YOLOv8(
+        task_type="detect",
+        mode="video",
+        kmodel_path=model_path,
+        labels=STEEL_BALL_LABELS,
+        rgb888p_size=list(AI_SIZE),
+        model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
+        # 该 YOLOv5n KModel 使用 anchor-free 转置输出，因此复用 YOLOv8 后处理。
+        # 不调用 draw_result()，让后处理直接返回 AI 通道坐标，再统一转换到
+        # 640×360 的红色刻度标定坐标系。
+        display_size=list(AI_SIZE),
+        conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
+        nms_thresh=STEEL_BALL_NMS_THRESHOLD,
+        max_boxes_num=STEEL_BALL_MAX_BOXES,
         debug_mode=0,
     )
     detector.config_preprocess()
@@ -384,7 +329,9 @@ def run():
             cv_size=CV_SIZE,
             ai_size=AI_SIZE,
             display_size=DISPLAY_SIZE,
-            to_ide=True,
+            display_mode=DISPLAY_MODE,
+            ide_quality=IDE_FRAME_QUALITY,
+            to_ide=False,
         )
         pipeline.create()
         uart = _create_uart()
@@ -400,7 +347,7 @@ def run():
             scale_hold_frames=CALIBRATION_HOLD_UPDATES,
         )
         if use_yolo:
-            yolo = _create_steel_ball_yolo(pipeline)
+            yolo = _create_steel_ball_yolo()
         sequence = 0
         frame_count = 0
         now_ms = time.ticks_ms()
@@ -410,11 +357,21 @@ def run():
         inference_window_start_ms = now_ms
         inference_window_frames = 0
         inference_fps = 0.0
-        anchor_parse_reported = False
+        yolo_parse_reported = False
         video_ap_started = False
+        perf_window_start_ms = now_ms
+        perf_frames = 0
+        perf_cv_us = 0
+        perf_ai_capture_us = 0
+        perf_yolo_us = 0
+        perf_post_us = 0
+        perf_uart_us = 0
+        perf_osd_us = 0
+        perf_loop_us = 0
 
         while True:
             os.exitpoint()
+            loop_start_us = time.ticks_us()
             now_ms = time.ticks_ms()
             if (
                 VIDEO_AP_ENABLE and
@@ -422,28 +379,26 @@ def run():
                 frame_count >= VIDEO_AP_START_DELAY_FRAMES
             ):
                 video_ap_started = True
-                if WifiApVideoStreamer is None:
-                    print("wifi_ap_video.py missing, keep local display running")
+                if WifiApRtspStreamer is None:
+                    print("wifi_ap_rtsp.py missing, keep control loop running")
                 else:
                     try:
-                        video_streamer = WifiApVideoStreamer(
+                        video_streamer = WifiApRtspStreamer(
                             ssid=VIDEO_AP_SSID,
                             key=VIDEO_AP_KEY,
                             ip=VIDEO_AP_IP,
-                            port=VIDEO_AP_PORT,
-                            fps=VIDEO_AP_FPS,
-                            jpeg_quality=VIDEO_AP_JPEG_QUALITY,
+                            port=VIDEO_RTSP_PORT,
+                            session_name=VIDEO_RTSP_SESSION,
+                            fps=VIDEO_RTSP_FPS,
+                            bitrate_kbps=VIDEO_RTSP_BITRATE_KBPS,
                         )
                         video_streamer.start()
                     except BaseException as error:
-                        print("video AP start failed, keep local display running:")
+                        print("RTSP AP start failed, keep control loop running:")
                         sys.print_exception(error)
                         video_streamer = None
 
-            # 无图像时也轮询 HTTP 客户端，避免浏览器连接等待下一次 CV 采集。
-            if video_streamer is not None:
-                video_streamer.tick(None, now_ms)
-
+            # RTSP 图传在线程中直接读取 Display WBC，不占用主循环 CV 帧。
             frame = None
             yolo_result = None
             ai_frame = None
@@ -454,22 +409,32 @@ def run():
                     time.ticks_diff(now_ms, last_calibration_ms)
                     >= CALIBRATION_INTERVAL_MS
                 )
-                video_frame_due = _video_streamer_needs_frame(
-                    video_streamer,
-                    now_ms,
+                # RTSP 直接编码 Display WBC；CV 通道只用于低频红色刻度标定。
+                if calibration_due:
+                    stage_start_us = time.ticks_us()
+                    frame = pipeline.capture_vision_frame()
+                    detector.update_calibration(frame)
+                    last_calibration_ms = now_ms
+                    perf_cv_us += time.ticks_diff(
+                        time.ticks_us(),
+                        stage_start_us,
+                    )
+
+                stage_start_us = time.ticks_us()
+                ai_frame, ai_array = pipeline.capture_ai_frame()
+                perf_ai_capture_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
                 )
 
-                # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
-                if calibration_due or video_frame_due:
-                    frame = pipeline.capture_vision_frame()
-                    if calibration_due:
-                        detector.update_calibration(frame)
-                        last_calibration_ms = now_ms
-                    if video_frame_due:
-                        video_streamer.tick(frame, now_ms)
-
-                ai_frame, ai_array = pipeline.capture_ai_frame()
+                stage_start_us = time.ticks_us()
                 yolo_result = yolo.run(ai_array)
+                perf_yolo_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+
+                stage_start_us = time.ticks_us()
                 previous_ai_x = None
                 if detector.previous_center_x is not None:
                     previous_ai_x = (
@@ -477,13 +442,14 @@ def run():
                         * float(AI_SIZE[0])
                         / float(CV_SIZE[0])
                     )
-                detection = _select_v18_anchor_box(
+                detection = select_best_yolo_box(
                     yolo_result,
                     previous_ai_x,
+                    image_size=AI_SIZE,
                 )
-                if detection is not None and not anchor_parse_reported:
-                    print("ANCHOR_PARSED:", detection)
-                    anchor_parse_reported = True
+                if detection is not None and not yolo_parse_reported:
+                    print("YOLOV5_PARSED:", detection)
+                    yolo_parse_reported = True
                 detection = scale_detection_box(
                     detection,
                     AI_SIZE,
@@ -499,12 +465,14 @@ def run():
                     fallback_result = detector.detect(frame)
                     if fallback_result.valid:
                         result = fallback_result
+                perf_post_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
                 frame = None
             else:
                 frame = pipeline.capture_vision_frame()
                 result = detector.detect(frame)
-                if video_streamer is not None:
-                    video_streamer.tick(frame, now_ms)
                 frame = None
 
             # 统计单位时间内真正完成的钢球识别次数，包含实际摄像头与系统开销。
@@ -519,15 +487,23 @@ def run():
                     inference_window_frames * 1000.0
                     / float(inference_elapsed_ms)
                 )
+                # IDE画面刷新可能低于控制循环帧率，串口值用于区分显示卡顿和推理卡顿。
+                print("BALL LOOP FPS: {:.1f}".format(inference_fps))
                 inference_window_frames = 0
                 inference_window_start_ms = now_ms
 
             if time.ticks_diff(now_ms, last_send_ms) >= SEND_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
                 uart.write(format_ball_message(result, sequence))
                 sequence = (sequence + 1) & 0xFFFF
                 last_send_ms = now_ms
+                perf_uart_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
             if time.ticks_diff(now_ms, last_osd_ms) >= OSD_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
                 _draw_overlay(
                     pipeline,
                     detector,
@@ -537,6 +513,10 @@ def run():
                     yolo_result,
                 )
                 last_osd_ms = now_ms
+                perf_osd_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
             ai_frame = None
             ai_array = None
@@ -546,10 +526,44 @@ def run():
             if frame_count % GC_INTERVAL_FRAMES == 0:
                 gc.collect()
 
+            perf_loop_us += time.ticks_diff(
+                time.ticks_us(),
+                loop_start_us,
+            )
+            perf_frames += 1
+            perf_now_ms = time.ticks_ms()
+            if (
+                perf_frames > 0
+                and time.ticks_diff(perf_now_ms, perf_window_start_ms)
+                >= INFERENCE_FPS_WINDOW_MS
+            ):
+                divisor = float(perf_frames) * 1000.0
+                print(
+                    "PERF ms/frame loop={:.1f} cv={:.1f} ai={:.1f} "
+                    "yolo={:.1f} post={:.1f} uart={:.1f} osd={:.1f}".format(
+                        perf_loop_us / divisor,
+                        perf_cv_us / divisor,
+                        perf_ai_capture_us / divisor,
+                        perf_yolo_us / divisor,
+                        perf_post_us / divisor,
+                        perf_uart_us / divisor,
+                        perf_osd_us / divisor,
+                    )
+                )
+                perf_window_start_ms = perf_now_ms
+                perf_frames = 0
+                perf_cv_us = 0
+                perf_ai_capture_us = 0
+                perf_yolo_us = 0
+                perf_post_us = 0
+                perf_uart_us = 0
+                perf_osd_us = 0
+                perf_loop_us = 0
+
     except KeyboardInterrupt:
-        print("用户停止钢珠位置识别")
+        print("用户停止钢球位置识别")
     except BaseException as error:
-        print("钢珠位置识别异常:")
+        print("钢球位置识别异常:")
         sys.print_exception(error)
     finally:
         if video_streamer is not None:

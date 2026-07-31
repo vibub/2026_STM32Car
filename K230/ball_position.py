@@ -86,6 +86,15 @@ def _clip(value, minimum, maximum):
     return value
 
 
+def _is_finite_number(value):
+    """兼容 MicroPython 地拒绝 NaN、正负无穷和异常大数。"""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return False
+    return value == value and -1000000.0 < value < 1000000.0
+
+
 def scale_detection_box(detection, source_size, target_size):
     """在不同摄像头通道之间等比例转换目标框坐标。"""
     if detection is None:
@@ -1068,33 +1077,65 @@ def select_ball_blob(blobs, previous_center_x=None, expected_diameter_px=24.0):
     return best
 
 
-def select_best_yolo_box(yolo_result, previous_center_x=None):
-    """选择置信度最高且与上一帧连续的钢球框。
+def select_best_yolo_box(yolo_result, previous_center_x=None, image_size=None):
+    """选择置信度最高且与上一帧连续的单类别 YOLO 检测框。
 
-    YOLO11 视频检测结果格式为 ``(boxes, class_ids, scores)``，其中 box 为
-    ``[center_x, center_y, width, height]``。返回统一后的
-    ``(x, y, width, height, confidence)``。
+    CanMV ``libs.YOLO`` 的视频检测结果格式为
+    ``(boxes, class_ids, scores)``，其中 box 为左上角坐标格式
+    ``[x, y, width, height]``。返回统一后的
+    ``(x, y, width, height, confidence)``；指定 ``image_size`` 时会把框
+    裁剪到图像内部，防止异常模型输出让 OSD 越界。
     """
     if yolo_result is None or len(yolo_result) < 3:
         return None
     boxes = yolo_result[0]
+    class_ids = yolo_result[1]
     scores = yolo_result[2]
     best = None
     best_score = None
-    count = min(len(boxes), len(scores))
+    count = min(len(boxes), len(class_ids), len(scores))
     for index in range(count):
+        try:
+            if int(class_ids[index]) != 0:
+                continue
+        except (TypeError, ValueError):
+            continue
         box = boxes[index]
         if len(box) < 4:
             continue
-        center_x = float(box[0])
-        center_y = float(box[1])
-        width = int(round(float(box[2])))
-        height = int(round(float(box[3])))
-        confidence = float(scores[index])
+        raw_x = box[0]
+        raw_y = box[1]
+        raw_width = box[2]
+        raw_height = box[3]
+        raw_confidence = scores[index]
+        if not all(_is_finite_number(value) for value in (
+            raw_x,
+            raw_y,
+            raw_width,
+            raw_height,
+            raw_confidence,
+        )):
+            continue
+        confidence = float(raw_confidence)
+        if confidence < 0.0 or confidence > 1.0:
+            continue
+        x = int(round(float(raw_x)))
+        y = int(round(float(raw_y)))
+        width = int(round(float(raw_width)))
+        height = int(round(float(raw_height)))
         if width <= 0 or height <= 0:
             continue
-        x = int(round(center_x - width * 0.5))
-        y = int(round(center_y - height * 0.5))
+        if image_size is not None:
+            image_width, image_height = image_size
+            right = int(_clip(x + width, 0, image_width))
+            bottom = int(_clip(y + height, 0, image_height))
+            x = int(_clip(x, 0, image_width))
+            y = int(_clip(y, 0, image_height))
+            width = right - x
+            height = bottom - y
+            if width <= 0 or height <= 0:
+                continue
+        center_x = x + width * 0.5
         continuity_penalty = 0.0
         if previous_center_x is not None:
             jump = abs(center_x - float(previous_center_x))
@@ -1301,10 +1342,15 @@ class BallPositionDetector:
             return BallPositionResult(scale_quality=scale_quality)
 
         x, y, width, height, confidence = detection
+        if not all(_is_finite_number(value) for value in detection):
+            return BallPositionResult(scale_quality=scale_quality)
+        confidence = float(confidence)
+        if confidence < 0.0 or confidence > 1.0:
+            return BallPositionResult(scale_quality=scale_quality)
         rect = (int(x), int(y), int(width), int(height))
         center_x = float(x) + float(width) * 0.5
         center_y = float(y) + float(height) * 0.5
-        target_quality = int(_clip(round(float(confidence) * 100.0), 0, 100))
+        target_quality = int(_clip(round(confidence * 100.0), 0, 100))
         if scale is None:
             return BallPositionResult(
                 quality=target_quality,

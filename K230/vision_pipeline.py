@@ -19,6 +19,8 @@ class VisionPipeline:
         display_size=(800, 480),
         hmirror=False,
         vflip=False,
+        display_mode="lcd",
+        ide_quality=90,
         to_ide=True,
     ):
         # 传统视觉使用低分辨率 RGB565，保证红线检测可以稳定高频运行。
@@ -39,8 +41,19 @@ class VisionPipeline:
         # 同时启用水平镜像和垂直翻转，可让显示、传统视觉和 AI 三个通道方向一致。
         self.hmirror = bool(hmirror)
         self.vflip = bool(vflip)
-        # 比赛模式可关闭 IDE 视频镜像，只保留 LCD，降低 USB/显示复制带宽。
-        self.to_ide = bool(to_ide)
+        if display_mode not in ("lcd", "ide", "rtsp"):
+            raise ValueError("display_mode must be 'lcd', 'ide' or 'rtsp'")
+        # ide 与 rtsp 均使用 Display.VIRT；rtsp 模式关闭 IDE JPEG 帧缓冲，
+        # 避免 IDE 和 H.264 RTSP 同时争用唯一的 VO WBC 通道。
+        self.display_mode = display_mode
+        # 降低 IDE 帧缓冲 JPEG 质量可明显减少 USB 传输与编码开销。
+        self.ide_quality = max(1, min(100, int(ide_quality)))
+        if display_mode == "ide":
+            self.to_ide = True
+        elif display_mode == "rtsp":
+            self.to_ide = False
+        else:
+            self.to_ide = bool(to_ide)
 
         self.sensor = None
         self.osd_img = None
@@ -68,7 +81,7 @@ class VisionPipeline:
             )
         )
 
-        # 通道0直接绑定LCD视频层。
+        # 通道0直接绑定物理 LCD、IDE 或 RTSP 共用的虚拟显示视频层。
         self.sensor.set_framesize(
             width=self.display_size[0],
             height=self.display_size[1],
@@ -115,6 +128,30 @@ class VisionPipeline:
             image.ARGB8888
         )
 
+        display_type = (
+            Display.VIRT
+            if self.display_mode in ("ide", "rtsp")
+            else Display.ST7701
+        )
+        print("S20.4: 初始化Display，模式={}".format(self.display_mode))
+        if self.display_mode == "ide":
+            Display.init(
+                display_type,
+                width=self.display_size[0],
+                height=self.display_size[1],
+                to_ide=True,
+                quality=self.ide_quality,
+            )
+        else:
+            Display.init(
+                display_type,
+                width=self.display_size[0],
+                height=self.display_size[1],
+                to_ide=self.to_ide,
+            )
+        self._display_initialized = True
+
+        # Display 必须先初始化，再把摄像头预览通道绑定到底层视频层。
         bind_info = self.sensor.bind_info(
             x=0,
             y=0,
@@ -124,15 +161,6 @@ class VisionPipeline:
             **bind_info,
             layer=Display.LAYER_VIDEO1
         )
-
-        print("S20.4: 初始化Display")
-        Display.init(
-            Display.ST7701,
-            width=self.display_size[0],
-            height=self.display_size[1],
-            to_ide=self.to_ide
-        )
-        self._display_initialized = True
         print("S20.5: Display初始化完成")
 
         print("S20.6: 初始化MediaManager")
