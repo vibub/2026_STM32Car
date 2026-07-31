@@ -1,8 +1,8 @@
 # K230 红色标记与钢珠位置识别联调
 
-运行 `main.py`。程序使用 640×360 传统视觉通道低频识别红色标记，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 192×192 后运行钢球 YOLOv5n；检测框会转换到 640×360 标定坐标系。Display/OSD 合成画面通过 WBC 硬件 H.264 编码，以 RTSP 图传输出。导轨沿画面水平方向放置。
+运行 `main.py`。程序使用 640×360 传统视觉通道低频识别红色标记，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 320×320 后运行钢球 AnchorBaseDet；检测框会转换到 640×360 标定坐标系。Display/OSD 合成画面通过 WBC 硬件 H.264 编码，以 RTSP 图传输出。导轨沿画面水平方向放置。
 
-`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_rtsp.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_yolov5n_192.kmodel`，并确保 `/sdcard/libs/YOLO.py` 可用。该模型虽然命名为 YOLOv5n，但输出为 anchor-free 转置布局，运行时使用 `YOLOv8` 类完成匹配的后处理。入口会显式把 `/sdcard` 加入模块搜索路径。
+`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_rtsp.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_AnchorBaseDet_320.kmodel`，并确保 `/sdcard/libs/PlatTasks.py` 可用。运行时使用 `DetectionApp` 的 `AnchorBaseDet` 后处理，并使用模型部署配置中的九组锚框。入口会显式把 `/sdcard` 加入模块搜索路径。
 
 ## 红色位置标记
 
@@ -29,7 +29,7 @@ LCD/IDE 叠加层中：
 - `MARK 5/5`：五组全部有效。
 - 绿色框：识别到的圆环或钢珠。
 - `BALL POS +xx.x mm`：钢球相对 0 标记的位置；识别无效时显示 `BALL POS --.- mm`。
-- `BALL FPS x.x`：每秒实际完成的钢球 YOLO 识别次数，包含摄像头采集、图传和 OSD 对实时性的影响。
+- `BALL FPS x.x`：每秒实际完成的钢球 AnchorBaseDet 识别次数，包含摄像头采集、图传和 OSD 对实时性的影响。
 
 少于两组、上下红线无法配对或红线间距明显不合理时，位置结果立即无效，不沿用旧值。
 
@@ -39,16 +39,16 @@ LCD/IDE 叠加层中：
 2. 将 x 坐标接近、上下间距合理的两个 blob 配成一组刻度列。
 3. 按 x 排序；三组以上选择最靠近画面中心的一列作为 0，相邻列间隔为 50 mm；只有两组时按“中心标记可见”或“中心标记被遮挡”两种情况估算。
 4. 根据目标所在高度对每组上下红线的 x 坐标插值，补偿轻微透视和相机歪斜。
-5. 钢球模式由 YOLO 输出 `[x, y, width, height]` 框；取框中心并限制在上下红线之间，再在相邻刻度间分段插值位置。
+5. 钢球模式由 `DetectionApp` 输出 `[x1, y1, x2, y2]` 框，程序将其转换为 `[x, y, width, height]`；取框中心并限制在上下红线之间，再在相邻刻度间分段插值位置。
 6. 圆环模式仍使用金色 LAB 连通域，方便没有钢球时联调标定和屏幕显示。
 
-## 钢球 YOLO 与圆环模式
+## 钢球 AnchorBaseDet 与圆环模式
 
-默认配置使用 192×192 YOLOv5n 钢球模型：
+默认配置使用 320×320 AnchorBaseDet 钢球模型：
 
 ```python
 TARGET_PROFILE = "STEEL_BALL"
-STEEL_BALL_MODEL_INPUT_SIZE = [192, 192]
+STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]
 STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40
 ```
 
@@ -65,7 +65,7 @@ RING_DIAMETER_MM = 18.0
 
 - 红线漏检：用 CanMV IDE 阈值编辑器重新标定 `ball_position.py` 的 `SCALE_THRESHOLDS`，只保留红色记号笔。
 - 红线粘连：缩小每条线宽，擦除附近其他红色污迹，或减小 `SCALE_MERGE_MARGIN`。
-- YOLO 漏检钢球：先确认模型路径和 `/sdcard/libs/YOLO.py`，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.40 逐步降至 0.30；误检时提高阈值。
+- AnchorBaseDet 漏检钢球：先确认模型路径、`/sdcard/libs/PlatTasks.py` 和 `STEEL_BALL_ANCHORS`，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.40 逐步降至 0.30；误检时提高阈值。
 - 金色圆环漏检：调整 `RING_TARGET_THRESHOLDS`；圆环被分成多块时把 `TARGET_MERGE_MARGIN` 从 5 增大到 6～8。
 - 位置整体偏移：调整相机，使 0 标记位于画面中心附近；相机和导轨固定后锁定曝光、白平衡与焦距。
 

@@ -20,9 +20,8 @@ try:
         STEEL_BALL_TARGET_THRESHOLDS,
         format_ball_message,
         scale_detection_box,
-        select_best_yolo_box,
     )
-    from libs.YOLO import YOLOv8
+    from libs.PlatTasks import DetectionApp
     from vision_pipeline import VisionPipeline
     try:
         from wifi_ap_rtsp import WifiApRtspStreamer
@@ -35,7 +34,7 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/YOLO.py")
+    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
     raise
 
 
@@ -48,14 +47,18 @@ AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少�
 # 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
 STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
 
-STEEL_BALL_MODEL_INPUT_SIZE = [192, 192]  # YOLOv5n 钢球模型的固定输入尺寸。
+STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]  # AnchorBaseDet 钢球模型的固定输入尺寸。
 STEEL_BALL_MODEL_PATHS = (
-    "/sdcard/models/ball_yolov5n_192.kmodel",
+    "/sdcard/models/ball_AnchorBaseDet_320.kmodel",
 )
 STEEL_BALL_LABELS = ["ball"]             # 单类别钢球检测标签。
 STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40   # 钢球检测最低置信度。
 STEEL_BALL_NMS_THRESHOLD = 0.50          # 重叠钢球框的 NMS 阈值。
-STEEL_BALL_MAX_BOXES = 4                 # 单钢球场景仅保留少量候选框。
+STEEL_BALL_ANCHORS = [                   # 三个检测层使用的九组锚框。
+    12, 12, 14, 14, 16, 15,
+    17, 14, 16, 18, 19, 16,
+    18, 18, 22, 16, 21, 19,
+]
 STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回退。
 
 K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
@@ -155,23 +158,59 @@ def _scale_roi_detection_box(detection, source_roi, target_roi):
     )
 
 
-def _create_steel_ball_yolo():
+def _select_v18_anchor_box(result, previous_center_x=None):
+    """解析 CanMV v1.8 DetectionApp 返回的 AnchorBaseDet 检测结果。"""
+    if result is None:
+        return None
+    scores = result["scores"]
+    class_ids = result["idx"]
+    boxes = result["boxes"]
+    count = min(len(scores), len(class_ids), len(boxes))
+    best = None
+    best_score = None
+    for index in range(count):
+        if int(class_ids[index]) != 0:
+            continue
+        box = boxes[index]
+        confidence = float(scores[index])
+        x1 = float(box[0])
+        y1 = float(box[1])
+        x2 = float(box[2])
+        y2 = float(box[3])
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 0.0 or height <= 0.0:
+            continue
+        center_x = (x1 + x2) * 0.5
+        score = confidence
+        if previous_center_x is not None:
+            score -= abs(center_x - float(previous_center_x)) * 0.0008
+        if best_score is None or score > best_score:
+            best = (
+                int(round(x1)),
+                int(round(y1)),
+                int(round(width)),
+                int(round(height)),
+                confidence,
+            )
+            best_score = score
+    return best
+
+
+def _create_steel_ball_yolo(pipeline):
     model_path = _resolve_steel_ball_model_path()
-    print("loading steel-ball YOLOv5n-192 with anchor-free postprocess:", model_path)
-    detector = YOLOv8(
-        task_type="detect",
-        mode="video",
-        kmodel_path=model_path,
-        labels=STEEL_BALL_LABELS,
-        rgb888p_size=list(AI_SIZE),
-        model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
-        # 该 YOLOv5n KModel 使用 anchor-free 转置输出，因此复用 YOLOv8 后处理。
-        # 不调用 draw_result()，让后处理直接返回 AI 通道坐标，再统一转换到
-        # 640×360 的红色刻度标定坐标系。
-        display_size=list(AI_SIZE),
-        conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
-        nms_thresh=STEEL_BALL_NMS_THRESHOLD,
-        max_boxes_num=STEEL_BALL_MAX_BOXES,
+    print("loading steel-ball AnchorBaseDet-320:", model_path)
+    detector = DetectionApp(
+        "video",
+        model_path,
+        STEEL_BALL_LABELS,
+        STEEL_BALL_MODEL_INPUT_SIZE,
+        STEEL_BALL_ANCHORS,
+        "AnchorBaseDet",
+        STEEL_BALL_CONFIDENCE_THRESHOLD,
+        STEEL_BALL_NMS_THRESHOLD,
+        list(AI_SIZE),
+        list(pipeline.display_size),
         debug_mode=0,
     )
     detector.config_preprocess()
@@ -347,7 +386,7 @@ def run():
             scale_hold_frames=CALIBRATION_HOLD_UPDATES,
         )
         if use_yolo:
-            yolo = _create_steel_ball_yolo()
+            yolo = _create_steel_ball_yolo(pipeline)
         sequence = 0
         frame_count = 0
         now_ms = time.ticks_ms()
@@ -357,7 +396,7 @@ def run():
         inference_window_start_ms = now_ms
         inference_window_frames = 0
         inference_fps = 0.0
-        yolo_parse_reported = False
+        anchor_parse_reported = False
         video_ap_started = False
         perf_window_start_ms = now_ms
         perf_frames = 0
@@ -442,14 +481,13 @@ def run():
                         * float(AI_SIZE[0])
                         / float(CV_SIZE[0])
                     )
-                detection = select_best_yolo_box(
+                detection = _select_v18_anchor_box(
                     yolo_result,
                     previous_ai_x,
-                    image_size=AI_SIZE,
                 )
-                if detection is not None and not yolo_parse_reported:
-                    print("YOLOV5_PARSED:", detection)
-                    yolo_parse_reported = True
+                if detection is not None and not anchor_parse_reported:
+                    print("ANCHOR_PARSED:", detection)
+                    anchor_parse_reported = True
                 detection = scale_detection_box(
                     detection,
                     AI_SIZE,
