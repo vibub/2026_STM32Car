@@ -1,5 +1,6 @@
 #include "app_main.h"
 #include "app_config.h"
+#include "balance_debug_log.h"
 #include "ball_balance_control.h"
 #include "ball_position_protocol.h"
 #include "ball_shuttle_control.h"
@@ -176,6 +177,11 @@ static uint8_t s_line_sensor_failure_count;
 static uint32_t s_last_k230_overflow_count;
 static uint32_t s_last_k230_error_count;
 static uint32_t s_pipe_attitude_timestamp_ms;
+#if APP_ENABLE_BALANCE_LOG
+static float s_balance_log_imu_accel_y_g;
+static float s_balance_log_imu_accel_z_g;
+static float s_balance_log_imu_gyro_x_dps;
+#endif
 static float s_chassis_accel_cm_s2;
 static uint8_t s_lap_stop_enabled;
 static uint8_t s_last_ball_active;
@@ -423,6 +429,30 @@ static void App_UpdatePipeAttitudeDebug(void)
     g_app_chassis_accel_cm_s2 = s_chassis_accel_cm_s2;
 }
 
+static void App_BalanceDebugLogTask(uint32_t now_ms)
+{
+#if APP_ENABLE_BALANCE_LOG
+    BalanceDebugLogInput input;
+
+    input.now_ms = now_ms;
+    input.imu_timestamp_ms = s_pipe_attitude_timestamp_ms;
+    input.raw_position_d10_mm = g_app_ball_position_d10_mm;
+    input.ball_sequence = g_app_ball_sequence;
+    input.ball_quality = g_app_ball_quality;
+    input.ball_sample_valid = g_app_ball_sample_valid;
+    input.imu_accel_y_g = s_balance_log_imu_accel_y_g;
+    input.imu_accel_z_g = s_balance_log_imu_accel_z_g;
+    input.imu_gyro_x_dps = s_balance_log_imu_gyro_x_dps;
+    input.actual_servo_angle_deg = ServoDriver_GetAngle();
+    input.servo_pulse_us = ServoDriver_GetPulseUs();
+    BalanceDebugLog_Update(&input,
+                           &s_ball_balance_output,
+                           &s_pipe_attitude_output);
+#else
+    (void) now_ms;
+#endif
+}
+
 static void App_QueueTjcStatus(Tjc_StatusText status)
 {
     s_pending_tjc_status = status;
@@ -516,6 +546,11 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
         measurement.gyro_z_dps = imu_sample.gyro_z_dps;
         measurement_ptr = &measurement;
         s_pipe_attitude_timestamp_ms = imu_sample.timestamp_ms;
+#if APP_ENABLE_BALANCE_LOG
+        s_balance_log_imu_accel_y_g = imu_sample.accel_y_g;
+        s_balance_log_imu_accel_z_g = imu_sample.accel_z_g;
+        s_balance_log_imu_gyro_x_dps = imu_sample.gyro_x_dps;
+#endif
     }
 #endif
 
@@ -691,6 +726,7 @@ static void App_BallBalanceTask(uint32_t now_ms)
     if (s_pipe_attitude_output.servo_override_active == 0U) {
         ServoDriver_SetAngle(s_ball_balance_output.command_angle_deg);
     }
+    App_BalanceDebugLogTask(now_ms);
 
     if ((s_ball_balance_output.enabled != s_last_ball_active) &&
         (s_dynamic_run_state == APP_DYNAMIC_RUN_IDLE)) {
@@ -1220,6 +1256,7 @@ void App_Init(void)
     ChassisAccelEstimator_Init(&s_chassis_accel_estimator);
     PipeAttitudeControl_Init(&s_pipe_attitude_control);
     BallBalanceControl_Init(&s_ball_balance_control);
+    BalanceDebugLog_Init();
     App_ApplyBallPidGains();
     BallShuttleControl_Init(&s_ball_shuttle_control);
     BallPositionProtocol_Init();

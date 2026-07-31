@@ -7,6 +7,7 @@
 #define SERVO_DRIVER_PHYSICAL_SPAN_DEG  270.0f /* 舵机完整电气角度范围。 */
 
 static float s_angle_deg = SERVO_DRIVER_MIN_ANGLE_DEG;
+static uint32_t s_pulse_us = SERVO_DRIVER_MIN_PULSE_US;
 
 static float ServoDriver_LimitAngle(float angle_deg)
 {
@@ -44,11 +45,16 @@ void ServoDriver_Init(float initial_angle_deg)
 void ServoDriver_SetAngle(float angle_deg)
 {
     s_angle_deg = ServoDriver_LimitAngle(angle_deg);
-    __HAL_TIM_SET_COMPARE(&htim4, SERVO_PWM_CHANNEL,
-                          ServoDriver_AngleToPulseUs(s_angle_deg));
+    s_pulse_us = ServoDriver_AngleToPulseUs(s_angle_deg);
+    __HAL_TIM_SET_COMPARE(&htim4, SERVO_PWM_CHANNEL, s_pulse_us);
 }
 
 float ServoDriver_GetAngle(void)
 {
     return s_angle_deg;
+}
+
+uint32_t ServoDriver_GetPulseUs(void)
+{
+    return s_pulse_us;
 }

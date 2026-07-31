@@ -207,6 +207,19 @@ gcc -std=c11 -Wall -Wextra -Werror \
 ./tests/test_smooth_chassis_control.exe
 ```
 
+钢球平衡诊断日志使用独立主机测试：
+
+```bash
+gcc -std=c11 -Wall -Wextra -Werror \
+  -IApp/Inc -IControl/Inc \
+  tests/test_balance_debug_log.c \
+  App/Src/balance_debug_log.c \
+  -o tests/test_balance_debug_log.exe
+./tests/test_balance_debug_log.exe
+```
+
+IAR 内存采集和 CSV 转换步骤见 [钢球平衡诊断日志](Tools/BalanceDebugLog/README.md)。
+
 ## 上车前必须验证
 
 1. 烧录前清空 CM4 所在的 Flash Bank 2，或在 Option Bytes 中关闭 CM4 启动，避免旧 CM4 固件继续占用外设。

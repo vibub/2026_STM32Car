@@ -3,6 +3,9 @@
 
 /* LSM6DSV16X 已通过 I2C2 接入，使用 PB10/PB11。 */
 #define APP_USE_IMU                         1U  /* IMU 功能开关，1 表示启用初始化和轮询。 */
+#ifndef APP_ENABLE_BALANCE_LOG
+#define APP_ENABLE_BALANCE_LOG              0U  /* 钢球平衡诊断日志开关，比赛固件可设为0释放约98 KiB RAM。 */
+#endif
 
 #define APP_CONTROL_PERIOD_MS              20U  /* 主控制循环周期，单位为毫秒。 */
 #define APP_BASE_SPEED_CM_S                40.0f /* 基础巡线目标速度，单位为厘米每秒。 */
