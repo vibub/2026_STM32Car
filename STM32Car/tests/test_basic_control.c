@@ -875,28 +875,25 @@ static void test_ball_balance_friction_compensation(void)
     assert(output.enabled != 0U);
 
     BallBalanceControl_SetPidGains(&control, 0.025f, 0.015f, 0.040f);
-    /* A stationary ball anywhere inside the requested +/-10 mm success
-     * window must stay in HOLD and must not receive a final kick. */
-    measurement.position_d10_mm = 80;
-    measurement.sequence = 1U;
-    now_ms += 20U;
-    attitude.timestamp_ms = now_ms;
-    BallBalanceControl_Update(&control,
-                              now_ms,
-                              &measurement,
-                              &attitude,
-                              &output);
+    /* 小球静止在目标正向3毫米时应进入HOLD，且P/I均不产生追逐动作。 */
+    measurement.position_d10_mm = 30;
+    measurement.quality = 80U;
+    for (index = 1U; index <= 35U; index++) {
+        measurement.sequence = index;
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  &measurement,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
+    assert(output.integral_active == 0U);
+    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
     assert_float_near_tolerance(
         output.desired_pipe_pitch_deg, 0.0f, 0.001f);
-    measurement.sequence = 2U;
-    now_ms += 20U;
-    attitude.timestamp_ms = now_ms;
-    BallBalanceControl_Update(&control,
-                              now_ms,
-                              &measurement,
-                              &attitude,
-                              &output);
-    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
 }
 
 static void test_ball_balance_motion_classification(void)
@@ -1247,7 +1244,7 @@ static void test_ball_balance_endpoint_integral(void)
     BallBalanceControl_SetTargetMm(&control, -50.0f);
     BallBalanceControl_SetEndpointHoldEnabled(&control, 1U);
     measurement.valid = 1U;
-    measurement.position_d10_mm = -480;
+    measurement.position_d10_mm = -440;
     measurement.quality = 80U;
     for (index = 1U; index <= 12U; index++) {
         measurement.sequence = index;

@@ -13,7 +13,7 @@
 #define BALL_BALANCE_KD_MAX_DEG_PER_MM_S            0.200f /* Debug 可调 Kd 安全上限。 */
 #define BALL_BALANCE_POSITION_P_LIMIT_DEG          5.30f /* 允许位置外环使用接近完整实测角度拉回端部钢球。 */
 #define BALL_BALANCE_POSITION_D_LIMIT_DEG          1.10f /* 速度反馈只负责柔和制动，避免越零后反打过强。 */
-#define BALL_BALANCE_POSITION_DEADBAND_MM          5.0f  /* PD 阶段在零点附近允许小范围静止。 */
+#define BALL_BALANCE_POSITION_DEADBAND_MM          4.0f  /* 目标点正负4毫米内不再主动修正位置。 */
 #define BALL_BALANCE_STOPPED_SPEED_MM_S            3.0f  /* 只有球真正接近静止才进入零点保持。 */
 #define BALL_BALANCE_BALL_MOVING_SPEED_MM_S         8.0f
 #define BALL_BALANCE_BALL_STOPPED_SPEED_MM_S        5.0f
@@ -91,6 +91,17 @@ static uint32_t BallBalanceControl_DataTimeoutMs(
 static float BallBalanceControl_Abs(float value)
 {
     return (value < 0.0f) ? -value : value;
+}
+
+static float BallBalanceControl_ApplyPositionDeadband(float error_mm)
+{
+    if (error_mm > BALL_BALANCE_POSITION_DEADBAND_MM) {
+        return error_mm - BALL_BALANCE_POSITION_DEADBAND_MM;
+    }
+    if (error_mm < -BALL_BALANCE_POSITION_DEADBAND_MM) {
+        return error_mm + BALL_BALANCE_POSITION_DEADBAND_MM;
+    }
+    return 0.0f;
 }
 
 static float BallBalanceControl_Limit(float value,
@@ -394,8 +405,11 @@ static void BallBalanceControl_UpdateNearTargetIntegral(
     float ki_deg_per_mm_s;
     float output_limit_deg;
     float integral_limit_mm_s;
+    float integral_error_mm;
     float leak_ratio;
 
+    integral_error_mm = BallBalanceControl_ApplyPositionDeadband(
+        control->error_mm);
     ki_deg_per_mm_s = control->position_ki_deg_per_mm_s;
     output_limit_deg = BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG;
     if (control->endpoint_hold_enabled != 0U) {
@@ -405,6 +419,7 @@ static void BallBalanceControl_UpdateNearTargetIntegral(
     }
 
     if ((ki_deg_per_mm_s <= BALL_BALANCE_GAIN_EPSILON) ||
+        (error_abs <= BALL_BALANCE_POSITION_DEADBAND_MM) ||
         (error_abs > BALL_BALANCE_NEAR_TARGET_I_RANGE_MM) ||
         (control->zero_crossed != 0U)) {
         control->integral_mm_s = 0.0f;
@@ -417,7 +432,7 @@ static void BallBalanceControl_UpdateNearTargetIntegral(
         (control->last_measurement_dt_s > 0.0f)) {
         if (velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
             /* 静止残差通常来自机构静摩擦，适度加快积分消除稳态误差。 */
-            control->integral_mm_s += control->error_mm *
+            control->integral_mm_s += integral_error_mm *
                 control->last_measurement_dt_s *
                 BALL_BALANCE_STICTION_INTEGRAL_BOOST;
         } else {
@@ -426,8 +441,8 @@ static void BallBalanceControl_UpdateNearTargetIntegral(
                 BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S;
             leak_ratio = BallBalanceControl_Limit(leak_ratio, 0.0f, 1.0f);
             control->integral_mm_s *= leak_ratio;
-            if ((control->error_mm * control->velocity_mm_s) > 0.0f) {
-                control->integral_mm_s += control->error_mm *
+            if ((integral_error_mm * control->velocity_mm_s) > 0.0f) {
+                control->integral_mm_s += integral_error_mm *
                     control->last_measurement_dt_s;
             }
         }
@@ -452,10 +467,13 @@ static float BallBalanceControl_CalculateMovingPitch(
     BallBalanceControl *control)
 {
     float feedback_effort_deg;
+    float feedback_error_mm;
     float pitch_deg;
     float ball_accel_direction;
     uint8_t moving_toward_target;
 
+    feedback_error_mm = BallBalanceControl_ApplyPositionDeadband(
+        control->error_mm);
     moving_toward_target = (uint8_t) (
         (control->error_mm * control->velocity_mm_s) < 0.0f);
     /* Once the ball is travelling toward zero, position must not keep
@@ -465,7 +483,7 @@ static float BallBalanceControl_CalculateMovingPitch(
         control->p_term_deg = 0.0f;
     } else {
         control->p_term_deg = BallBalanceControl_Limit(
-            control->position_kp_deg_per_mm * control->error_mm,
+            control->position_kp_deg_per_mm * feedback_error_mm,
             -BALL_BALANCE_POSITION_P_LIMIT_DEG,
             BALL_BALANCE_POSITION_P_LIMIT_DEG);
     }
