@@ -2,26 +2,26 @@
 
 IMAGE_WIDTH = 640
 IMAGE_HEIGHT = 360
-BALL_POSITION_MAPPING_VERSION = 2
+BALL_POSITION_MAPPING_VERSION = 3
 
-# 红色记号笔的 LAB 初值。无需识别数字，只识别上下成对的红色短线。
+# 红色记号笔的 LAB 初值。无需识别数字，只识别水管上的单排红色标记。
 # LAB 顺序为 (L_min, L_max, A_min, A_max, B_min, B_max)。
 SCALE_THRESHOLDS = (
     (18, 100, 18, 127, 5, 127),
     (24, 100, 8, 127, -10, 127),
 )
 SCALE_SEARCH_ROI = (0, 135, 640, 135)
-MARKER_INTERVAL_MM = 50.0
-MARKER_TARGET_COLUMNS = 4
+MARKER_INTERVAL_MM = 50.0             # 相邻实物红点的固定间隔，单位mm。
+MARKER_TARGET_COLUMNS = 5              # 标尺固定识别五个红点。
 MARKER_MIN_COLUMNS = MARKER_TARGET_COLUMNS
-MARKER_MIN_VISIBLE_COLUMNS = 3
+MARKER_MIN_VISIBLE_COLUMNS = 4         # 最少四个实点时允许投影补全缺失点。
 MARKER_MAX_COLUMNS = MARKER_TARGET_COLUMNS
-MARKER_ZERO_HINT_X = IMAGE_WIDTH * 0.62
+MARKER_ZERO_HINT_X = IMAGE_WIDTH * 0.55  # 物理零点在当前固定相机画面中的大致横向位置。
 MARKER_ROW_HINT_Y = 188
 MARKER_ROW_HINT_HALF_HEIGHT = 54
 MARKER_ZERO_SEARCH_HALF_WIDTH = 90
-MARKER_EXPECTED_SPACING_PX = 150
-MARKER_OPEN_LOOP_STEPS = (-2, -1, 0, 1)
+MARKER_EXPECTED_SPACING_PX = 150       # 固定安装下相邻红点的预期像素间距。
+MARKER_OPEN_LOOP_STEPS = (-2, -1, 0, 1, 2)  # 五点相对中间零点的序号。
 MARKER_SPACING_SEARCH_HALF_WIDTH = 88
 MARKER_MIN_WIDTH = 1
 MARKER_MAX_WIDTH = 36
@@ -249,7 +249,7 @@ class MarkerScaleCalibration:
 
     def __init__(self, marker_columns, marker_values_mm, zero_index, quality):
         if len(marker_columns) < MARKER_MIN_COLUMNS:
-            raise ValueError("need at least two red marker columns")
+            raise ValueError("need the configured red marker columns")
         if len(marker_columns) != len(marker_values_mm):
             raise ValueError("marker values must match marker columns")
         self.marker_columns = sorted(marker_columns, key=lambda column: column.center_x)
@@ -453,11 +453,15 @@ def _marker_line_is_valid(columns):
     )
 
 
-def _score_four_marker_columns(columns, image_width):
+def _score_marker_columns(columns, image_width):
+    """按五点等间距、共线和固定零点位置对候选组合评分。"""
     if len(columns) != MARKER_TARGET_COLUMNS:
         return None
     columns = sorted(columns, key=lambda candidate: candidate.center_x)
-    spacings = [columns[index + 1].center_x - columns[index].center_x for index in range(len(columns) - 1)]
+    spacings = [
+        columns[index + 1].center_x - columns[index].center_x
+        for index in range(len(columns) - 1)
+    ]
     median_spacing = _median(spacings)
     if median_spacing < MARKER_MIN_SPACING_PX:
         return None
@@ -469,13 +473,7 @@ def _score_four_marker_columns(columns, image_width):
         return None
     line_error = _line_fit_error(columns)
 
-    zero_index = min(
-        range(len(columns)),
-        key=lambda index: abs(columns[index].center_x - MARKER_ZERO_HINT_X),
-    )
-    if zero_index <= 0 or zero_index >= len(columns) - 1:
-        return None
-
+    zero_index = MARKER_TARGET_COLUMNS // 2
     center_error = abs(columns[zero_index].center_x - MARKER_ZERO_HINT_X)
     support = sum(candidate.pixels for candidate in columns)
     span = columns[-1].center_x - columns[0].center_x
@@ -489,25 +487,28 @@ def _score_four_marker_columns(columns, image_width):
     )
 
 
-def _best_four_marker_columns(candidates, image_width):
+def _best_marker_columns(candidates, image_width):
+    """从同一行候选中选择评分最高的五个红点。"""
     best = []
     best_score = None
-    for first in range(len(candidates) - 3):
-        for second in range(first + 1, len(candidates) - 2):
-            for third in range(second + 1, len(candidates) - 1):
-                for fourth in range(third + 1, len(candidates)):
-                    columns = [
-                        candidates[first],
-                        candidates[second],
-                        candidates[third],
-                        candidates[fourth],
-                    ]
-                    score = _score_four_marker_columns(columns, image_width)
-                    if score is None:
-                        continue
-                    if best_score is None or score > best_score:
-                        best = columns
-                        best_score = score
+    for first in range(len(candidates) - 4):
+        for second in range(first + 1, len(candidates) - 3):
+            for third in range(second + 1, len(candidates) - 2):
+                for fourth in range(third + 1, len(candidates) - 1):
+                    for fifth in range(fourth + 1, len(candidates)):
+                        columns = [
+                            candidates[first],
+                            candidates[second],
+                            candidates[third],
+                            candidates[fourth],
+                            candidates[fifth],
+                        ]
+                        score = _score_marker_columns(columns, image_width)
+                        if score is None:
+                            continue
+                        if best_score is None or score > best_score:
+                            best = columns
+                            best_score = score
     return best
 
 def _line_fit_params(columns):
@@ -524,7 +525,7 @@ def _line_fit_params(columns):
     return slope, mean_y - slope * mean_x
 
 
-def _project_four_from_three(columns, visible_steps, image_width):
+def _project_markers_from_visible(columns, visible_steps, image_width):
     columns = sorted(columns, key=lambda candidate: candidate.center_x)
     if not _marker_line_is_valid(columns):
         return []
@@ -569,25 +570,42 @@ def _project_four_from_three(columns, visible_steps, image_width):
     return projected
 
 
-def _best_projected_four_marker_columns(candidates, image_width):
+def _best_projected_marker_columns(candidates, image_width):
+    """四个实点可见时，按五点等间距模型补全唯一缺失点。"""
     best = []
     best_score = None
-    step_sets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
-    for first in range(len(candidates) - 2):
-        for second in range(first + 1, len(candidates) - 1):
-            for third in range(second + 1, len(candidates)):
-                visible = [candidates[first], candidates[second], candidates[third]]
-                for visible_steps in step_sets:
-                    columns = _project_four_from_three(visible, visible_steps, image_width)
-                    if not columns:
-                        continue
-                    score = _score_four_marker_columns(columns, image_width)
-                    if score is None:
-                        continue
-                    score -= 18.0
-                    if best_score is None or score > best_score:
-                        best = columns
-                        best_score = score
+    step_sets = (
+        (0, 1, 2, 3),
+        (0, 1, 2, 4),
+        (0, 1, 3, 4),
+        (0, 2, 3, 4),
+        (1, 2, 3, 4),
+    )
+    for first in range(len(candidates) - 3):
+        for second in range(first + 1, len(candidates) - 2):
+            for third in range(second + 1, len(candidates) - 1):
+                for fourth in range(third + 1, len(candidates)):
+                    visible = [
+                        candidates[first],
+                        candidates[second],
+                        candidates[third],
+                        candidates[fourth],
+                    ]
+                    for visible_steps in step_sets:
+                        columns = _project_markers_from_visible(
+                            visible,
+                            visible_steps,
+                            image_width,
+                        )
+                        if not columns:
+                            continue
+                        score = _score_marker_columns(columns, image_width)
+                        if score is None:
+                            continue
+                        score -= 18.0
+                        if best_score is None or score > best_score:
+                            best = columns
+                            best_score = score
     return best
 
 def _fixed_single_row_columns(candidates):
@@ -634,12 +652,11 @@ def _build_single_row_calibration(columns, image_width):
         return None
     if not _marker_line_is_valid(columns):
         return None
-    zero_index = 2
+    zero_index = MARKER_TARGET_COLUMNS // 2
+    # 五个实物红点从左到右固定对应−100、−50、0、+50、+100 mm。
     marker_values_mm = [
-        -2.0 * MARKER_INTERVAL_MM,
-        -MARKER_INTERVAL_MM,
-        0.0,
-        MARKER_INTERVAL_MM,
+        float(index - zero_index) * MARKER_INTERVAL_MM
+        for index in range(MARKER_TARGET_COLUMNS)
     ]
     estimated_zero_x = columns[zero_index].center_x
 
@@ -693,11 +710,11 @@ def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE
         return fixed_calibration
 
     hinted_row = _single_row_columns(candidates, MARKER_ROW_HINT_Y)
-    hinted_columns = _best_four_marker_columns(hinted_row, image_width)
+    hinted_columns = _best_marker_columns(hinted_row, image_width)
     hinted_calibration = _build_single_row_calibration(hinted_columns, image_width)
     if hinted_calibration is not None:
         return hinted_calibration
-    hinted_columns = _best_projected_four_marker_columns(hinted_row, image_width)
+    hinted_columns = _best_projected_marker_columns(hinted_row, image_width)
     hinted_calibration = _build_single_row_calibration(hinted_columns, image_width)
     if hinted_calibration is not None:
         return hinted_calibration
@@ -710,10 +727,10 @@ def select_marker_calibration(blobs, image_width=IMAGE_WIDTH, image_height=IMAGE
             continue
         tried_rows.append(anchor.center_y)
         row_columns = _single_row_columns(candidates, anchor.center_y)
-        columns = _best_four_marker_columns(row_columns, image_width)
+        columns = _best_marker_columns(row_columns, image_width)
         calibration = _build_single_row_calibration(columns, image_width)
         if calibration is None:
-            columns = _best_projected_four_marker_columns(row_columns, image_width)
+            columns = _best_projected_marker_columns(row_columns, image_width)
             calibration = _build_single_row_calibration(columns, image_width)
         if calibration is None:
             continue

@@ -13,12 +13,13 @@ for module_dir in ("/sdcard/app", "/sdcard"):
 
 from machine import UART, FPIOA
 
-EXPECTED_BALL_POSITION_MAPPING_VERSION = 2
+EXPECTED_BALL_POSITION_MAPPING_VERSION = 3
 
 try:
     import ball_position as ball_position_module
     from ball_position import (
         BallPositionDetector,
+        MARKER_TARGET_COLUMNS,
         RING_TARGET_THRESHOLDS,
         STEEL_BALL_TARGET_THRESHOLDS,
         format_ball_message,
@@ -55,7 +56,7 @@ if actual_mapping_version != EXPECTED_BALL_POSITION_MAPPING_VERSION:
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
 DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
-DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+DISPLAY_MODE = "ide"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
 IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
@@ -87,7 +88,7 @@ GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop j
 OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
 
 # K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
-VIDEO_AP_ENABLE = True
+VIDEO_AP_ENABLE = False
 VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
 VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
 VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
@@ -334,7 +335,11 @@ def _draw_overlay(
     if OSD_TEXT_ENABLE:
         osd.draw_string_advanced(
             8, 8, 20,
-            "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
+            "MARK {}/{} Q{}".format(
+                marker_count,
+                MARKER_TARGET_COLUMNS,
+                result.scale_quality,
+            ),
             color=cyan if scale_ok else red,
         )
         osd.draw_string_advanced(
@@ -384,7 +389,7 @@ def run():
 
     try:
         diameter_mm = _target_diameter_mm()
-        print("启动双排刻度识别，目标模式:", TARGET_PROFILE, "直径/mm:", diameter_mm)
+        print("启动五点单排刻度识别，目标模式:", TARGET_PROFILE, "直径/mm:", diameter_mm)
         pipeline = VisionPipeline(
             cv_size=CV_SIZE,
             ai_size=AI_SIZE,

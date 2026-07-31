@@ -33,7 +33,7 @@ class FakeBlob:
 
 class BallPositionOptimizationTest(unittest.TestCase):
     def test_ball_position_mapping_version(self):
-        self.assertEqual(BALL_POSITION_MAPPING_VERSION, 2)
+        self.assertEqual(BALL_POSITION_MAPPING_VERSION, 3)
 
     def test_anchor_detection_is_converted_to_xywh(self):
         detection = select_best_anchor_box([
@@ -109,54 +109,68 @@ class BallPositionOptimizationTest(unittest.TestCase):
 
     def test_marker_grid_prefers_spacing_over_bright_center_noise(self):
         blobs = [
-            FakeBlob((100, 184, 4, 12), pixels=16),
-            FakeBlob((250, 184, 4, 12), pixels=16),
-            FakeBlob((398, 185, 4, 12), pixels=15),
-            FakeBlob((547, 184, 4, 12), pixels=16),
-            FakeBlob((317, 181, 8, 8), pixels=80),
+            FakeBlob((20, 184, 4, 12), pixels=16),
+            FakeBlob((170, 184, 4, 12), pixels=16),
+            FakeBlob((318, 185, 4, 12), pixels=15),
+            FakeBlob((467, 184, 4, 12), pixels=16),
+            FakeBlob((617, 184, 4, 12), pixels=16),
+            FakeBlob((350, 181, 8, 8), pixels=80),
         ]
 
         calibration = select_marker_calibration(blobs)
 
         self.assertIsNotNone(calibration)
-        self.assertEqual(calibration.marker_count, 4)
-        self.assertEqual([round(column.center_x) for column in calibration.marker_columns], [102, 252, 400, 549])
+        self.assertEqual(calibration.marker_count, 5)
+        self.assertEqual(
+            [round(column.center_x) for column in calibration.marker_columns],
+            [22, 172, 320, 469, 619],
+        )
 
     def test_marker_grid_ignores_same_row_noise(self):
         blobs = [
-            FakeBlob((42, 186, 5, 8), pixels=32),
-            FakeBlob((100, 184, 4, 12), pixels=16),
-            FakeBlob((250, 184, 4, 12), pixels=16),
-            FakeBlob((398, 185, 4, 12), pixels=15),
-            FakeBlob((547, 184, 4, 12), pixels=16),
+            FakeBlob((72, 186, 5, 8), pixels=32),
+            FakeBlob((20, 184, 4, 12), pixels=16),
+            FakeBlob((170, 184, 4, 12), pixels=16),
+            FakeBlob((318, 185, 4, 12), pixels=15),
+            FakeBlob((467, 184, 4, 12), pixels=16),
+            FakeBlob((617, 184, 4, 12), pixels=16),
         ]
 
         calibration = select_marker_calibration(blobs)
 
         self.assertIsNotNone(calibration)
-        self.assertEqual(calibration.marker_count, 4)
-        self.assertEqual([round(column.center_x) for column in calibration.marker_columns], [102, 252, 400, 549])
+        self.assertEqual(calibration.marker_count, 5)
+        self.assertEqual(
+            [round(column.center_x) for column in calibration.marker_columns],
+            [22, 172, 320, 469, 619],
+        )
+
     def test_sloped_marker_line_rejects_black_ruler_tick(self):
         blobs = [
-            FakeBlob((96, 174, 5, 12), pixels=18),
-            FakeBlob((246, 183, 5, 12), pixels=18),
-            FakeBlob((396, 192, 5, 12), pixels=18),
-            FakeBlob((546, 201, 5, 12), pixels=18),
-            FakeBlob((318, 151, 14, 2), pixels=28),
+            FakeBlob((20, 174, 5, 12), pixels=18),
+            FakeBlob((170, 181, 5, 12), pixels=18),
+            FakeBlob((318, 188, 5, 12), pixels=18),
+            FakeBlob((467, 195, 5, 12), pixels=18),
+            FakeBlob((617, 202, 5, 12), pixels=18),
+            FakeBlob((350, 151, 14, 2), pixels=28),
         ]
 
         calibration = select_marker_calibration(blobs)
 
         self.assertIsNotNone(calibration)
-        self.assertEqual(calibration.marker_count, 4)
-        self.assertEqual([round(column.center_x) for column in calibration.marker_columns], [98, 248, 398, 548])
+        self.assertEqual(calibration.marker_count, 5)
+        self.assertEqual(
+            [round(column.center_x) for column in calibration.marker_columns],
+            [22, 172, 320, 470, 620],
+        )
 
     def test_marker_grid_rejects_a_steep_nonparallel_line(self):
         blobs = [
-            FakeBlob((100, 148, 4, 12), pixels=16),
-            FakeBlob((250, 173, 4, 12), pixels=16),
-            FakeBlob((398, 198, 4, 12), pixels=16),
-            FakeBlob((547, 223, 4, 12), pixels=16),
+            FakeBlob((20, 140, 4, 12), pixels=16),
+            FakeBlob((170, 160, 4, 12), pixels=16),
+            FakeBlob((318, 180, 4, 12), pixels=16),
+            FakeBlob((467, 200, 4, 12), pixels=16),
+            FakeBlob((617, 220, 4, 12), pixels=16),
         ]
 
         self.assertIsNone(select_marker_calibration(blobs))
@@ -172,54 +186,61 @@ class BallPositionOptimizationTest(unittest.TestCase):
 
         self.assertIsNotNone(selected)
         self.assertIs(selected[0], true_ball)
-    def test_three_visible_markers_project_missing_fourth(self):
+
+    def test_four_visible_markers_project_missing_fifth(self):
         blobs = [
-            FakeBlob((100, 184, 4, 12), pixels=16),
-            FakeBlob((398, 185, 4, 12), pixels=15),
-            FakeBlob((547, 184, 4, 12), pixels=16),
+            FakeBlob((20, 184, 4, 12), pixels=16),
+            FakeBlob((318, 185, 4, 12), pixels=15),
+            FakeBlob((467, 184, 4, 12), pixels=16),
+            FakeBlob((617, 184, 4, 12), pixels=16),
         ]
 
         calibration = select_marker_calibration(blobs)
 
         self.assertIsNotNone(calibration)
-        self.assertEqual(calibration.marker_count, 4)
-        self.assertEqual([round(column.center_x) for column in calibration.marker_columns], [102, 251, 400, 549])
+        self.assertEqual(calibration.marker_count, 5)
+        self.assertEqual(
+            [round(column.center_x) for column in calibration.marker_columns],
+            [22, 171, 320, 469, 619],
+        )
 
     def test_marker_values_are_fixed_left_to_right(self):
         blobs = [
-            FakeBlob((100, 184, 4, 12), pixels=16),
-            FakeBlob((250, 184, 4, 12), pixels=16),
-            FakeBlob((398, 185, 4, 12), pixels=15),
-            FakeBlob((547, 184, 4, 12), pixels=16),
+            FakeBlob((20, 184, 4, 12), pixels=16),
+            FakeBlob((170, 184, 4, 12), pixels=16),
+            FakeBlob((318, 185, 4, 12), pixels=15),
+            FakeBlob((467, 184, 4, 12), pixels=16),
+            FakeBlob((617, 184, 4, 12), pixels=16),
         ]
 
         calibration = select_marker_calibration(blobs)
         centers = [column.center_x for column in calibration.marker_columns]
 
         self.assertEqual(calibration.zero_index, 2)
-        self.assertEqual(calibration.marker_values_mm, [-100.0, -50.0, 0.0, 50.0])
+        self.assertEqual(
+            calibration.marker_values_mm,
+            [-100.0, -50.0, 0.0, 50.0, 100.0],
+        )
         self.assertAlmostEqual(calibration.pixel_to_mm(centers[0]), -100.0)
         self.assertAlmostEqual(calibration.pixel_to_mm(centers[1]), -50.0)
         self.assertAlmostEqual(calibration.pixel_to_mm(centers[2]), 0.0)
         self.assertAlmostEqual(calibration.pixel_to_mm(centers[3]), 50.0)
+        self.assertAlmostEqual(calibration.pixel_to_mm(centers[4]), 100.0)
 
     def test_ascending_marker_values_produce_a_nonempty_target_roi(self):
         blobs = [
-            FakeBlob((100, 184, 4, 12), pixels=16),
-            FakeBlob((250, 184, 4, 12), pixels=16),
-            FakeBlob((398, 185, 4, 12), pixels=15),
-            FakeBlob((547, 184, 4, 12), pixels=16),
+            FakeBlob((20, 184, 4, 12), pixels=16),
+            FakeBlob((170, 184, 4, 12), pixels=16),
+            FakeBlob((318, 185, 4, 12), pixels=15),
+            FakeBlob((467, 184, 4, 12), pixels=16),
+            FakeBlob((617, 184, 4, 12), pixels=16),
         ]
 
         calibration = select_marker_calibration(blobs)
         left, top, width, height = calibration.target_roi(640, 360)
 
         self.assertGreater(calibration.pixels_per_mm(), 0.0)
-        self.assertGreater(width, 550)
-        self.assertEqual((top, height), (0, 360))
-        self.assertGreater(left, 50)
-        self.assertLess(left, 80)
-        self.assertEqual(left + width, 640)
+        self.assertEqual((left, top, width, height), (0, 0, 640, 360))
 
     def test_scale_thresholds_include_pale_red_markers(self):
         self.assertIn((24, 100, 8, 127, -10, 127), SCALE_THRESHOLDS)
