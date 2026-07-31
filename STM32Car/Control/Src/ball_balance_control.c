@@ -35,6 +35,9 @@
 #define BALL_BALANCE_KICK_MAX_PITCH_DEG                 3.00f
 #define BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S       12.0f
 #define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 积分最大只补偿 0.8 度。 */
+#define BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S     0.020f /* 第三题最终端点保持使用的独立积分增益。 */
+#define BALL_BALANCE_ENDPOINT_I_LIMIT_DEG          1.00f /* 端点积分允许补偿的最大持续俯仰角。 */
+#define BALL_BALANCE_ENDPOINT_I_RANGE_MM          20.0f  /* 仅在最终目标附近积累端点积分。 */
 #define BALL_BALANCE_STICTION_INTEGRAL_BOOST       3.0f  /* 钢球静止时加快积分以突破静摩擦。 */
 #define BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S    0.80f /* 钢球运动后泄放积分以降低过冲。 */
 #define BALL_BALANCE_GAIN_EPSILON                  0.000001f
@@ -484,7 +487,8 @@ static float BallBalanceControl_CalculateMovingPitch(
         control->position_kd_deg_per_mm_s * control->velocity_mm_s,
         -BALL_BALANCE_POSITION_D_LIMIT_DEG,
         BALL_BALANCE_POSITION_D_LIMIT_DEG);
-    feedback_effort_deg = control->p_term_deg + control->d_term_deg;
+    feedback_effort_deg = control->p_term_deg + control->i_term_deg +
+                          control->d_term_deg;
     pitch_deg = BallBalanceControl_PitchFromFeedbackEffort(
         feedback_effort_deg);
     pitch_deg = BallBalanceControl_LimitActualPitch(control, pitch_deg);
@@ -563,9 +567,31 @@ static void BallBalanceControl_UpdateTrajectory(
     kick_stage_elapsed_ms =
         (uint32_t) (now_ms - control->kick_stage_started_ms);
 
-    control->integral_mm_s = 0.0f;
-    control->integral_active = 0U;
-    control->i_term_deg = 0.0f;
+    if (control->endpoint_hold_enabled != 0U) {
+        if (error_abs > BALL_BALANCE_ENDPOINT_I_RANGE_MM) {
+            control->integral_mm_s = 0.0f;
+            control->integral_active = 0U;
+            control->i_term_deg = 0.0f;
+        } else {
+            if ((measurement_accepted != 0U) &&
+                (control->last_measurement_dt_s > 0.0f)) {
+                control->integral_mm_s += control->error_mm *
+                    control->last_measurement_dt_s *
+                    ((velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) ?
+                     BALL_BALANCE_STICTION_INTEGRAL_BOOST : 1.0f);
+            }
+            control->i_term_deg = BallBalanceControl_Limit(
+                BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S *
+                control->integral_mm_s,
+                -BALL_BALANCE_ENDPOINT_I_LIMIT_DEG,
+                BALL_BALANCE_ENDPOINT_I_LIMIT_DEG);
+            control->integral_active = 1U;
+        }
+    } else {
+        control->integral_mm_s = 0.0f;
+        control->integral_active = 0U;
+        control->i_term_deg = 0.0f;
+    }
     control->zero_crossed = 0U;
 
     if (measurement_accepted != 0U) {
@@ -751,8 +777,12 @@ static void BallBalanceControl_UpdateTrajectory(
                 }
                 break;
             }
-            control->phase_pitch_deg = 0.0f;
-            control->desired_pipe_pitch_deg = 0.0f;
+            if (control->endpoint_hold_enabled != 0U) {
+                BallBalanceControl_ApplyMovingCommand(control);
+            } else {
+                control->phase_pitch_deg = 0.0f;
+                control->desired_pipe_pitch_deg = 0.0f;
+            }
             if (measurement_accepted == 0U) {
                 break;
             }
@@ -1034,6 +1064,7 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->moving_direction = control->moving_direction;
     output->kick_attempt_count = control->kick_attempt_count;
     output->trajectory_phase = control->trajectory_phase;
+    output->endpoint_hold_enabled = control->endpoint_hold_enabled;
     output->target_mm = control->target_mm;
     output->position_kp_deg_per_mm = control->position_kp_deg_per_mm;
     output->position_ki_deg_per_mm_s =
@@ -1110,6 +1141,12 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     if ((normalized_enabled != 0U) && (control->mapping_valid == 0U)) {
         return;
     }
+    if (normalized_enabled == 0U) {
+        control->endpoint_hold_enabled = 0U;
+        control->integral_mm_s = 0.0f;
+        control->i_term_deg = 0.0f;
+        control->integral_active = 0U;
+    }
     if (control->enabled_requested == normalized_enabled) {
         return;
     }
@@ -1164,6 +1201,30 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
     }
 }
 
+void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
+                                               uint8_t enabled)
+{
+    uint8_t normalized_enabled;
+
+    if (control == 0) {
+        return;
+    }
+
+    normalized_enabled = (enabled != 0U) ? 1U : 0U;
+    if (normalized_enabled == control->endpoint_hold_enabled) {
+        return;
+    }
+
+    control->endpoint_hold_enabled = normalized_enabled;
+    control->integral_mm_s = 0.0f;
+    control->i_term_deg = 0.0f;
+    control->integral_active = 0U;
+    if (normalized_enabled == 0U) {
+        control->phase_pitch_deg = 0.0f;
+        control->desired_pipe_pitch_deg = 0.0f;
+    }
+}
+
 void BallBalanceControl_SetPidGains(BallBalanceControl *control,
                                     float kp_deg_per_mm,
                                     float ki_deg_per_mm_s,
@@ -1180,7 +1241,8 @@ void BallBalanceControl_SetPidGains(BallBalanceControl *control,
     if ((ki_deg_per_mm_s >= 0.0f) &&
         (ki_deg_per_mm_s <= BALL_BALANCE_KI_MAX_DEG_PER_MM_S)) {
         control->position_ki_deg_per_mm_s = ki_deg_per_mm_s;
-        if (ki_deg_per_mm_s <= BALL_BALANCE_GAIN_EPSILON) {
+        if ((ki_deg_per_mm_s <= BALL_BALANCE_GAIN_EPSILON) &&
+            (control->endpoint_hold_enabled == 0U)) {
             control->integral_mm_s = 0.0f;
             control->i_term_deg = 0.0f;
             control->integral_active = 0U;

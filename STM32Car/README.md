@@ -9,10 +9,13 @@
 - TJC 基础巡线命令 `5A A5 01 FE` 进入八路 I²C 红外巡线模式。
 - TJC 钢球平衡启用命令 `5A A5 02 FD`，禁用命令 `5A A5 03 FC`。
 - TJC 水管 IMU 和连杆模型自动九点标定命令 `5A A5 04 FB`。
+- TJC 第三题正负 5 cm 往返命令 `5A A5 05 FA`，会自动启用平衡并等待 IMU 与 K230 就绪。
 - TJC 查询命令 `5A A5 0E F1` 返回当前底盘工作模式。
 - K230 UART4：STM32 TX 为 PB9，RX 为 PB8，115200 8N1，接收钢球位置 ASCII 消息。
 - 八路红外模块通过 I2C4 读取：SCL 为 PF14，SDA 为 PF15，设备地址为 `0x12`。
 - 基础红外巡线：八路物理位置误差经过低通、PD、限幅和斜率限制后生成左右轮速度目标。
+- 平滑行驶：巡线启动时通过加速度和jerk双重限制将基础速度从当前车速平滑提升到巡航速度；第四至六项可通过`App_StartSmoothLineRun()`按150 cm或614.2 cm里程启动不停车的通过模式。
+- 底盘加速度估计：左右编码器平均速度先低通再差分，并对加速度再次低通和限幅，降低量化噪声对水管IMU姿态融合的干扰。
 - 双轮速度闭环：20 ms 编码器采样，左右轮独立 PID，包含积分限幅、启动补偿和编码器反馈故障检测。
 - 钢球平衡：K230钢球位置外环生成名义−6°～+3°目标水管俯仰角，再根据九点实测曲线裁剪到实际可实现范围；IMU姿态前馈＋PD内环通过单调分段线性插值生成舵机命令。
 - 水管姿态：IMU刚性固定在水管远离原转轴安装点的另一端，+Y轴沿水管指向钢球、+Z轴向上；使用gyro X和accel Y/Z估计该端实际俯仰，并由九点标定自动处理相对原安装方向的符号反转。
@@ -50,6 +53,19 @@ OLED 与八路红外模块共用 I2C4，OLED 地址为 `0x3C`。模块上电后�
 LSM6DSV16X 独占 I2C2，固件会依次探测 7 位地址 `0x6A` 和 `0x6B`，期望 `WHO_AM_I` 为 `0x70`。水管姿态使用 X 轴陀螺仪积分和 Y/Z 加速度重力角互补融合；底盘加减速时使用编码器估计加速度降低 Accel 融合权重。单个水管 IMU 仍无法完全区分持续车体加速度与重力倾角。
 
 电机 PWM 约为 6.4 kHz。最大 PID 输出限制为 50%，当前基础巡线速度由 `APP_BASE_SPEED_CM_S` 配置。电机驱动仍使用参考工程要求的特殊 PWM/DIR 电气组合，不能擅自改成普通方向脚控制。
+
+## 第四至六项平滑行驶接口
+
+普通 `0x01` 巡线仍保留第二项返程 A 点停车逻辑，但基础速度不再从零直接阶跃到40 cm/s，而是经过最大加速度和最大jerk限制。第四至六项应在钢球中心闭环已经稳定后调用：
+
+```c
+App_StartSmoothAbRun();  /* 第四项：A到B通过150 cm。 */
+App_StartSmoothLapRun(); /* 第五、六项：整圈通过614.2 cm。 */
+```
+
+需要其他试验里程时，也可以调用`App_StartSmoothLineRun(completion_distance_cm)`。
+
+该接口只锁存名义通过里程并保持巡线继续运行，不会在达到里程时急停。`g_app_motion_distance_reached`用于观察已经达到名义里程；现场仍应结合赛道标志确认实际通过位置。当前起步参数为最大加速度25 cm/s²、最大减速度30 cm/s²、最大jerk 100 cm/s³，这些只是保守起始值，尚未完成实车钢球误差验证。
 
 ## 连杆模型
 
@@ -93,7 +109,8 @@ checksum = 0x5A ^ 0xA5 ^ command
 | `0x01` | `5A A5 01 FE` | 基础八路红外巡线 |
 | `0x02` | `5A A5 02 FD` | 启用中心钢球平衡 |
 | `0x03` | `5A A5 03 FC` | 禁用钢球平衡并回中位；标定中收到时立即中断 |
-| `0x04` | `5A A5 04 FB` | 停车模式下启动水管 IMU 和连杆模型自动三点标定 |
+| `0x04` | `5A A5 04 FB` | 停车模式下启动水管 IMU 和连杆模型自动九点标定 |
+| `0x05` | `5A A5 05 FA` | 自动启用平衡，等待姿态和视觉有效后启动 O→+5 cm→-5 cm 第三题动作 |
 | `0x0E` | `5A A5 0E F1` | 查询当前底盘模式 |
 
 固件通过 USART2 返回 5 字节结果帧：
@@ -102,10 +119,10 @@ checksum = 0x5A ^ 0xA5 ^ command
 A5 <result> <current_mode> <request> <xor>
 ```
 
-`0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page2.t0`：
+`0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page0.t0`：
 
 ```text
-page2.t0.txt="<UTF-8 中文状态>" FF FF FF
+page0.t0.txt="<UTF-8 中文状态>" FF FF FF
 ```
 
 标定状态包括准备、水平零偏采样、`采集1/9`～`采集9/9`、回中检查、成功和失败原因。舵机以30°/s移动，到达每个采样角并静止后直接平均加速度重力角；九个实测角必须严格单调，成功时显示总行程比例`S`和水平点零偏`O`，验收失败时显示`S`、`O`和回中误差`R`。每次上电必须先成功执行`0x04`，才允许在停车模式下发送`0x02`；`0x02`会先复核约500 ms的水平和静止状态，再进入平衡。
@@ -115,9 +132,10 @@ page2.t0.txt="<UTF-8 中文状态>" FF FF FF
 ```text
 移除钢球并确认摆杆无阻挡
     → 0x04 等待标定成功
-    → 放置钢球
-    → 0x02 等待平衡已启用
-    → 0x01 开始巡线
+    → 放置钢球并人工确认位于 O 点
+    → 0x05 自动启用平衡并启动第三题
+
+普通中心平衡仍可单独发送 0x02；第三题不再要求先发送 0x02。
 ```
 
 ## IAR 构建
@@ -150,9 +168,23 @@ gcc -std=c11 -Wall -Wextra -Werror \
   Control/Src/linkage_kinematics.c \
   Control/Src/pipe_attitude_control.c \
   Control/Src/ball_balance_control.c \
+  Control/Src/ball_shuttle_control.c \
   Protocol/Src/ball_position_protocol.c \
   -lm -o tests/test_basic_control.exe
 ./tests/test_basic_control.exe
+```
+
+平滑行驶和底盘加速度估计使用独立主机测试：
+
+```bash
+gcc -std=c11 -Wall -Wextra -Werror \
+  -IApp/Inc -IControl/Inc \
+  tests/test_smooth_chassis_control.c \
+  Control/Src/chassis_motion_profile.c \
+  Control/Src/chassis_accel_estimator.c \
+  Control/Src/infrared_line_control.c \
+  -o tests/test_smooth_chassis_control.exe
+./tests/test_smooth_chassis_control.exe
 ```
 
 ## 上车前必须验证
@@ -175,13 +207,17 @@ gcc -std=c11 -Wall -Wextra -Werror \
 16. 确认 IMU 刚性固定在水管另一端并随钢球所在管段同步转动，不能装在会与管端产生弯曲角差的转轴附近；保持 +Y 朝钢球、+Z 朝上，SDA/SCL 空闲电压为 3.3 V。
 17. 连接 IMU 后确认 `g_imu_ready=1`、`g_imu_who_am_i=0x70`，且 `g_imu_i2c_address` 为 `0x6A` 或 `0x6B`。
 18. 移除钢球并确认摆杆无阻挡，在停车模式发送`5A A5 04 FB`；观察舵机从86.017°开始依次经过9个采样点升至178.775°，屏幕显示`采集1/9`～`采集9/9`，最后回到水平位置；任何时候发送0x00/0x03都应中断采样并缓速回水平。
-19. 在USART HMI工程中把`page2.t0`的`vscope`设为“全局”、`txt_maxl`设为至少64并保持UTF-8编码。成功后确认`g_app_pipe_calibration_valid=1`，`g_app_pipe_mapping_pitch_deg[0..8]`严格递增，总行程`scale`在0.35～1.25、122°水平点`offset`绝对值不超过0.75°；通过`g_app_ball_minimum_pipe_pitch_deg`和`g_app_ball_maximum_pipe_pitch_deg`检查实际控制范围。
+19. 在USART HMI工程中把`page0.t0`的`vscope`设为“全局”、`txt_maxl`设为至少64并保持UTF-8编码。成功后确认`g_app_pipe_calibration_valid=1`，`g_app_pipe_mapping_pitch_deg[0..8]`严格递增，总行程`scale`在0.35～1.25、122°水平点`offset`绝对值不超过0.75°；通过`g_app_ball_minimum_pipe_pitch_deg`和`g_app_ball_maximum_pipe_pitch_deg`检查实际控制范围。
 20. 标定失败、复位或尚未执行 0x04 时发送 0x02，确认 STM32 拒绝启用钢球平衡。
 21. 放置钢球后发送 0x02，确认水管在约 500 ms 水平复核期间保持中位，随后显示“平衡已启用”。
 22. 空载手动抬高水管右端，确认 `g_app_pipe_pitch_deg` 为正，`g_app_pipe_pitch_rate_dps` 动态方向正确。
-23. 手动注入正负钢球位置：正位置应产生正目标水管角，使右端抬高并推动钢球向左回中心；方向错误时禁止装球运行。
+23. 按 balance 分支的实机曲柄摇杆方向验证，K230 正位置应产生正目标水管角，负位置应产生负目标水管角；必须分别确认两侧实际运动都朝目标点，方向错误时禁止继续运行。
 24. 确认名义目标水管角限制为下降不低于−6°、抬升不高于+3°，并进一步限制在标定后可实现范围内；连杆模型输入保持在−10°～+6.8°、舵机内部命令保持在0°～180°，实测俯仰绝对值超过7°时应暂时回中。
 25. 断开 IMU 或制造 I2C 超时，确认舵机回中；恢复后连续稳定约 500 ms 才自动恢复闭环。
 26. 遮挡 K230 或发送低质量帧，确认位置外环回到 0°目标，IMU 内环继续主动保持水管水平。
-27. 测量 K230 钢球消息频率、延迟和质量分布，再依次整定位置外环 Kp/Kd 和姿态内环 Kp/Kd，最后才考虑 Ki。
-28. 270°舵机、单连杆机构和钢球实物稳定性仍需重新验证；编译通过不代表 PWM 标定、机械方向或题目 ±1 cm 指标已经在硬件上成立。
+27. 人工确认小球位于 O 点并已静止，直接发送 `5A A5 05 FA`；屏幕应先显示“三题准备”，固件在 3 s 内自动完成平衡启用和视觉等待，随后显示“三题运行”并开始 5 s 计时。确认滤波位置首次达到 +45 mm 后目标切换到 -50 mm，最终在 -50±7 mm 且速度绝对值不超过 5 mm/s 的条件下连续稳定 500 ms。运行期间视觉失效超过 200 ms 时应判定失败并回水平。
+28. 测量 K230 钢球消息频率、延迟和质量分布，再依次整定位置外环 Kp/Kd 和姿态内环 Kp/Kd，最后再调整第三题端点积分。
+29. 架空或低附着条件下观察`g_app_motion_command_speed_cm_s`和`g_app_motion_command_accel_cm_s2`，确认启动目标速度连续上升且没有直接跳到40 cm/s。
+30. 在直线低速实测中同时记录`g_app_chassis_accel_raw_cm_s2`和`g_app_chassis_accel_cm_s2`，确认滤波值没有编码器单周期尖峰，并重新整定加速度和jerk参数。
+31. 第四至六项调用平滑通过接口后，确认达到名义里程时只置位`g_app_motion_distance_reached`且车辆继续巡线，不得执行第二项的A点急停。
+32. 270°舵机、单连杆机构、平滑底盘参数和钢球实物稳定性仍需重新验证；编译通过不代表 PWM 标定、机械方向或题目 ±1 cm 指标已经在硬件上成立。

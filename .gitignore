@@ -16,6 +16,7 @@ STM32Car/tests/*.exe
 __pycache__/
 
 # 编辑器、索引与系统文件
+.claude/
 .codegraph/
 .vscode/
 .idea/

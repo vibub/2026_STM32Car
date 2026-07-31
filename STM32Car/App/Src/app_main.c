@@ -2,7 +2,10 @@
 #include "app_config.h"
 #include "ball_balance_control.h"
 #include "ball_position_protocol.h"
+#include "ball_shuttle_control.h"
 #include "board_time.h"
+#include "chassis_accel_estimator.h"
+#include "chassis_motion_profile.h"
 #include "encoder_driver.h"
 #include "imu_heading.h"
 #include "infrared_line_control.h"
@@ -93,6 +96,12 @@ volatile float g_app_ball_desired_model_pitch_deg;
 volatile float g_app_ball_servo_feedforward_deg;
 volatile float g_app_ball_desired_angle_deg;
 volatile float g_app_ball_command_angle_deg;
+volatile uint8_t g_app_ball_endpoint_hold_enabled;
+volatile uint8_t g_app_ball_shuttle_state;
+volatile uint8_t g_app_ball_shuttle_failure;
+volatile uint8_t g_app_ball_shuttle_start_pending;
+volatile uint8_t g_app_ball_shuttle_stable_ready;
+volatile uint32_t g_app_ball_shuttle_elapsed_ms;
 volatile uint8_t g_app_pipe_calibration_state;
 volatile uint8_t g_app_pipe_calibration_active;
 volatile uint8_t g_app_pipe_calibration_valid;
@@ -120,7 +129,15 @@ volatile float g_app_pipe_mapping_pitch_deg[
 volatile float g_app_pipe_calibration_target_pitch_deg;
 volatile float g_app_pipe_servo_target_deg;
 volatile float g_app_pipe_servo_override_deg;
+volatile float g_app_chassis_speed_filtered_cm_s;
+volatile float g_app_chassis_accel_raw_cm_s2;
 volatile float g_app_chassis_accel_cm_s2;
+volatile uint8_t g_app_motion_profile_state;
+volatile uint8_t g_app_motion_distance_reached;
+volatile float g_app_motion_target_speed_cm_s;
+volatile float g_app_motion_command_speed_cm_s;
+volatile float g_app_motion_command_accel_cm_s2;
+volatile float g_app_motion_travelled_distance_cm;
 volatile uint32_t g_app_k230_overflow_count;
 volatile uint32_t g_app_k230_error_count;
 
@@ -131,8 +148,13 @@ static uint32_t s_oled_timer_last_display_s;
 static uint8_t s_oled_timer_running;
 static InfraredLineControl s_line_control;
 static LapStopDetector s_lap_stop_detector;
+static ChassisMotionProfile s_motion_profile;
+static ChassisMotionOutput s_motion_output;
+static ChassisAccelEstimator s_chassis_accel_estimator;
+static ChassisAccelOutput s_chassis_accel_output;
 static BallBalanceControl s_ball_balance_control;
 static BallBalanceOutput s_ball_balance_output;
+static BallShuttleControl s_ball_shuttle_control;
 static PipeAttitudeControl s_pipe_attitude_control;
 static PipeAttitudeOutput s_pipe_attitude_output;
 static WheelSpeedPid s_left_speed_pid;
@@ -145,15 +167,27 @@ static uint8_t s_line_sensor_failure_count;
 static uint32_t s_last_k230_overflow_count;
 static uint32_t s_last_k230_error_count;
 static uint32_t s_pipe_attitude_timestamp_ms;
-static float s_last_chassis_speed_cm_s;
 static float s_chassis_accel_cm_s2;
-static uint8_t s_chassis_speed_ready;
+static uint8_t s_lap_stop_enabled;
 static uint8_t s_last_ball_active;
 static uint8_t s_last_ball_imu_fault;
+static uint8_t s_ball_shuttle_start_pending;
+static uint32_t s_ball_shuttle_prepare_since_ms;
 static uint8_t s_tjc_status_pending;
 static Tjc_StatusText s_pending_tjc_status;
 
-#define APP_LINE_SENSOR_FAILURE_LIMIT 3U /* 红外 I2C 连续读取失败后停车的次数门槛。 */
+#define APP_LINE_SENSOR_FAILURE_LIMIT       3U    /* 红外 I2C 连续读取失败后停车的次数门槛。 */
+#define APP_BALL_SHUTTLE_POSITIVE_TARGET_MM 50.0f /* 第三题第一阶段的正向目标位置。 */
+#define APP_BALL_SHUTTLE_NEGATIVE_TARGET_MM -50.0f /* 第三题折返后的最终目标位置。 */
+#define APP_BALL_SHUTTLE_PREPARE_TIMEOUT_MS 3000U /* 自动启用平衡和等待视觉有效的最长时间。 */
+
+static const ChassisMotionConfig s_default_motion_config = {
+    APP_BASE_SPEED_CM_S,       /* 第四至六项共用的平滑巡航目标速度。 */
+    APP_LINE_MAX_ACCEL_CM_S2,  /* 起步阶段最大目标加速度。 */
+    APP_LINE_MAX_DECEL_CM_S2,  /* 路况降速时最大目标减速度。 */
+    APP_LINE_MAX_JERK_CM_S3,   /* 目标加速度变化率上限。 */
+    0.0f                       /* 普通巡线不使用里程通过事件。 */
+};
 
 static float App_Abs(float value)
 {
@@ -179,6 +213,22 @@ static void App_UpdateLapStopDebug(void)
     g_app_lap_stop_armed = s_lap_stop_detector.armed;
     g_app_lap_full_black_count = s_lap_stop_detector.full_black_count;
     g_app_lap_completed = s_lap_stop_detector.completed;
+}
+
+static void App_UpdateChassisMotionDebug(void)
+{
+    g_app_chassis_speed_filtered_cm_s =
+        s_chassis_accel_output.filtered_speed_cm_s;
+    g_app_chassis_accel_raw_cm_s2 = s_chassis_accel_output.raw_accel_cm_s2;
+    g_app_chassis_accel_cm_s2 = s_chassis_accel_cm_s2;
+    g_app_motion_profile_state = (uint8_t) s_motion_output.state;
+    g_app_motion_distance_reached = s_motion_output.distance_reached;
+    g_app_motion_target_speed_cm_s = s_motion_output.target_speed_cm_s;
+    g_app_motion_command_speed_cm_s = s_motion_output.command_speed_cm_s;
+    g_app_motion_command_accel_cm_s2 =
+        s_motion_output.command_accel_cm_s2;
+    g_app_motion_travelled_distance_cm =
+        s_motion_output.travelled_distance_cm;
 }
 
 static void App_UpdateBallBalanceDebug(void)
@@ -247,6 +297,18 @@ static void App_UpdateBallBalanceDebug(void)
         s_ball_balance_output.servo_feedforward_deg;
     g_app_ball_desired_angle_deg = s_ball_balance_output.desired_angle_deg;
     g_app_ball_command_angle_deg = s_ball_balance_output.command_angle_deg;
+    g_app_ball_endpoint_hold_enabled =
+        s_ball_balance_output.endpoint_hold_enabled;
+}
+
+static void App_UpdateBallShuttleDebug(void)
+{
+    g_app_ball_shuttle_state = (uint8_t) s_ball_shuttle_control.state;
+    g_app_ball_shuttle_failure = (uint8_t) s_ball_shuttle_control.failure;
+    g_app_ball_shuttle_start_pending = s_ball_shuttle_start_pending;
+    g_app_ball_shuttle_stable_ready =
+        s_ball_shuttle_control.stable_ready;
+    g_app_ball_shuttle_elapsed_ms = s_ball_shuttle_control.elapsed_ms;
 }
 
 static void App_UpdatePipeAttitudeDebug(void)
@@ -416,6 +478,94 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
     App_UpdatePipeAttitudeDebug();
 }
 
+static void App_BallShuttleTask(uint32_t now_ms)
+{
+    BallShuttleMeasurement measurement;
+    BallShuttleEvent event;
+
+    if (s_ball_shuttle_start_pending != 0U) {
+        if ((s_ball_balance_output.imu_fault != 0U) ||
+            (s_ball_balance_output.mapping_fault != 0U) ||
+            ((uint32_t) (now_ms - s_ball_shuttle_prepare_since_ms) >
+             APP_BALL_SHUTTLE_PREPARE_TIMEOUT_MS)) {
+            s_ball_shuttle_start_pending = 0U;
+            BallBalanceControl_SetEndpointHoldEnabled(
+                &s_ball_balance_control, 0U);
+            BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                          0U,
+                                          now_ms);
+            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
+            App_UpdateBallShuttleDebug();
+            return;
+        }
+        if ((s_ball_balance_output.enabled != 0U) &&
+            (s_ball_balance_output.tracking_valid != 0U) &&
+            (s_ball_balance_output.timed_out == 0U)) {
+            if (BallShuttleControl_Start(
+                    &s_ball_shuttle_control, now_ms) != 0U) {
+                s_ball_shuttle_start_pending = 0U;
+                BallBalanceControl_SetEndpointHoldEnabled(
+                    &s_ball_balance_control, 0U);
+                BallBalanceControl_SetTargetMm(
+                    &s_ball_balance_control,
+                    APP_BALL_SHUTTLE_POSITIVE_TARGET_MM);
+                App_QueueTjcStatus(TJC_STATUS_SHUTTLE_RUNNING);
+            } else {
+                s_ball_shuttle_start_pending = 0U;
+                BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                              0U,
+                                              now_ms);
+                App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
+            }
+        }
+        App_UpdateBallShuttleDebug();
+        return;
+    }
+
+    measurement.balance_enabled = s_ball_balance_output.enabled;
+    measurement.tracking_valid = s_ball_balance_output.tracking_valid;
+    measurement.timed_out = s_ball_balance_output.timed_out;
+    measurement.imu_fault = s_ball_balance_output.imu_fault;
+    measurement.mapping_fault = s_ball_balance_output.mapping_fault;
+    measurement.filtered_position_mm =
+        s_ball_balance_output.filtered_position_mm;
+    measurement.velocity_mm_s = s_ball_balance_output.velocity_mm_s;
+    event = BallShuttleControl_Update(&s_ball_shuttle_control,
+                                      now_ms,
+                                      &measurement);
+
+    switch (event) {
+        case BALL_SHUTTLE_EVENT_TURN_NEGATIVE:
+            BallBalanceControl_SetTargetMm(
+                &s_ball_balance_control,
+                APP_BALL_SHUTTLE_NEGATIVE_TARGET_MM);
+            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_TURNING);
+            break;
+
+        case BALL_SHUTTLE_EVENT_ENABLE_ENDPOINT_HOLD:
+            BallBalanceControl_SetEndpointHoldEnabled(
+                &s_ball_balance_control, 1U);
+            break;
+
+        case BALL_SHUTTLE_EVENT_SUCCEEDED:
+            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_SUCCESS);
+            break;
+
+        case BALL_SHUTTLE_EVENT_FAILED:
+            BallBalanceControl_SetEndpointHoldEnabled(
+                &s_ball_balance_control, 0U);
+            BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                          0U,
+                                          now_ms);
+            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
+            break;
+
+        default:
+            break;
+    }
+    App_UpdateBallShuttleDebug();
+}
+
 static void App_BallBalanceTask(uint32_t now_ms)
 {
     BallPositionSample sample;
@@ -468,6 +618,7 @@ static void App_BallBalanceTask(uint32_t now_ms)
                               measurement_ptr,
                               attitude_ptr,
                               &s_ball_balance_output);
+    App_BallShuttleTask(now_ms);
     if (s_pipe_attitude_output.servo_override_active == 0U) {
         ServoDriver_SetAngle(s_ball_balance_output.command_angle_deg);
     }
@@ -534,6 +685,44 @@ static void App_TimerTask(uint32_t now_ms)
     }
 }
 
+static uint8_t App_StartLineRunInternal(uint32_t now_ms,
+                                        float completion_distance_cm,
+                                        uint8_t lap_stop_enabled)
+{
+    ChassisMotionConfig motion_config = s_default_motion_config;
+    float initial_speed_cm_s = 0.0f;
+
+    motion_config.completion_distance_cm =
+        (completion_distance_cm > 0.0f) ? completion_distance_cm : 0.0f;
+    if ((s_line_enabled != 0U) &&
+        (s_chassis_accel_output.valid != 0U)) {
+        initial_speed_cm_s = s_chassis_accel_output.filtered_speed_cm_s;
+        if (initial_speed_cm_s < 0.0f) {
+            initial_speed_cm_s = 0.0f;
+        }
+    }
+
+    InfraredLineControl_Init(&s_line_control);
+    if (ChassisMotionProfile_Start(&s_motion_profile,
+                                   now_ms,
+                                   initial_speed_cm_s,
+                                   &motion_config) == 0U) {
+        return 0U;
+    }
+    ChassisMotionProfile_Update(&s_motion_profile, now_ms, 0.0f,
+                                &s_motion_output);
+    InfraredLineControl_SetBaseSpeed(
+        &s_line_control, s_motion_output.command_speed_cm_s);
+    LapStopDetector_Init(&s_lap_stop_detector);
+    s_lap_stop_enabled = lap_stop_enabled;
+    s_current_mode = APP_MODE_BASIC_LINE;
+    s_line_enabled = 1U;
+    App_UpdateLapStopDebug();
+    App_UpdateChassisMotionDebug();
+    App_TimerResetAndStart(now_ms);
+    return 1U;
+}
+
 static void App_StopClosedLoop(void)
 {
     WheelSpeedPid_SetTarget(&s_left_speed_pid, 0.0f);
@@ -552,6 +741,12 @@ static void App_EnterStopMode(uint32_t now_ms)
 {
     s_current_mode = APP_MODE_STOP;
     s_line_enabled = 0U;
+    s_lap_stop_enabled = 0U;
+    ChassisMotionProfile_Stop(&s_motion_profile);
+    ChassisMotionProfile_Update(&s_motion_profile, now_ms, 0.0f,
+                                &s_motion_output);
+    InfraredLineControl_SetBaseSpeed(&s_line_control, 0.0f);
+    App_UpdateChassisMotionDebug();
     App_StopClosedLoop();
     App_TimerStop(now_ms);
 }
@@ -568,7 +763,6 @@ static void App_ControlStep(uint32_t now_ms)
     float left_command;
     float right_command;
     float distance_delta_cm;
-    float chassis_speed_cm_s;
 
     sensor_read_ok = InfraredLineSensor_ReadMask(&sensor_mask);
     g_app_line_sensor_raw = InfraredLineSensor_GetRawValue();
@@ -601,17 +795,18 @@ static void App_ControlStep(uint32_t now_ms)
     EncoderDriver_Sample(&encoder);
     g_app_left_speed_cm_s = encoder.left_cm_s;
     g_app_right_speed_cm_s = encoder.right_cm_s;
-    chassis_speed_cm_s = 0.5f * (encoder.left_cm_s + encoder.right_cm_s);
-    if (s_chassis_speed_ready != 0U) {
-        s_chassis_accel_cm_s2 =
-            (chassis_speed_cm_s - s_last_chassis_speed_cm_s) /
-            ((float) APP_CONTROL_PERIOD_MS * 0.001f);
-    } else {
-        s_chassis_accel_cm_s2 = 0.0f;
-        s_chassis_speed_ready = 1U;
-    }
-    s_last_chassis_speed_cm_s = chassis_speed_cm_s;
-    g_app_chassis_accel_cm_s2 = s_chassis_accel_cm_s2;
+    ChassisAccelEstimator_Update(&s_chassis_accel_estimator,
+                                 now_ms,
+                                 encoder.left_cm_s,
+                                 encoder.right_cm_s,
+                                 &s_chassis_accel_output);
+    s_chassis_accel_cm_s2 = s_chassis_accel_output.accel_cm_s2;
+    /* 将固定 20 ms 轮速样本还原为本周期左右轮平均行驶距离。 */
+    distance_delta_cm = 0.5f *
+                        (App_Abs(encoder.left_cm_s) +
+                         App_Abs(encoder.right_cm_s)) *
+                        ((float) APP_CONTROL_PERIOD_MS / 1000.0f);
+    App_UpdateChassisMotionDebug();
 
     if (sensor_failure_stop != 0U) {
         g_app_line_sensor_mask = sensor_mask;
@@ -625,20 +820,25 @@ static void App_ControlStep(uint32_t now_ms)
     }
 
     if (s_line_enabled != 0U) {
-        /* 将固定 20 ms 轮速样本还原为本周期左右轮平均行驶距离。 */
-        distance_delta_cm = 0.5f *
-                            (App_Abs(encoder.left_cm_s) +
-                             App_Abs(encoder.right_cm_s)) *
-                            ((float) APP_CONTROL_PERIOD_MS / 1000.0f);
-        lap_stop_completed = LapStopDetector_Update(&s_lap_stop_detector,
-                                                    distance_delta_cm,
-                                                    sensor_read_ok,
-                                                    sensor_mask);
-        /* 首次满足终点黑线数量门槛时，先请求巡线控制器降低基础速度。 */
-        if (s_lap_stop_detector.full_black_count != 0U) {
-            force_wide_slowdown = 1U;
+        ChassisMotionProfile_Update(&s_motion_profile,
+                                    now_ms,
+                                    distance_delta_cm,
+                                    &s_motion_output);
+        InfraredLineControl_SetBaseSpeed(
+            &s_line_control, s_motion_output.command_speed_cm_s);
+        if (s_lap_stop_enabled != 0U) {
+            lap_stop_completed = LapStopDetector_Update(
+                &s_lap_stop_detector,
+                distance_delta_cm,
+                sensor_read_ok,
+                sensor_mask);
+            /* 第二项发现返程终点候选后，继续保留原有宽线降速逻辑。 */
+            if (s_lap_stop_detector.full_black_count != 0U) {
+                force_wide_slowdown = 1U;
+            }
+            App_UpdateLapStopDebug();
         }
-        App_UpdateLapStopDebug();
+        App_UpdateChassisMotionDebug();
     }
 
     InfraredLineControl_Update(&s_line_control, now_ms, sensor_mask,
@@ -689,9 +889,12 @@ void App_Init(void)
 {
     InfraredLineControl_Init(&s_line_control);
     LapStopDetector_Init(&s_lap_stop_detector);
+    ChassisMotionProfile_Init(&s_motion_profile);
+    ChassisAccelEstimator_Init(&s_chassis_accel_estimator);
     PipeAttitudeControl_Init(&s_pipe_attitude_control);
     BallBalanceControl_Init(&s_ball_balance_control);
     App_ApplyBallPidGains();
+    BallShuttleControl_Init(&s_ball_shuttle_control);
     BallPositionProtocol_Init();
     WheelSpeedPid_Init(&s_left_speed_pid);
     WheelSpeedPid_Init(&s_right_speed_pid);
@@ -727,11 +930,12 @@ void App_Init(void)
     g_app_k230_overflow_count = s_last_k230_overflow_count;
     g_app_k230_error_count = s_last_k230_error_count;
     s_pipe_attitude_timestamp_ms = 0U;
-    s_last_chassis_speed_cm_s = 0.0f;
     s_chassis_accel_cm_s2 = 0.0f;
-    s_chassis_speed_ready = 0U;
+    s_lap_stop_enabled = 0U;
     s_last_ball_active = 0U;
     s_last_ball_imu_fault = 0U;
+    s_ball_shuttle_start_pending = 0U;
+    s_ball_shuttle_prepare_since_ms = 0U;
     s_tjc_status_pending = 0U;
     s_pending_tjc_status = TJC_STATUS_BALANCE_DISABLED;
     PipeAttitudeControl_Update(&s_pipe_attitude_control,
@@ -744,9 +948,15 @@ void App_Init(void)
                               0,
                               0,
                               &s_ball_balance_output);
+    ChassisMotionProfile_Update(&s_motion_profile,
+                                s_last_control_ms,
+                                0.0f,
+                                &s_motion_output);
     App_UpdatePipeAttitudeDebug();
     App_UpdateBallBalanceDebug();
+    App_UpdateBallShuttleDebug();
     App_UpdateLapStopDebug();
+    App_UpdateChassisMotionDebug();
     App_StopClosedLoop();
     g_app_init_step = 100U;
 }
@@ -783,16 +993,14 @@ uint8_t App_RequestMode(uint8_t mode)
     if (mode == APP_MODE_BASIC_LINE) {
         if ((PipeAttitudeControl_IsCalibrationActive(
                  &s_pipe_attitude_control) != 0U) ||
+            (s_ball_shuttle_start_pending != 0U) ||
+            (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
+            (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
             ((BallBalanceControl_IsEnabled(&s_ball_balance_control) != 0U) &&
              (BallBalanceControl_IsActive(&s_ball_balance_control) == 0U))) {
             return 0U;
         }
-        LapStopDetector_Init(&s_lap_stop_detector);
-        App_UpdateLapStopDebug();
-        s_current_mode = APP_MODE_BASIC_LINE;
-        s_line_enabled = 1U;
-        App_TimerResetAndStart(Board_TimeMs());
-        return 1U;
+        return App_StartLineRunInternal(Board_TimeMs(), 0.0f, 1U);
     }
 
     return 0U;
@@ -801,6 +1009,37 @@ uint8_t App_RequestMode(uint8_t mode)
 uint8_t App_GetCurrentMode(void)
 {
     return s_current_mode;
+}
+
+uint8_t App_StartSmoothLineRun(float completion_distance_cm)
+{
+    uint32_t now_ms = Board_TimeMs();
+
+    if ((completion_distance_cm <= 0.0f) ||
+        (s_current_mode != APP_MODE_STOP) ||
+        (PipeAttitudeControl_IsCalibrationActive(
+             &s_pipe_attitude_control) != 0U) ||
+        (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
+        (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
+        (BallBalanceControl_IsActive(&s_ball_balance_control) == 0U) ||
+        (s_ball_balance_output.tracking_valid == 0U) ||
+        (s_ball_balance_output.timed_out != 0U) ||
+        (s_ball_balance_output.imu_fault != 0U) ||
+        (s_ball_balance_output.mapping_fault != 0U)) {
+        return 0U;
+    }
+
+    return App_StartLineRunInternal(now_ms, completion_distance_cm, 0U);
+}
+
+uint8_t App_StartSmoothAbRun(void)
+{
+    return App_StartSmoothLineRun(APP_AB_PASS_DISTANCE_CM);
+}
+
+uint8_t App_StartSmoothLapRun(void)
+{
+    return App_StartSmoothLineRun(APP_LAP_PASS_DISTANCE_CM);
 }
 
 uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
@@ -812,9 +1051,18 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
             (PipeAttitudeControl_IsCalibrationActive(
                  &s_pipe_attitude_control) != 0U) ||
             (PipeAttitudeControl_IsCalibrationValid(
-                 &s_pipe_attitude_control) == 0U)) {
+                 &s_pipe_attitude_control) == 0U) ||
+            (s_ball_shuttle_start_pending != 0U) ||
+            (BallShuttleControl_IsRunning(
+                 &s_ball_shuttle_control) != 0U) ||
+            (BallShuttleControl_IsHolding(
+                 &s_ball_shuttle_control) != 0U)) {
             return 0U;
         }
+        s_ball_shuttle_start_pending = 0U;
+        BallShuttleControl_Stop(&s_ball_shuttle_control);
+        BallBalanceControl_SetEndpointHoldEnabled(
+            &s_ball_balance_control, 0U);
         BallBalanceControl_SetTargetMm(&s_ball_balance_control, 0.0f);
         BallBalanceControl_SetEnabled(&s_ball_balance_control, 1U, now_ms);
         App_QueueTjcStatus(TJC_STATUS_BALANCE_CHECKING);
@@ -824,7 +1072,12 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
             PipeAttitudeControl_AbortCalibration(&s_pipe_attitude_control,
                                                   now_ms);
         }
+        s_ball_shuttle_start_pending = 0U;
+        BallShuttleControl_Stop(&s_ball_shuttle_control);
+        BallBalanceControl_SetEndpointHoldEnabled(
+            &s_ball_balance_control, 0U);
         BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U, now_ms);
+        App_UpdateBallShuttleDebug();
         App_QueueTjcStatus(TJC_STATUS_BALANCE_DISABLED);
     }
     return 1U;
@@ -835,6 +1088,37 @@ uint8_t App_GetBallBalanceEnabled(void)
     return BallBalanceControl_IsEnabled(&s_ball_balance_control);
 }
 
+uint8_t App_StartBallShuttle(void)
+{
+    uint32_t now_ms = Board_TimeMs();
+
+    if ((s_current_mode != APP_MODE_STOP) ||
+        (PipeAttitudeControl_IsCalibrationActive(
+             &s_pipe_attitude_control) != 0U) ||
+        (PipeAttitudeControl_IsCalibrationValid(
+             &s_pipe_attitude_control) == 0U) ||
+        (s_ball_shuttle_start_pending != 0U) ||
+        (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
+        (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U)) {
+        return 0U;
+    }
+
+    BallShuttleControl_Stop(&s_ball_shuttle_control);
+    BallBalanceControl_SetEndpointHoldEnabled(
+        &s_ball_balance_control, 0U);
+    BallBalanceControl_SetTargetMm(&s_ball_balance_control, 0.0f);
+    BallBalanceControl_SetEnabled(&s_ball_balance_control, 1U, now_ms);
+    if (BallBalanceControl_IsEnabled(&s_ball_balance_control) == 0U) {
+        return 0U;
+    }
+
+    s_ball_shuttle_start_pending = 1U;
+    s_ball_shuttle_prepare_since_ms = now_ms;
+    App_UpdateBallShuttleDebug();
+    App_QueueTjcStatus(TJC_STATUS_SHUTTLE_PREPARING);
+    return 1U;
+}
+
 uint8_t App_StartPipeCalibration(void)
 {
     if ((s_current_mode != APP_MODE_STOP) ||
@@ -843,8 +1127,12 @@ uint8_t App_StartPipeCalibration(void)
         return 0U;
     }
 
+    s_ball_shuttle_start_pending = 0U;
+    BallShuttleControl_Stop(&s_ball_shuttle_control);
+    BallBalanceControl_SetEndpointHoldEnabled(&s_ball_balance_control, 0U);
     BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U,
                                  Board_TimeMs());
+    App_UpdateBallShuttleDebug();
     return PipeAttitudeControl_StartCalibration(
         &s_pipe_attitude_control,
         Board_TimeMs(),

@@ -10,7 +10,8 @@
 #define TJC_COMMAND_BASIC_LINE     0x01U /* TJC 基础八路红外巡线命令编号。 */
 #define TJC_COMMAND_BALL_ENABLE    0x02U /* TJC 中心钢球平衡启用命令编号。 */
 #define TJC_COMMAND_BALL_DISABLE   0x03U /* TJC 钢球平衡禁用命令编号。 */
-#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管 IMU 和连杆模型三点标定命令编号。 */
+#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管 IMU 和连杆模型九点标定命令编号。 */
+#define TJC_COMMAND_BALL_SHUTTLE   0x05U /* TJC 第三题 O 到正负 5 cm 往返命令编号。 */
 #define TJC_COMMAND_QUERY          0x0EU /* TJC 当前底盘模式查询命令编号。 */
 #define TJC_RESPONSE_HEADER        0xA5U /* STM32 返回帧的帧头字节。 */
 
@@ -40,7 +41,12 @@ typedef enum {
     TJC_STATUS_BALANCE_ENABLED,
     TJC_STATUS_BALANCE_IMU_FAULT,
     TJC_STATUS_BALANCE_RECOVERED,
-    TJC_STATUS_BALANCE_DISABLED
+    TJC_STATUS_BALANCE_DISABLED,
+    TJC_STATUS_SHUTTLE_PREPARING,
+    TJC_STATUS_SHUTTLE_RUNNING,
+    TJC_STATUS_SHUTTLE_TURNING,
+    TJC_STATUS_SHUTTLE_SUCCESS,
+    TJC_STATUS_SHUTTLE_FAILED
 } Tjc_StatusText;
 
 extern volatile uint32_t g_tjc_rx_byte_count;

@@ -14,7 +14,7 @@ typedef enum {
 
 #define TJC_STATUS_FRAME_BUFFER_SIZE 64U /* TJC 文本状态命令的最大发送缓存。 */
 
-static const uint8_t s_tjc_text_prefix[] = "page2.t0.txt=\"";
+static const uint8_t s_tjc_text_prefix[] = "page0.t0.txt=\"";
 static const uint8_t s_tjc_text_suffix[] = {'\"', 0xFFU, 0xFFU, 0xFFU};
 
 /* 串口屏工程使用 UTF-8，固定中文显式写成 UTF-8 字节以避免编译器转码。 */
@@ -106,6 +106,26 @@ static const uint8_t s_text_balance_disabled[] = {
     0xE5U, 0xB9U, 0xB3U, 0xE8U, 0xA1U, 0xA1U,
     0xE5U, 0xB7U, 0xB2U, 0xE7U, 0xA6U, 0x81U,
     0xE7U, 0x94U, 0xA8U
+};
+static const uint8_t s_text_shuttle_preparing[] = {
+    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
+    0xE5U, 0x87U, 0x86U, 0xE5U, 0xA4U, 0x87U
+};
+static const uint8_t s_text_shuttle_running[] = {
+    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
+    0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU
+};
+static const uint8_t s_text_shuttle_turning[] = {
+    0x2BU, 0x35U, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0x88U, 0xB0U, 0xE8U, 0xBEU, 0xBEU
+};
+static const uint8_t s_text_shuttle_success[] = {
+    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
+    0xE6U, 0x88U, 0x90U, 0xE5U, 0x8AU, 0x9FU
+};
+static const uint8_t s_text_shuttle_failed[] = {
+    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
+    0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
 };
 
 static Tjc_RxState s_rx_state;
@@ -310,6 +330,26 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
             text = s_text_balance_disabled;
             text_length = (uint16_t) sizeof(s_text_balance_disabled);
             break;
+        case TJC_STATUS_SHUTTLE_PREPARING:
+            text = s_text_shuttle_preparing;
+            text_length = (uint16_t) sizeof(s_text_shuttle_preparing);
+            break;
+        case TJC_STATUS_SHUTTLE_RUNNING:
+            text = s_text_shuttle_running;
+            text_length = (uint16_t) sizeof(s_text_shuttle_running);
+            break;
+        case TJC_STATUS_SHUTTLE_TURNING:
+            text = s_text_shuttle_turning;
+            text_length = (uint16_t) sizeof(s_text_shuttle_turning);
+            break;
+        case TJC_STATUS_SHUTTLE_SUCCESS:
+            text = s_text_shuttle_success;
+            text_length = (uint16_t) sizeof(s_text_shuttle_success);
+            break;
+        case TJC_STATUS_SHUTTLE_FAILED:
+            text = s_text_shuttle_failed;
+            text_length = (uint16_t) sizeof(s_text_shuttle_failed);
+            break;
         default:
             break;
     }
@@ -467,6 +507,12 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
     } else if (command == TJC_COMMAND_PIPE_CALIBRATE) {
         g_tjc_valid_command_count++;
         accepted = App_StartPipeCalibration();
+        Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                                TJC_RESULT_ENTER_FAILED,
+                                App_GetCurrentMode(), command);
+    } else if (command == TJC_COMMAND_BALL_SHUTTLE) {
+        g_tjc_valid_command_count++;
+        accepted = App_StartBallShuttle();
         Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
                                 TJC_RESULT_ENTER_FAILED,
                                 App_GetCurrentMode(), command);
