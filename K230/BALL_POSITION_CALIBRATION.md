@@ -1,8 +1,8 @@
 # K230 红色标记与钢珠位置识别联调
 
-运行 `main.py`。程序使用 640×360 传统视觉通道识别红色标记和提供 Wi-Fi 图传，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 192×192 后运行钢球 YOLOv5n；检测框会转换到 640×360 标定坐标系。导轨沿画面水平方向放置。
+运行 `main.py`。程序使用 640×360 传统视觉通道低频识别红色标记，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 192×192 后运行钢球 YOLOv5n；检测框会转换到 640×360 标定坐标系。Display/OSD 合成画面通过 WBC 硬件 H.264 编码，以 RTSP 图传输出。导轨沿画面水平方向放置。
 
-`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_video.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_yolov5n_192.kmodel`，并确保 `/sdcard/libs/YOLO.py` 可用。该模型虽然命名为 YOLOv5n，但输出为 anchor-free 转置布局，运行时使用 `YOLOv8` 类完成匹配的后处理。入口会显式把 `/sdcard` 加入模块搜索路径。
+`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_rtsp.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_yolov5n_192.kmodel`，并确保 `/sdcard/libs/YOLO.py` 可用。该模型虽然命名为 YOLOv5n，但输出为 anchor-free 转置布局，运行时使用 `YOLOv8` 类完成匹配的后处理。入口会显式把 `/sdcard` 加入模块搜索路径。
 
 ## 红色位置标记
 
@@ -69,9 +69,21 @@ RING_DIAMETER_MM = 18.0
 - 金色圆环漏检：调整 `RING_TARGET_THRESHOLDS`；圆环被分成多块时把 `TARGET_MERGE_MARGIN` 从 5 增大到 6～8。
 - 位置整体偏移：调整相机，使 0 标记位于画面中心附近；相机和导轨固定后锁定曝光、白平衡与焦距。
 
+## H.264 RTSP 图传
+
+K230 创建热点 `kk22330`，电脑连接后使用 VLC 打开：
+
+```text
+rtsp://192.168.4.1:8554/test
+```
+
+图传默认使用 800×480、15 FPS、2048 kbit/s H.264。WBC 和 VEncoder 在后台线程处理显示合成帧，主循环不再执行软件 JPEG 压缩，也不再为图传额外采集 CV 帧。浏览器不能直接播放该 RTSP 地址。
+
+RTSP 和 CanMV IDE 虚拟帧缓冲都依赖唯一的 VO WBC 通道，不能同时开启。RTSP 模式下 `DISPLAY_MODE` 必须为 `"rtsp"`，画面请通过 VLC 查看；需要恢复 IDE 帧缓冲时，应关闭 `VIDEO_AP_ENABLE` 并把 `DISPLAY_MODE` 改回 `"ide"`。
+
 ## UART
 
-UART2 使用 IO44 TX、IO45 RX，115200-8N1。每 40 ms 发送：
+UART1 使用 IO3 TX、IO4 RX，115200-8N1。每 40 ms 发送：
 
 ```text
 B,valid,position_d10_mm,quality,sequence\r\n

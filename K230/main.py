@@ -25,9 +25,9 @@ try:
     from libs.YOLO import YOLOv8
     from vision_pipeline import VisionPipeline
     try:
-        from wifi_ap_video import WifiApVideoStreamer
+        from wifi_ap_rtsp import WifiApRtspStreamer
     except ImportError:
-        WifiApVideoStreamer = None
+        WifiApRtspStreamer = None
 except ImportError:
     print("K230 module import failed")
     print("sys.path:", sys.path)
@@ -35,14 +35,14 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, vision_pipeline.py and /sdcard/libs/YOLO.py")
+    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/YOLO.py")
     raise
 
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
-DISPLAY_SIZE = (640, 360)          # IDE 调试使用较低分辨率，减少虚拟显示开销。
-DISPLAY_MODE = "ide"              # 暂不连接 LCD，仅输出到 CanMV IDE。
-IDE_FRAME_QUALITY = 50             # IDE 虚拟帧缓冲 JPEG 质量。
+DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
+DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
 # 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
@@ -66,17 +66,18 @@ CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
 CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
-OSD_TEXT_ENABLE = True            # 性能调试时关闭大字体状态文本。
+OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
 
-# K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
-VIDEO_AP_ENABLE = False
-VIDEO_AP_SSID = "kk22330"
-VIDEO_AP_KEY = "czhhqgyyb"
-VIDEO_AP_IP = "192.168.4.1"
-VIDEO_AP_PORT = 80
-VIDEO_AP_FPS = 6
-VIDEO_AP_JPEG_QUALITY = 40
-VIDEO_AP_START_DELAY_FRAMES = 0
+# K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
+VIDEO_AP_ENABLE = True
+VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
+VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
+VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
+VIDEO_RTSP_PORT = 8554              # RTSP 服务端口。
+VIDEO_RTSP_SESSION = "test"        # RTSP 会话名称。
+VIDEO_RTSP_FPS = 15                 # H.264 图传目标帧率。
+VIDEO_RTSP_BITRATE_KBPS = 2048      # 800×480 H.264 高质量目标码率。
+VIDEO_AP_START_DELAY_FRAMES = 0     # 主循环启动后立即开启图传。
 
 # STEEL_BALL 使用 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
@@ -99,24 +100,6 @@ def _target_thresholds():
         return STEEL_BALL_TARGET_THRESHOLDS
     raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
-
-def _video_streamer_needs_frame(video_streamer, now_ms):
-    if video_streamer is None:
-        return False
-    needs_frame = getattr(video_streamer, "needs_frame", None)
-    if needs_frame is not None:
-        return needs_frame(now_ms)
-
-    clients = getattr(video_streamer, "clients", None)
-    if not clients:
-        return False
-    last_frame_ms = getattr(video_streamer, "last_frame_ms", 0)
-    frame_interval_ms = getattr(
-        video_streamer,
-        "frame_interval_ms",
-        max(1, 1000 // VIDEO_AP_FPS),
-    )
-    return time.ticks_diff(now_ms, last_frame_ms) >= frame_interval_ms
 
 def _resolve_steel_ball_model_path():
     for path in STEEL_BALL_MODEL_PATHS:
@@ -348,7 +331,7 @@ def run():
             display_size=DISPLAY_SIZE,
             display_mode=DISPLAY_MODE,
             ide_quality=IDE_FRAME_QUALITY,
-            to_ide=True,
+            to_ide=False,
         )
         pipeline.create()
         uart = _create_uart()
@@ -396,28 +379,26 @@ def run():
                 frame_count >= VIDEO_AP_START_DELAY_FRAMES
             ):
                 video_ap_started = True
-                if WifiApVideoStreamer is None:
-                    print("wifi_ap_video.py missing, keep local display running")
+                if WifiApRtspStreamer is None:
+                    print("wifi_ap_rtsp.py missing, keep control loop running")
                 else:
                     try:
-                        video_streamer = WifiApVideoStreamer(
+                        video_streamer = WifiApRtspStreamer(
                             ssid=VIDEO_AP_SSID,
                             key=VIDEO_AP_KEY,
                             ip=VIDEO_AP_IP,
-                            port=VIDEO_AP_PORT,
-                            fps=VIDEO_AP_FPS,
-                            jpeg_quality=VIDEO_AP_JPEG_QUALITY,
+                            port=VIDEO_RTSP_PORT,
+                            session_name=VIDEO_RTSP_SESSION,
+                            fps=VIDEO_RTSP_FPS,
+                            bitrate_kbps=VIDEO_RTSP_BITRATE_KBPS,
                         )
                         video_streamer.start()
                     except BaseException as error:
-                        print("video AP start failed, keep local display running:")
+                        print("RTSP AP start failed, keep control loop running:")
                         sys.print_exception(error)
                         video_streamer = None
 
-            # 无图像时也轮询 HTTP 客户端，避免浏览器连接等待下一次 CV 采集。
-            if video_streamer is not None:
-                video_streamer.tick(None, now_ms)
-
+            # RTSP 图传在线程中直接读取 Display WBC，不占用主循环 CV 帧。
             frame = None
             yolo_result = None
             ai_frame = None
@@ -428,20 +409,12 @@ def run():
                     time.ticks_diff(now_ms, last_calibration_ms)
                     >= CALIBRATION_INTERVAL_MS
                 )
-                video_frame_due = _video_streamer_needs_frame(
-                    video_streamer,
-                    now_ms,
-                )
-
-                # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
-                if calibration_due or video_frame_due:
+                # RTSP 直接编码 Display WBC；CV 通道只用于低频红色刻度标定。
+                if calibration_due:
                     stage_start_us = time.ticks_us()
                     frame = pipeline.capture_vision_frame()
-                    if calibration_due:
-                        detector.update_calibration(frame)
-                        last_calibration_ms = now_ms
-                    if video_frame_due:
-                        video_streamer.tick(frame, now_ms)
+                    detector.update_calibration(frame)
+                    last_calibration_ms = now_ms
                     perf_cv_us += time.ticks_diff(
                         time.ticks_us(),
                         stage_start_us,
@@ -500,8 +473,6 @@ def run():
             else:
                 frame = pipeline.capture_vision_frame()
                 result = detector.detect(frame)
-                if video_streamer is not None:
-                    video_streamer.tick(frame, now_ms)
                 frame = None
 
             # 统计单位时间内真正完成的钢球识别次数，包含实际摄像头与系统开销。
