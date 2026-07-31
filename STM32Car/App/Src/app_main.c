@@ -24,6 +24,12 @@
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
+#define APP_BALL_POSITION_KP_MAX          0.200f /* 上位机允许的位置Kp安全上限。 */
+#define APP_BALL_POSITION_KI_MAX          0.100f /* 上位机允许的位置Ki安全上限。 */
+#define APP_BALL_POSITION_KD_MAX          0.200f /* 上位机允许的位置Kd安全上限。 */
+#define APP_BALL_PIPE_KP_MAX              2.000f /* 上位机允许的姿态Kp安全上限。 */
+#define APP_BALL_PIPE_KD_MAX_S            0.300f /* 上位机允许的姿态Kd安全上限，单位为秒。 */
+
 /* Debug variables for IAR Watch. PID gain variables intentionally drive control. */
 volatile uint8_t g_app_init_step;
 volatile uint8_t g_app_line_command_valid;
@@ -1685,6 +1691,90 @@ uint8_t App_GetPipeCalibrationValid(void)
 void App_SetBallBalanceTargetMm(float target_mm)
 {
     BallBalanceControl_SetTargetMm(&s_ball_balance_control, target_mm);
+}
+
+uint8_t App_SetBallPidGains(float position_kp,
+                            float position_ki,
+                            float position_kd,
+                            float pipe_kp,
+                            float pipe_kd_s)
+{
+    if ((position_kp < 0.0f) ||
+        (position_kp > APP_BALL_POSITION_KP_MAX) ||
+        (position_ki < 0.0f) ||
+        (position_ki > APP_BALL_POSITION_KI_MAX) ||
+        (position_kd < 0.0f) ||
+        (position_kd > APP_BALL_POSITION_KD_MAX) ||
+        (pipe_kp < 0.0f) ||
+        (pipe_kp > APP_BALL_PIPE_KP_MAX) ||
+        (pipe_kd_s < 0.0f) ||
+        (pipe_kd_s > APP_BALL_PIPE_KD_MAX_S)) {
+        return 0U;
+    }
+
+    g_app_ball_kp = position_kp;
+    g_app_ball_ki = position_ki;
+    g_app_ball_kd = position_kd;
+    g_app_ball_pipe_kp = pipe_kp;
+    g_app_ball_pipe_kd_s = pipe_kd_s;
+    App_ApplyBallPidGains();
+    return 1U;
+}
+
+void App_GetBallPidGains(float *position_kp,
+                         float *position_ki,
+                         float *position_kd,
+                         float *pipe_kp,
+                         float *pipe_kd_s)
+{
+    if (position_kp != 0) {
+        *position_kp = g_app_ball_kp;
+    }
+    if (position_ki != 0) {
+        *position_ki = g_app_ball_ki;
+    }
+    if (position_kd != 0) {
+        *position_kd = g_app_ball_kd;
+    }
+    if (pipe_kp != 0) {
+        *pipe_kp = g_app_ball_pipe_kp;
+    }
+    if (pipe_kd_s != 0) {
+        *pipe_kd_s = g_app_ball_pipe_kd_s;
+    }
+}
+
+void App_GetBallPidSnapshot(AppBallPidSnapshot *snapshot)
+{
+    if (snapshot == 0) {
+        return;
+    }
+
+    snapshot->enabled = s_ball_balance_output.enabled;
+    snapshot->tracking_valid = s_ball_balance_output.tracking_valid;
+    snapshot->timed_out = s_ball_balance_output.timed_out;
+    snapshot->integral_active = s_ball_balance_output.integral_active;
+    snapshot->braking_active = s_ball_balance_output.braking_active;
+    snapshot->attitude_valid = s_pipe_attitude_output.attitude_valid;
+    snapshot->imu_fault = s_ball_balance_output.imu_fault;
+    snapshot->mapping_fault = s_ball_balance_output.mapping_fault;
+    snapshot->trajectory_phase = s_ball_balance_output.trajectory_phase;
+    snapshot->target_mm = s_ball_balance_output.target_mm;
+    snapshot->position_mm = s_ball_balance_output.filtered_position_mm;
+    snapshot->velocity_mm_s = s_ball_balance_output.velocity_mm_s;
+    snapshot->error_mm = s_ball_balance_output.error_mm;
+    snapshot->p_term_deg = s_ball_balance_output.p_term_deg;
+    snapshot->i_term_deg = s_ball_balance_output.i_term_deg;
+    snapshot->d_term_deg = s_ball_balance_output.d_term_deg;
+    snapshot->desired_pipe_pitch_deg =
+        s_ball_balance_output.desired_pipe_pitch_deg;
+    snapshot->measured_pipe_pitch_deg =
+        s_ball_balance_output.measured_pipe_pitch_deg;
+    snapshot->measured_pipe_rate_dps =
+        s_ball_balance_output.measured_pipe_rate_dps;
+    snapshot->pipe_p_term_deg = s_ball_balance_output.pipe_p_term_deg;
+    snapshot->pipe_d_term_deg = s_ball_balance_output.pipe_d_term_deg;
+    snapshot->servo_pwm_us = ServoDriver_GetPulseUs();
 }
 
 uint8_t App_SetHostCalibrationEnabled(uint8_t enabled)

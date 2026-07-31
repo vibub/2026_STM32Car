@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 
-from protocol import RESP_ERR, RESP_STREAM
+from protocol import RESP_ERR, RESP_STREAM, RESP_TUNE_STREAM
 
 
 class LinkError(Exception):
@@ -46,7 +46,8 @@ class SerialLink:
                 break
             if not line:
                 continue
-            if line.startswith(RESP_STREAM + " "):
+            if (line.startswith(RESP_STREAM + " ") or
+                    line.startswith(RESP_TUNE_STREAM + " ")):
                 self._stream_q.put(line)
             else:
                 self._rx_q.put(line)

@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-/* 上位机标定协议（见 Tools/pipe_calibration/PROTOCOL.md）。
- * 标定模式开关：CAL 1 进入（同时停车），CAL 0 退出；默认关闭。
- * 未开启标定模式时，除 PING/CAL 外的命令一律返回 ERR disabled。 */
+/* USART1标定与PID调参协议（见Tools/pipe_calibration/PROTOCOL.md）。
+ * CAL 1仅用于停车后的舵机/原始IMU标定；PID调参命令在CAL 0下运行，
+ * 写增益、设置目标和启停平衡仍受停车模式及原有安全门控约束。 */
 void HostCalibrationProtocol_Init(void);
 void HostCalibrationProtocol_Task(void);
 

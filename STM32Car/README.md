@@ -24,11 +24,11 @@
 - 舵机PWM：TIM4_CH4 / PD15，50 Hz；实测安全范围500～1600 μs，1050 μs为水平，线性关系为`φ=0.01009×(PWM−1050)`。
 - 安全停车：停止模式、持续丢线或编码器反馈故障时清空速度控制器并停止电机。
 - LSM6DSV16X：通过 I2C2（PB10/PB11）接入，自动探测 `0x6A`/`0x6B` 并读取三轴陀螺仪和三轴加速度计。
-- 上位机标定链路：USART1（PB6/PB7，115200 8N1）通过 USB-TTL 连接 PC，
-  `Tools/pipe_calibration/calib_gui.py` 提供基础区（实时 IMU + 舵机手动控制）、
-  标定区（参数化扫描 + 多轮建表）和验证区（查表误差分析）。
-  标定模式默认关闭，PC 端发送 `CAL 1` 后进入（同时停车），未开启时其他命令
-  返回 `ERR disabled`，不会干扰行驶；协议见 `Tools/pipe_calibration/PROTOCOL.md`。
+- USART1上位机链路：PB6/PB7，115200 8N1，通过USB-TTL连接PC。
+  `Tools/pipe_calibration/calib_gui.py`提供基础区、PID调参、标定区和验证区；PID调参页可在线
+  读写位置外环Kp/Ki/Kd与姿态内环Kp/Kd，以20 Hz同步显示钢球位置、速度、两级控制项、
+  水管姿态和PWM，并保存CSV及JSON分析摘要。舵机标定需`CAL 1`并停车，PID闭环调参需
+  `CAL 0`且车辆保持停车；协议见`Tools/pipe_calibration/PROTOCOL.md`。
 
 K230 红线协议和视觉巡线控制已移除，底盘巡线输入为八路 I²C 红外传感器；K230 UART4 当前用于接收 `B,<valid>,<position_d10_mm>,<quality>,<sequence>` 钢球位置消息。
 
@@ -166,6 +166,28 @@ page0.t0.txt="<UTF-8 中文状态>" FF FF FF
 
 第三题运行中或成功保持在 -5 cm 时再次发送 0x02，会中止第三题、关闭端点积分并回到 O 点重新等待就绪。
 ```
+
+## USART1上位机PID调参
+
+运行：
+
+```bash
+python Tools/pipe_calibration/calib_gui.py
+```
+
+使用顺序：
+
+1. 完成TJC `0x04`水管水平标定；
+2. 连接USART1并确认上位机顶部“标定模式(CAL)”未勾选；
+3. 进入“PID调参”页读取当前参数；
+4. 开启20 Hz遥测，必要时设置目标位置并启用平衡；
+5. 每次只调整一组参数，点击“开始录制”，至少记录10～15秒；
+6. “停止并保存CSV”会在`Tools/pipe_calibration/data/`生成同名CSV和JSON摘要；
+7. 后续调参分析应同时保留CSV和JSON，以便对比误差RMS、越零次数、水管跟随误差、
+   角速度、P/I/D控制项和PWM范围。
+
+上位机写入的PID只保存在RAM，复位后恢复固件默认值。PID写入、目标设置和闭环启停只允许
+车辆停车且`CAL 0`时执行；动态任务运行期间会返回`ERR busy`，不会在线改变比赛控制参数。
 
 ## IAR 构建
 

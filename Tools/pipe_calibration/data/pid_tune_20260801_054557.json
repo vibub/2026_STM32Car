@@ -1,0 +1,29 @@
+{
+  "created": "2026-08-01T05:45:57",
+  "csv_file": "pid_tune_20260801_054557.csv",
+  "protocol": "pclink-1.2",
+  "start_gains": {
+    "position_kp": 0.012,
+    "position_ki": 0.008,
+    "position_kd": 0.006,
+    "pipe_kp": 0.6,
+    "pipe_kd_s": 0.05
+  },
+  "metrics": {
+    "duration_s": 21.541708300006576,
+    "sample_count": 431,
+    "position_error_rms_mm": 9.56026559203536,
+    "position_error_max_abs_mm": 29.53,
+    "velocity_rms_mm_s": 6.913465374201163,
+    "pipe_tracking_rms_deg": 0.3169172346886351,
+    "pipe_rate_rms_dps": 1.699384741946359,
+    "zero_crossing_count": 0,
+    "integral_active_ratio": 0.03248259860788863,
+    "braking_active_ratio": 0.12296983758700696,
+    "pwm_min_us": 927,
+    "pwm_max_us": 1073
+  },
+  "preliminary_suggestions": [
+    "未发现明显异常；结合曲线逐项小步调整，并保留本组数据作对照。"
+  ]
+}

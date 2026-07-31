@@ -1,4 +1,4 @@
-# 摆杆角度标定 —— 上位机 ↔ STM32 串口协议 v1.1
+# 水管标定与钢球 PID 调参 —— 上位机 ↔ STM32 串口协议 v1.2
 
 > 本文档是上位机与嵌入式端的**唯一协议依据**。上位机实现见同目录 `protocol.py` /
 > `links.py`；嵌入式端按本文档实现 `PCLink`（标定串口）模块。协议冻结后如要改动，
@@ -30,8 +30,10 @@
 - 舵机 PWM：实测安全区间为 `500～1600 us`，`1050 us` 对应水管水平位置。
 - `ts_ms`：设备上电后的毫秒计数（`HAL_GetTick()` 风格）。
 - 标定模式中设备必须**保持小车电机停止**；标定串口收到任何命令都不应触发行驶。
-- **标定模式开关**：设备上电默认关闭标定模式。上位机连接后先发 `CAL 1` 进入
-  （设备会先停车），否则除 `PING`/`CAL` 外的命令全部返回 `ERR disabled`。
+- **标定模式开关**：设备上电默认关闭标定模式。舵机与原始IMU标定命令需先发
+  `CAL 1`（设备会先停车），否则返回`ERR disabled`。
+- **PID调参命令**：`PID`、`BALANCE`、`TARGET`、`TSTREAM`必须在`CAL 0`时使用；
+  写参数、启停平衡和设置目标还要求车辆处于停车模式，动态任务运行时返回`ERR busy`。
 
 ## 3. 命令表
 
@@ -42,15 +44,15 @@
 示例：`CAL 1` → `OK`；`CAL 0` → `OK`
 
 说明：`CAL 1` 进入标定模式并**先执行停车**（避免与循迹/平衡任务冲突），
-`CAL 0` 退出。该命令在任何状态下都可执行，是唯一不受 `ERR disabled` 限制的
-功能命令。固件编译开关：`APP_USE_HOST_CALIBRATION`（app_config.h），
+`CAL 0` 退出。该命令在任何状态下都可执行；PID调参命令使用独立的`CAL 0`
+安全路径。固件编译开关：`APP_USE_HOST_CALIBRATION`（app_config.h），
 上电默认状态由 `APP_HOST_CALIBRATION_DEFAULT` 决定（默认 0）。
 
 ### 3.1 PING
 
 请求：`PING\r\n`　应答：`PONG <version>\r\n`
 
-示例：`PING` → `PONG pclink-1.1`
+示例：`PING` → `PONG pclink-1.2`
 
 用途：连接探测、固件版本确认。上位机连接后先发 3 次 PING 确认链路。
 
@@ -87,14 +89,14 @@
 请求：`SAMPLE <count> <dt_ms>\r\n`
 应答：`SAMPLE_OK <mean_deg> <std_deg> <count> <ts_ms>\r\n`
 
-示例：`SAMPLE 100 5` → `SAMPLE_OK 2.3120 0.0180 100 123999`
+示例：`SAMPLE 100 10` → `SAMPLE_OK 2.3120 0.0180 100 123999`
 
 说明：设备连续采集 `count` 个俯仰角样本（原始加速度俯仰角），
 间隔 `dt_ms`，返回均值、标准差和完成时刻。
 约束：`1 <= count <= 200`，`10 <= dt_ms <= 100`，越界返回 `ERR range`。
-**注意**：LSM6DSV16X 当前配置为 60 Hz 输出（约 16.7 ms 一个新样本），因此
-`dt_ms` 建议取 20（约 50 Hz 有效采样）；小于 16 时设备会重复读到陈旧样本，
-标准差失真。**SAMPLE 阻塞主循环期间 IMU 轮询不会运行，固件在采样循环内
+**注意**：LSM6DSV16X 当前配置为120 Hz输出（约8.3 ms一个新样本），`dt_ms`
+建议取10～20；过短间隔可能重复读到陈旧样本。**SAMPLE 阻塞主循环期间 IMU
+轮询不会运行，固件在采样循环内
 直接轮询 IMU 并现场计算俯仰角**，保证每个样本都是新读数。标定中推荐
 `SAMPLE 100 20`（2 秒一采）；`ts_ms` 为最后一次采样完成时刻。
 
@@ -113,7 +115,65 @@ S <ts_ms> <pitch_deg> <rate_deg_s>\r\n
 设备持续推送直到收到 `STREAM 0`。上位机进行标定/验证前应发 `STREAM 0`；
 即使忘记关闭，上位机也会把 `S ` 行与应答行分开，不影响 SAMPLE/SERVO 时序。
 
-### 3.7 VIN（可选）
+### 3.7 PID（读取/写入两级控制增益）
+
+查询请求：`PID\r\n`
+
+写入请求：`PID <position_kp> <position_ki> <position_kd> <pipe_kp> <pipe_kd_s>\r\n`
+
+应答：`PID <position_kp> <position_ki> <position_kd> <pipe_kp> <pipe_kd_s>\r\n`
+
+示例：
+
+```text
+PID
+→ PID 0.0120 0.0080 0.0060 0.600 0.0500
+
+PID 0.014 0.006 0.008 0.65 0.055
+→ PID 0.0140 0.0060 0.0080 0.650 0.0550
+```
+
+安全范围：位置`Kp 0～0.2`、`Ki 0～0.1`、`Kd 0～0.2`，姿态`Kp 0～2.0`、
+`Kd 0～0.3 s`。写入值只保存在RAM，复位后恢复固件默认值。查询可随时执行；写入要求
+`CAL 0`且车辆处于停车模式。
+
+### 3.8 BALANCE（调参时启停钢球闭环）
+
+请求：`BALANCE <1|0>\r\n`　应答：`OK\r\n`、`ERR state\r\n`或`ERR busy\r\n`
+
+`BALANCE 1`仍执行固件原有安全门控：必须先完成0x04水平标定并满足IMU、映射和停车
+条件；`BALANCE 0`禁用钢球闭环并回水平。该命令不会绕过动态任务锁定。
+
+### 3.9 TARGET（设置钢球位置目标）
+
+请求：`TARGET <target_mm>\r\n`　应答：`OK\r\n`
+
+范围为`-100～+100 mm`，支持小数。仅在`CAL 0`和停车模式下接受。改变目标时固件会
+清除位置积分并重新进入等待水管阶段。
+
+### 3.10 TSTREAM（PID同步遥测）
+
+请求：`TSTREAM <1|0>\r\n`　应答：`OK\r\n`
+
+启用后设备以20 Hz推送：
+
+```text
+T <ts_ms> <flags> <phase> <target_mm> <position_mm> <velocity_mm_s>
+  <error_mm> <p_deg> <i_deg> <d_deg> <desired_pipe_deg>
+  <measured_pipe_deg> <pipe_rate_dps> <pipe_p_deg> <pipe_d_deg> <pwm_us>
+```
+
+实际发送为单行。`flags`位定义：bit0闭环启用、bit1视觉跟踪有效、bit2视觉超时、
+bit3积分启用、bit4制动启用、bit5姿态有效、bit6 IMU故障、bit7映射故障。
+`phase`为0等待水管、1破静摩擦、2运动控制、3目标保持。开启`TSTREAM`会自动关闭
+标定`STREAM`，进入`CAL 1`也会自动关闭`TSTREAM`。
+
+上位机“PID调参”页可将遥测保存为同名的CSV和JSON：CSV每帧同时记录当时的五个增益、
+钢球位置/速度、位置P/I/D、水管目标/实测角、角速度、姿态P/D和PWM；JSON保存误差RMS、
+最大误差、越零次数、水管跟踪RMS、积分/制动占比及初步调参提示。后续分析时应同时提供
+CSV和JSON，不能只截取曲线截图。
+
+### 3.11 VIN（可选）
 
 请求：`VIN\r\n`　应答：`VIN <mv>\r\n` 或 `ERR unsupported\r\n`
 
@@ -127,9 +187,10 @@ S <ts_ms> <pitch_deg> <rate_deg_s>\r\n
 | `ERR parse` | 请求行格式/参数无法解析 |
 | `ERR range` | 参数越界（PWM、SAMPLE 参数等） |
 | `ERR unknown` | 未知命令 |
-| `ERR busy` | 上一条命令未完成（实现可选，不做也没关系） |
+| `ERR busy` | 当前模式不允许写PID、设置目标或进入对应数据流 |
+| `ERR state` | 平衡启用条件不满足，例如尚未完成0x04水平标定 |
 | `ERR unsupported` | 命令本身合法但该固件未实现（如 VIN） |
-| `ERR disabled` | 标定模式未开启（需先发 `CAL 1`） |
+| `ERR disabled` | 舵机标定命令尚未进入`CAL 1` |
 
 ## 5. 嵌入式端（STM32）适配要点
 
@@ -139,24 +200,28 @@ S <ts_ms> <pitch_deg> <rate_deg_s>\r\n
 2. `stm32h7xx_it.c` 已有 `USART1_IRQHandler`，`tjc_uart.c` 的 HAL 回调已加入
    `HostLinkUart_HandleRxComplete/HandleError` 分发；
 3. `Protocol/Src/host_calibration_protocol.c`：行状态机 + 命令分发
-   （PING/CAL/SERVO/PWM/IMU/SAMPLE/STREAM/VIN），浮点输出用整数定点格式化，
-   不依赖 printf 的 %f 支持；
-4. `SAMPLE` 阻塞循环 `count` 次读 `App_GetPipePitchDeg()`，`HAL_Delay(dt_ms)` 间隔；
-5. `STREAM` 在 `HostCalibrationProtocol_Task` 中按 100 ms 节拍推送 `S ` 行；
+   （PING/CAL/SERVO/PWM/IMU/SAMPLE/STREAM/PID/BALANCE/TARGET/TSTREAM/VIN），
+   浮点输出用整数定点格式化，不依赖printf的`%f`支持；
+4. `SAMPLE` 阻塞循环 `count` 次读取原始IMU俯仰角并按`dt_ms`间隔采样；
+5. `STREAM`按100 ms推送`S `行，`TSTREAM`按50 ms推送钢球位置、两级控制项、
+   水管姿态和PWM组成的同一时刻快照；
 6. `SERVO`调用`ServoDriver_SetPulseUs`直接输出，协议层和驱动层均限制为500～1600 us；
 7. 标定模式下水管俯仰角来自
    `App_GetPipeRawAccelPitchDeg()/App_GetPipeRawPitchRateDps()`：
-   原始加速度俯仰角（`atan2(accel_y, accel_z)`，LSM6DSV16X / I2C2 / 60Hz）
-   不受九点标定门控；零位由用户按"球平衡"确定，协议不做置零；
-8. 模式互斥：`App_SetHostCalibrationEnabled(1)` 先执行 `APP_MODE_STOP` 停车，
-   未开启时命令返回 `ERR disabled`。
+   原始加速度俯仰角（`atan2(accel_y, accel_z)`，LSM6DSV16X / I2C2 / 120Hz）
+   不受水平零偏门控；
+8. `App_GetBallPidSnapshot`一次性复制控制状态，协议层不直接访问控制器静态对象；
+9. 模式互斥：`CAL 1`用于舵机标定并停车，PID写入和闭环试验只允许`CAL 0`停车模式。
 
 ## 6. 上位机联调检查清单
 
-1. `PING`三连成功并返回`pclink-1.1`；
-2. `SERVO 500 / 1050 / 1600`依次执行，1050 us时水管水平；
+1. `PING`三连成功并返回`pclink-1.2`；
+2. `CAL 1`后依次执行`SERVO 500 / 1050 / 1600`，确认1050 us时水管水平；
 3. PWM从1050增加到1600时水管右端升高、原始IMU角度减小；
-4. `IMU`连续读值稳定，静止时标准差小；
-5. `SAMPLE 100 20`与连续`IMU`读值的均值一致；
-6. `STREAM 1`后10 Hz稳定推送，10秒内丢行率<1%；
-7. 越界命令（如`SERVO 1601`）返回`ERR range`且不改变舵机位置。
+4. `IMU`连续读值稳定，`SAMPLE 100 10`与连续读值均值一致；
+5. `STREAM 1`后10 Hz稳定推送，10秒内丢行率<1%；
+6. `CAL 0`后`PID`读取默认增益，写入合法增益后再次查询完全一致；
+7. 未完成0x04标定时`BALANCE 1`返回`ERR state`，完成后能够安全启用和禁用；
+8. `TARGET -50`更新目标，`TSTREAM 1`后20 Hz同步显示位置、P/I/D、水管姿态和PWM；
+9. 动态任务运行时PID写入、目标设置和闭环启停返回`ERR busy`；
+10. 越界命令（如`SERVO 1601`或`PID 1 0 0 0 0`）返回`ERR range`且不改变参数。

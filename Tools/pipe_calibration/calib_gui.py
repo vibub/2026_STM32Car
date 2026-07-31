@@ -3,8 +3,9 @@
 """
 摆杆角度标定上位机
 
-三个功能区：
+四个功能区：
   基础区  —— 实时显示水管 IMU 俯仰角，手动控制舵机 PWM，记录零位/上下限；
+  PID调参 —— 在线读写钢球位置外环和水管姿态内环增益，显示20 Hz同步遥测并录制CSV；
   标定区  —— 设置扫描参数（起点/终点/方向/角度网格/稳定时间/采样数/轮数），
              逐轮采集并保存 CSV，多轮合并后构建标定表（升序/降序/平均 + 回差），
              导出 JSON 与嵌入式端 C 头文件；
@@ -36,23 +37,31 @@ from matplotlib.figure import Figure
 
 from links import LinkError, SerialLink
 from protocol import (
+    CMD_BALANCE,
+    CMD_PID,
     CMD_PING,
     CMD_SAMPLE,
     CMD_SERVO,
     CMD_STREAM,
+    CMD_TARGET,
+    CMD_TUNE_STREAM,
     RESP_OK,
+    RESP_PID,
     RESP_PONG,
     RESP_SAMPLE_OK,
     PWM_CENTER_US,
     PWM_MAX_US,
     PWM_MIN_US,
+    parse_pid,
     parse_sample,
+    parse_tune_stream,
 )
 import table as tbl
 
-APP_TITLE = "摆杆角度标定上位机"
+APP_TITLE = "水管标定与钢球 PID 调参上位机"
 SERVO_MAX_ANGLE_DEG = 148.5
 STREAM_PERIOD_S = 0.1
+TUNE_STREAM_PERIOD_S = 0.05
 ROLLING_WINDOW_S = 15.0
 DEFAULT_GRID_TEXT = "0, ±0.5, ±1, ±1.5, ±2, ±2.5, ±3, ±4, ±5"
 
@@ -91,9 +100,11 @@ class CalibrationApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=(6, 0))
         self.base_tab = BaseTab(self.notebook, self)
+        self.pid_tab = PidTuningTab(self.notebook, self)
         self.calib_tab = CalibrationTab(self.notebook, self)
         self.validate_tab = ValidationTab(self.notebook, self)
         self.notebook.add(self.base_tab.frame, text="基础区")
+        self.notebook.add(self.pid_tab.frame, text="PID调参")
         self.notebook.add(self.calib_tab.frame, text="标定区")
         self.notebook.add(self.validate_tab.frame, text="验证区")
 
@@ -106,7 +117,7 @@ class CalibrationApp:
         self._poll_count = 0
         self.root.after(50, self._poll)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.log("上位机就绪。请连接串口后勾选“标定模式”开始操作。")
+        self.log("上位机就绪。舵机标定需开启CAL；PID调参需关闭CAL并保持车辆停车。")
 
     # ---------------- 连接栏 ----------------
     def _build_connection_bar(self):
@@ -157,11 +168,39 @@ class CalibrationApp:
         try:
             from serial.tools import list_ports
 
-            ports = [p.device for p in list_ports.comports()]
-        except Exception:
+            port_infos = list(list_ports.comports())
+            def port_rank(port):
+                text = f"{port.description} {port.hwid}".lower()
+                if any(key in text for key in ("ch340", "cp210", "usb-serial")):
+                    return 0, port.device
+                if "stlink" in text:
+                    return 1, port.device
+                if "bluetooth" in text or "bthenum" in text:
+                    return 3, port.device
+                return 2, port.device
+
+            port_infos.sort(key=port_rank)
+            ports = [port.device for port in port_infos]
+            self.port_descriptions = {
+                port.device: port.description for port in port_infos
+            }
+            self.conn_status_var.set(
+                f"发现 {len(ports)} 个串口" if ports else "未发现串口"
+            )
+        except ModuleNotFoundError:
             ports = []
+            self.port_descriptions = {}
+            self.conn_status_var.set("缺少pyserial，请运行 pip install pyserial")
+            if hasattr(self, "log_text"):
+                self.log("缺少pyserial，无法枚举串口。", error=True)
+        except Exception as exc:
+            ports = []
+            self.port_descriptions = {}
+            self.conn_status_var.set("串口枚举失败")
+            if hasattr(self, "log_text"):
+                self.log(f"串口枚举失败: {exc}", error=True)
         self.port_combo["values"] = ports
-        if ports and not self.port_var.get():
+        if ports and self.port_var.get() not in ports:
             self.port_var.set(ports[0])
 
     def toggle_connect(self):
@@ -218,7 +257,9 @@ class CalibrationApp:
             return
         try:
             if self.base_tab.stream_var.get():
-                self.base_tab.set_stream(False)
+                self.set_stream(False)
+            if self.pid_tab.stream_var.get():
+                self.pid_tab.set_stream(False)
             if self.cal_mode_var.get():
                 self.send("CAL 0")
         except Exception:
@@ -233,6 +274,9 @@ class CalibrationApp:
 
     def toggle_cal_mode(self):
         enabled = self.cal_mode_var.get()
+        if enabled and self.pid_tab.stream_var.get():
+            self.pid_tab.set_stream(False)
+            self.pid_tab.stream_var.set(False)
         resp = self.send(f"CAL {1 if enabled else 0}")
         if resp is None:
             self.cal_mode_var.set(False)
@@ -287,6 +331,7 @@ class CalibrationApp:
                 lines = self.link.read_available()
                 for line in lines:
                     self.base_tab.on_stream_line(line)
+                    self.pid_tab.on_stream_line(line)
             while True:
                 try:
                     message = self.job_q.get_nowait()
@@ -296,6 +341,7 @@ class CalibrationApp:
             self._poll_count += 1
             if self._poll_count % 10 == 0:
                 self.base_tab.refresh_realtime()
+                self.pid_tab.refresh_realtime()
         finally:
             self.root.after(50, self._poll)
 
@@ -500,6 +546,9 @@ class BaseTab:
             self.stream_var.set(False)
             self.app.log("未连接设备。", error=True)
             return
+        if self.stream_var.get() and self.app.pid_tab.stream_var.get():
+            self.app.pid_tab.set_stream(False)
+            self.app.pid_tab.stream_var.set(False)
         if self.app.set_stream(self.stream_var.get()):
             self.app.log(f"STREAM {'开' if self.stream_var.get() else '关'}")
         else:
@@ -779,6 +828,494 @@ class BaseTab:
             self.markers = json.load(f)
         self._refresh_marker_list()
         self.app.log(f"标记已载入: {path}")
+
+
+class PidTuningTab:
+    """钢球位置外环与水管姿态内环的在线参数调整和同步遥测。"""
+
+    PHASE_NAMES = ("等待水管", "破静摩擦", "运动控制", "目标保持")
+    CSV_FIELDS = (
+        "host_time_s", "position_kp", "position_ki", "position_kd",
+        "pipe_kp", "pipe_kd_s", "ts_ms", "flags", "phase", "target_mm",
+        "position_mm", "velocity_mm_s", "error_mm", "p_term_deg",
+        "i_term_deg", "d_term_deg", "desired_pipe_pitch_deg",
+        "measured_pipe_pitch_deg", "measured_pipe_rate_dps",
+        "pipe_p_term_deg", "pipe_d_term_deg", "servo_pwm_us",
+    )
+
+    def __init__(self, parent, app):
+        self.app = app
+        self.frame = ttk.Frame(parent)
+        self.buffer = deque(maxlen=int(ROLLING_WINDOW_S / TUNE_STREAM_PERIOD_S) + 20)
+        self.recording = False
+        self.record_buffer = []
+        self.record_start_host = 0.0
+        self.current_gains = (0.0120, 0.0080, 0.0060, 0.600, 0.0500)
+        self.record_gains = self.current_gains
+        self._last_draw = 0.0
+
+        left = ttk.Frame(self.frame, width=390)
+        left.pack(side="left", fill="y", padx=(6, 3), pady=6)
+        left.pack_propagate(False)
+        right = ttk.LabelFrame(self.frame, text="20 Hz同步控制遥测")
+        right.pack(side="left", fill="both", expand=True, padx=(3, 6), pady=6)
+
+        gain_frame = ttk.LabelFrame(left, text="在线 PID 参数")
+        gain_frame.pack(fill="x", pady=(0, 6))
+        self.gain_vars = {
+            "kp": tk.StringVar(value="0.0120"),
+            "ki": tk.StringVar(value="0.0080"),
+            "kd": tk.StringVar(value="0.0060"),
+            "pipe_kp": tk.StringVar(value="0.600"),
+            "pipe_kd": tk.StringVar(value="0.0500"),
+        }
+        gain_specs = (
+            ("位置 Kp [deg/mm]", "kp", 0.0, 0.2, 0.001),
+            ("位置 Ki [deg/(mm·s)]", "ki", 0.0, 0.1, 0.001),
+            ("位置 Kd [deg/(mm/s)]", "kd", 0.0, 0.2, 0.001),
+            ("姿态 Kp", "pipe_kp", 0.0, 2.0, 0.05),
+            ("姿态 Kd [s]", "pipe_kd", 0.0, 0.3, 0.005),
+        )
+        for row_index, (label, key, minimum, maximum, increment) in enumerate(gain_specs):
+            ttk.Label(gain_frame, text=label, width=23).grid(
+                row=row_index, column=0, sticky="w", padx=6, pady=3
+            )
+            ttk.Spinbox(
+                gain_frame,
+                textvariable=self.gain_vars[key],
+                from_=minimum,
+                to=maximum,
+                increment=increment,
+                width=11,
+            ).grid(row=row_index, column=1, padx=4, pady=3)
+        row = ttk.Frame(gain_frame)
+        row.grid(row=len(gain_specs), column=0, columnspan=2, sticky="ew", padx=6, pady=6)
+        ttk.Button(row, text="读取当前参数", command=self.read_gains).pack(side="left")
+        ttk.Button(row, text="写入 STM32", command=self.write_gains).pack(
+            side="left", padx=4
+        )
+        ttk.Button(row, text="填入默认值", command=self.fill_defaults).pack(side="left")
+
+        control_frame = ttk.LabelFrame(left, text="平衡试验控制")
+        control_frame.pack(fill="x", pady=6)
+        row = ttk.Frame(control_frame)
+        row.pack(fill="x", padx=6, pady=5)
+        ttk.Label(row, text="目标位置(mm):").pack(side="left")
+        self.target_var = tk.StringVar(value="0.0")
+        ttk.Spinbox(
+            row,
+            textvariable=self.target_var,
+            from_=-100.0,
+            to=100.0,
+            increment=1.0,
+            width=9,
+        ).pack(side="left", padx=4)
+        ttk.Button(row, text="设置目标", command=self.set_target).pack(side="left")
+        row = ttk.Frame(control_frame)
+        row.pack(fill="x", padx=6, pady=(0, 5))
+        ttk.Button(row, text="启用平衡", command=lambda: self.set_balance(True)).pack(
+            side="left"
+        )
+        ttk.Button(row, text="禁用并回水平", command=lambda: self.set_balance(False)).pack(
+            side="left", padx=4
+        )
+        ttk.Label(
+            control_frame,
+            text="安全要求：先完成0x04水平标定，关闭CAL，车辆保持停车。",
+            foreground="#c62828",
+            wraplength=360,
+        ).pack(anchor="w", padx=6, pady=(0, 6))
+
+        stream_frame = ttk.LabelFrame(left, text="遥测与录制")
+        stream_frame.pack(fill="x", pady=6)
+        self.stream_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            stream_frame,
+            text="实时遥测（20 Hz）",
+            variable=self.stream_var,
+            command=self.toggle_stream,
+        ).pack(anchor="w", padx=6, pady=4)
+        row = ttk.Frame(stream_frame)
+        row.pack(fill="x", padx=6, pady=(0, 5))
+        self.record_start_btn = ttk.Button(
+            row, text="开始录制", command=self.start_recording
+        )
+        self.record_start_btn.pack(side="left")
+        self.record_stop_btn = ttk.Button(
+            row, text="停止并保存CSV", command=self.stop_recording, state="disabled"
+        )
+        self.record_stop_btn.pack(side="left", padx=4)
+        self.record_status_var = tk.StringVar(value="未录制")
+        ttk.Label(stream_frame, textvariable=self.record_status_var).pack(
+            anchor="w", padx=6, pady=(0, 5)
+        )
+
+        status_frame = ttk.LabelFrame(left, text="当前状态")
+        status_frame.pack(fill="x", pady=6)
+        self.state_var = tk.StringVar(value="等待遥测")
+        self.position_var = tk.StringVar(value="位置: --   速度: --")
+        self.term_var = tk.StringVar(value="位置项 P/I/D: --")
+        self.pipe_var = tk.StringVar(value="水管: --")
+        for variable in (self.state_var, self.position_var, self.term_var, self.pipe_var):
+            ttk.Label(status_frame, textvariable=variable, wraplength=360).pack(
+                anchor="w", padx=6, pady=2
+            )
+
+        self.figure = Figure(figsize=(8.5, 7.2), dpi=100)
+        self.position_ax = self.figure.add_subplot(311)
+        self.term_ax = self.figure.add_subplot(312, sharex=self.position_ax)
+        self.pipe_ax = self.figure.add_subplot(313, sharex=self.position_ax)
+        (self.target_line,) = self.position_ax.plot([], [], "k--", label="目标位置")
+        (self.position_line,) = self.position_ax.plot([], [], "b-", label="滤波位置")
+        (self.error_line,) = self.position_ax.plot([], [], "r-", alpha=0.7, label="位置误差")
+        (self.p_line,) = self.term_ax.plot([], [], label="P项")
+        (self.i_line,) = self.term_ax.plot([], [], label="I项")
+        (self.d_line,) = self.term_ax.plot([], [], label="D项")
+        (self.pipe_target_line,) = self.pipe_ax.plot([], [], "g-", label="目标水管角")
+        (self.pipe_measured_line,) = self.pipe_ax.plot([], [], "m-", label="实测水管角")
+        self.position_ax.set_ylabel("位置 (mm)")
+        self.term_ax.set_ylabel("位置项 (°)")
+        self.pipe_ax.set_ylabel("水管角 (°)")
+        self.pipe_ax.set_xlabel("距当前时间 (s)")
+        for axis in (self.position_ax, self.term_ax, self.pipe_ax):
+            axis.grid(True, alpha=0.3)
+            axis.legend(loc="upper left", fontsize=8, ncol=3)
+        self.figure.tight_layout()
+        self.canvas = FigureCanvasTkAgg(self.figure, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+
+    def _ready(self):
+        if self.app.link is None:
+            self.app.log("未连接设备，无法进行PID调参。", error=True)
+            return False
+        if self.app.cal_mode_var.get():
+            self.app.log("PID调参要求关闭标定模式(CAL)。", error=True)
+            return False
+        return True
+
+    def fill_defaults(self):
+        defaults = ("0.0120", "0.0080", "0.0060", "0.600", "0.0500")
+        for key, value in zip(("kp", "ki", "kd", "pipe_kp", "pipe_kd"), defaults):
+            self.gain_vars[key].set(value)
+
+    def _set_gain_values(self, values):
+        self.current_gains = tuple(values)
+        formats = ("{:.4f}", "{:.4f}", "{:.4f}", "{:.3f}", "{:.4f}")
+        for key, value, formatter in zip(
+                ("kp", "ki", "kd", "pipe_kp", "pipe_kd"), values, formats):
+            self.gain_vars[key].set(formatter.format(value))
+
+    def read_gains(self):
+        if not self._ready():
+            return
+        response = self.app.send(CMD_PID, expect=RESP_PID)
+        if response is None:
+            return
+        try:
+            values = parse_pid(response)
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        self._set_gain_values(values)
+        self.app.log(
+            "已读取PID：位置 Kp/Ki/Kd="
+            f"{values[0]:.4f}/{values[1]:.4f}/{values[2]:.4f}，"
+            f"姿态 Kp/Kd={values[3]:.3f}/{values[4]:.4f}"
+        )
+
+    def write_gains(self):
+        if not self._ready():
+            return
+        try:
+            values = tuple(float(self.gain_vars[key].get()) for key in
+                           ("kp", "ki", "kd", "pipe_kp", "pipe_kd"))
+        except ValueError:
+            self.app.log("PID参数必须是有效数字。", error=True)
+            return
+        command = CMD_PID + " " + " ".join(f"{value:.6f}" for value in values)
+        response = self.app.send(command, expect=RESP_PID)
+        if response is None:
+            return
+        try:
+            accepted = parse_pid(response)
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        self._set_gain_values(accepted)
+        self.app.log("PID参数已写入RAM；复位后恢复固件默认值。")
+
+    def set_target(self):
+        if not self._ready():
+            return
+        try:
+            target = float(self.target_var.get())
+        except ValueError:
+            self.app.log("目标位置输入无效。", error=True)
+            return
+        response = self.app.send(f"{CMD_TARGET} {target:.3f}", expect=RESP_OK)
+        if response is not None:
+            self.app.log(f"钢球目标位置已设置为 {target:+.1f} mm")
+
+    def set_balance(self, enabled):
+        if not self._ready():
+            return
+        response = self.app.send(
+            f"{CMD_BALANCE} {1 if enabled else 0}", expect=RESP_OK
+        )
+        if response is not None:
+            self.app.log("钢球平衡已启用" if enabled else "钢球平衡已禁用并回水平")
+            if enabled:
+                # 固件启用闭环时先回到0 mm，再应用页面中的试验目标。
+                self.set_target()
+
+    def set_stream(self, enabled):
+        if self.app.link is None:
+            return False
+        response = self.app.send(
+            f"{CMD_TUNE_STREAM} {1 if enabled else 0}", expect=RESP_OK
+        )
+        return response is not None
+
+    def toggle_stream(self):
+        enabled = self.stream_var.get()
+        if enabled and not self._ready():
+            self.stream_var.set(False)
+            return
+        if enabled:
+            self.app.base_tab.stream_var.set(False)
+        if self.set_stream(enabled):
+            self.app.log(f"PID遥测 {'开启' if enabled else '关闭'}")
+        else:
+            self.stream_var.set(False)
+
+    def on_stream_line(self, line):
+        if not line.startswith("T "):
+            return
+        try:
+            sample = parse_tune_stream(line)
+        except ValueError:
+            return
+        host_time = time.monotonic()
+        self.buffer.append((host_time, sample))
+        if self.recording:
+            recorded = dict(sample)
+            recorded["host_time_s"] = host_time - self.record_start_host
+            recorded["position_kp"] = self.current_gains[0]
+            recorded["position_ki"] = self.current_gains[1]
+            recorded["position_kd"] = self.current_gains[2]
+            recorded["pipe_kp"] = self.current_gains[3]
+            recorded["pipe_kd_s"] = self.current_gains[4]
+            self.record_buffer.append(recorded)
+            self.record_status_var.set(
+                f"录制中 {recorded['host_time_s']:.1f}s，{len(self.record_buffer)}帧"
+            )
+
+        flags = sample["flags"]
+        phase = sample["phase"]
+        phase_text = self.PHASE_NAMES[phase] if 0 <= phase < len(self.PHASE_NAMES) else str(phase)
+        self.state_var.set(
+            f"闭环={'ON' if flags & 0x01 else 'OFF'}  "
+            f"跟踪={'有效' if flags & 0x02 else '无效'}  "
+            f"姿态={'有效' if flags & 0x20 else '无效'}  阶段={phase_text}  "
+            f"积分={'ON' if flags & 0x08 else 'OFF'}  制动={'ON' if flags & 0x10 else 'OFF'}"
+        )
+        self.position_var.set(
+            f"目标 {sample['target_mm']:+.2f} mm  位置 {sample['position_mm']:+.2f} mm  "
+            f"误差 {sample['error_mm']:+.2f} mm  速度 {sample['velocity_mm_s']:+.2f} mm/s"
+        )
+        self.term_var.set(
+            f"位置项 P/I/D = {sample['p_term_deg']:+.4f} / "
+            f"{sample['i_term_deg']:+.4f} / {sample['d_term_deg']:+.4f}°"
+        )
+        self.pipe_var.set(
+            f"水管目标/实测 = {sample['desired_pipe_pitch_deg']:+.3f} / "
+            f"{sample['measured_pipe_pitch_deg']:+.3f}°，角速度 "
+            f"{sample['measured_pipe_rate_dps']:+.3f}°/s，PWM {sample['servo_pwm_us']} us"
+        )
+
+    def start_recording(self):
+        if not self._ready():
+            return
+        response = self.app.send(CMD_PID, expect=RESP_PID)
+        if response is None:
+            return
+        try:
+            self.record_gains = parse_pid(response)
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        self._set_gain_values(self.record_gains)
+        if not self.stream_var.get():
+            if not self.set_stream(True):
+                return
+            self.stream_var.set(True)
+            self.app.base_tab.stream_var.set(False)
+        self.recording = True
+        self.record_buffer = []
+        self.record_start_host = time.monotonic()
+        self.record_start_btn.config(state="disabled")
+        self.record_stop_btn.config(state="normal")
+        self.record_status_var.set("录制中 0.0s，0帧")
+        self.app.log("PID调参遥测录制开始（20 Hz）。")
+
+    def stop_recording(self):
+        if not self.recording:
+            return
+        self.recording = False
+        self.record_start_btn.config(state="normal")
+        self.record_stop_btn.config(state="disabled")
+        if not self.record_buffer:
+            self.record_status_var.set("无数据，未保存")
+            self.app.log("PID遥测录制结束，但没有收到数据。", error=True)
+            return
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = os.path.join(self.app.data_dir, f"pid_tune_{stamp}.csv")
+        summary_path = os.path.join(self.app.data_dir, f"pid_tune_{stamp}.json")
+        with open(csv_path, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=self.CSV_FIELDS)
+            writer.writeheader()
+            for sample in self.record_buffer:
+                writer.writerow({key: sample[key] for key in self.CSV_FIELDS})
+
+        errors = [sample["error_mm"] for sample in self.record_buffer]
+        velocities = [sample["velocity_mm_s"] for sample in self.record_buffer]
+        rates = [sample["measured_pipe_rate_dps"] for sample in self.record_buffer]
+        pipe_errors = [
+            sample["desired_pipe_pitch_deg"] - sample["measured_pipe_pitch_deg"]
+            for sample in self.record_buffer
+        ]
+        pwms = [sample["servo_pwm_us"] for sample in self.record_buffer]
+        zero_crossings = 0
+        previous_sign = 0
+        for error in errors:
+            sign = 1 if error > 1.0 else (-1 if error < -1.0 else 0)
+            if sign and previous_sign and sign != previous_sign:
+                zero_crossings += 1
+            if sign:
+                previous_sign = sign
+
+        def rms(values):
+            return (sum(value * value for value in values) / len(values)) ** 0.5
+
+        metrics = {
+            "duration_s": self.record_buffer[-1]["host_time_s"],
+            "sample_count": len(self.record_buffer),
+            "position_error_rms_mm": rms(errors),
+            "position_error_max_abs_mm": max(abs(value) for value in errors),
+            "velocity_rms_mm_s": rms(velocities),
+            "pipe_tracking_rms_deg": rms(pipe_errors),
+            "pipe_rate_rms_dps": rms(rates),
+            "zero_crossing_count": zero_crossings,
+            "integral_active_ratio": sum(
+                1 for sample in self.record_buffer if sample["flags"] & 0x08
+            ) / len(self.record_buffer),
+            "braking_active_ratio": sum(
+                1 for sample in self.record_buffer if sample["flags"] & 0x10
+            ) / len(self.record_buffer),
+            "pwm_min_us": min(pwms),
+            "pwm_max_us": max(pwms),
+        }
+        suggestions = self._build_tuning_suggestions(metrics)
+        summary = {
+            "created": datetime.now().isoformat(timespec="seconds"),
+            "csv_file": os.path.basename(csv_path),
+            "protocol": "pclink-1.2",
+            "start_gains": {
+                "position_kp": self.record_gains[0],
+                "position_ki": self.record_gains[1],
+                "position_kd": self.record_gains[2],
+                "pipe_kp": self.record_gains[3],
+                "pipe_kd_s": self.record_gains[4],
+            },
+            "metrics": metrics,
+            "preliminary_suggestions": suggestions,
+        }
+        with open(summary_path, "w", encoding="utf-8") as file:
+            json.dump(summary, file, ensure_ascii=False, indent=2)
+
+        self.record_status_var.set(f"已保存 {len(self.record_buffer)}帧")
+        self.app.log(
+            f"PID遥测已保存: {csv_path}；摘要: {summary_path}；"
+            f"误差RMS={metrics['position_error_rms_mm']:.2f} mm，"
+            f"最大误差={metrics['position_error_max_abs_mm']:.2f} mm"
+        )
+        for suggestion in suggestions:
+            self.app.log(f"初步调参提示：{suggestion}")
+
+    @staticmethod
+    def _build_tuning_suggestions(metrics):
+        suggestions = []
+        if metrics["sample_count"] < 100:
+            suggestions.append("录制不足5秒，建议每组参数至少记录10～15秒后再判断。")
+        if (metrics["zero_crossing_count"] >= 6 and
+                metrics["position_error_rms_mm"] > 4.0):
+            suggestions.append("目标附近往返次数较多：优先降低位置Kp或Ki，必要时小幅提高位置Kd。")
+        if (metrics["position_error_rms_mm"] > 10.0 and
+                metrics["velocity_rms_mm_s"] < 5.0):
+            suggestions.append("位置误差较大但球速很低：检查静摩擦，可在10～20 mm积分区内小幅提高Ki。")
+        if (metrics["pipe_tracking_rms_deg"] > 0.40 and
+                metrics["pipe_rate_rms_dps"] > 2.0):
+            suggestions.append("水管跟随误差和角速度都偏大：降低姿态Kp，或小幅提高姿态Kd增加阻尼。")
+        elif (metrics["pipe_tracking_rms_deg"] > 0.40 and
+              metrics["pipe_rate_rms_dps"] <= 2.0):
+            suggestions.append("水管跟随偏慢但摆速不高：可小幅提高姿态Kp。")
+        if metrics["pwm_min_us"] <= 505 or metrics["pwm_max_us"] >= 1595:
+            suggestions.append("PWM接近安全端点：先降低外环输出或增益，检查机械行程后再继续。")
+        if not suggestions:
+            suggestions.append("未发现明显异常；结合曲线逐项小步调整，并保留本组数据作对照。")
+        return suggestions
+
+    @staticmethod
+    def _set_axis_range(axis, value_groups, margin):
+        values = [value for group in value_groups for value in group]
+        if not values:
+            return
+        minimum = min(values)
+        maximum = max(values)
+        if maximum - minimum < margin:
+            center = 0.5 * (maximum + minimum)
+            minimum = center - margin
+            maximum = center + margin
+        else:
+            minimum -= margin
+            maximum += margin
+        axis.set_ylim(minimum, maximum)
+
+    def refresh_realtime(self):
+        if not self.buffer:
+            return
+        now = time.monotonic()
+        cutoff = now - ROLLING_WINDOW_S
+        while self.buffer and self.buffer[0][0] < cutoff:
+            self.buffer.popleft()
+        if now - self._last_draw < 0.4:
+            return
+        self._last_draw = now
+        xs = [host_time - now for host_time, _sample in self.buffer]
+        targets = [sample["target_mm"] for _host_time, sample in self.buffer]
+        positions = [sample["position_mm"] for _host_time, sample in self.buffer]
+        errors = [sample["error_mm"] for _host_time, sample in self.buffer]
+        p_terms = [sample["p_term_deg"] for _host_time, sample in self.buffer]
+        i_terms = [sample["i_term_deg"] for _host_time, sample in self.buffer]
+        d_terms = [sample["d_term_deg"] for _host_time, sample in self.buffer]
+        pipe_targets = [sample["desired_pipe_pitch_deg"] for _host_time, sample in self.buffer]
+        pipe_measured = [sample["measured_pipe_pitch_deg"] for _host_time, sample in self.buffer]
+
+        for line, values in (
+            (self.target_line, targets), (self.position_line, positions),
+            (self.error_line, errors), (self.p_line, p_terms),
+            (self.i_line, i_terms), (self.d_line, d_terms),
+            (self.pipe_target_line, pipe_targets),
+            (self.pipe_measured_line, pipe_measured),
+        ):
+            line.set_data(xs, values)
+        for axis in (self.position_ax, self.term_ax, self.pipe_ax):
+            axis.set_xlim(-ROLLING_WINDOW_S, 0.0)
+        self._set_axis_range(self.position_ax, (targets, positions, errors), 2.0)
+        self._set_axis_range(self.term_ax, (p_terms, i_terms, d_terms), 0.05)
+        self._set_axis_range(self.pipe_ax, (pipe_targets, pipe_measured), 0.2)
+        self.canvas.draw_idle()
 
 
 class CalibrationTab:

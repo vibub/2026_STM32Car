@@ -11,24 +11,28 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HOST_PROTOCOL_LINE_BUFFER_SIZE  80U   /* 单行命令最大长度。 */
-#define HOST_PROTOCOL_REPLY_BUFFER_SIZE 96U   /* 应答行缓冲大小。 */
+#define HOST_PROTOCOL_LINE_BUFFER_SIZE   80U  /* 单行命令最大长度。 */
+#define HOST_PROTOCOL_REPLY_BUFFER_SIZE 192U  /* PID遥测应答行缓冲大小。 */
 #define HOST_PROTOCOL_NUMBER_BUFFER_SIZE 16U  /* 单个浮点数字符串缓冲大小。 */
-#define HOST_PROTOCOL_VERSION           "pclink-1.1"
+#define HOST_PROTOCOL_VERSION           "pclink-1.2"
 #define HOST_PROTOCOL_PWM_MIN_US        SERVO_DRIVER_MIN_PULSE_US /* 上位机允许的安全最小PWM。 */
 #define HOST_PROTOCOL_PWM_MAX_US        SERVO_DRIVER_MAX_PULSE_US /* 上位机允许的安全最大PWM。 */
 #define HOST_PROTOCOL_SAMPLE_COUNT_MAX  200U
 #define HOST_PROTOCOL_SAMPLE_DT_MIN_MS  10U
 #define HOST_PROTOCOL_SAMPLE_DT_MAX_MS  100U
-#define HOST_PROTOCOL_STREAM_PERIOD_MS  100U
-#define HOST_PROTOCOL_RAD_TO_DEG        57.2957795f
+#define HOST_PROTOCOL_STREAM_PERIOD_MS      100U /* 标定原始IMU流周期。 */
+#define HOST_PROTOCOL_TUNE_STREAM_PERIOD_MS  50U /* PID调参遥测周期，20 Hz。 */
+#define HOST_PROTOCOL_TARGET_LIMIT_MM       100.0f /* 上位机可设置的目标位置范围。 */
+#define HOST_PROTOCOL_RAD_TO_DEG             57.2957795f
 
 typedef struct {
     char data[HOST_PROTOCOL_LINE_BUFFER_SIZE];
     uint8_t length;
     uint8_t discarding;
     uint8_t stream_enabled;
+    uint8_t tune_stream_enabled;
     uint32_t last_stream_ms;
+    uint32_t last_tune_stream_ms;
     uint32_t last_rx_overflow;
     uint32_t last_rx_error;
     uint16_t last_servo_pwm_us;
@@ -166,6 +170,60 @@ static uint8_t HostCalib_ParseInt(const char *text, int32_t *value)
     return 1U;
 }
 
+static uint8_t HostCalib_ParseFloatList(const char *text,
+                                        float *values,
+                                        uint8_t expected_count)
+{
+    const char *cursor = text;
+    uint8_t count = 0U;
+
+    if ((text == 0) || (values == 0) || (expected_count == 0U)) {
+        return 0U;
+    }
+    while (count < expected_count) {
+        float value = 0.0f;
+        float fraction_scale = 0.1f;
+        uint8_t negative = 0U;
+        uint8_t digits = 0U;
+
+        while ((*cursor == ' ') || (*cursor == '\t')) {
+            cursor++;
+        }
+        if (*cursor == '-') {
+            negative = 1U;
+            cursor++;
+        } else if (*cursor == '+') {
+            cursor++;
+        }
+        while ((*cursor >= '0') && (*cursor <= '9')) {
+            value = value * 10.0f + (float) (*cursor - '0');
+            digits++;
+            cursor++;
+        }
+        if (*cursor == '.') {
+            cursor++;
+            while ((*cursor >= '0') && (*cursor <= '9')) {
+                value += (float) (*cursor - '0') * fraction_scale;
+                fraction_scale *= 0.1f;
+                digits++;
+                cursor++;
+            }
+        }
+        if (digits == 0U) {
+            return 0U;
+        }
+        values[count] = (negative != 0U) ? -value : value;
+        count++;
+        if ((*cursor != '\0') && (*cursor != ' ') && (*cursor != '\t')) {
+            return 0U;
+        }
+    }
+    while ((*cursor == ' ') || (*cursor == '\t')) {
+        cursor++;
+    }
+    return (*cursor == '\0') ? 1U : 0U;
+}
+
 static uint8_t HostCalib_ParseTwoPositiveInts(const char *text,
                                               uint32_t *first,
                                               uint32_t *second)
@@ -260,6 +318,141 @@ static void HostCalib_SendLine(const char *line)
     HostLinkUart_SendData((const uint8_t *) "\r\n", 2U);
 }
 
+static void HostCalib_AppendFloatField(char *reply,
+                                      uint16_t reply_size,
+                                      float value,
+                                      uint8_t decimals)
+{
+    char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
+    uint16_t used;
+
+    HostCalib_FormatFloat(number_text, sizeof(number_text), value, decimals);
+    used = (uint16_t) strlen(reply);
+    if (used < reply_size) {
+        (void) snprintf(reply + used,
+                        (size_t) (reply_size - used),
+                        " %s",
+                        number_text);
+    }
+}
+
+static void HostCalib_SendPidGains(void)
+{
+    float position_kp;
+    float position_ki;
+    float position_kd;
+    float pipe_kp;
+    float pipe_kd_s;
+    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
+
+    App_GetBallPidGains(&position_kp,
+                        &position_ki,
+                        &position_kd,
+                        &pipe_kp,
+                        &pipe_kd_s);
+    (void) strcpy(reply, "PID");
+    HostCalib_AppendFloatField(reply, sizeof(reply), position_kp, 4U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), position_ki, 4U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), position_kd, 4U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), pipe_kp, 3U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), pipe_kd_s, 4U);
+    HostCalib_SendLine(reply);
+}
+
+static uint32_t HostCalib_BuildTuneFlags(const AppBallPidSnapshot *snapshot)
+{
+    uint32_t flags = 0U;
+
+    if (snapshot->enabled != 0U) {
+        flags |= (1UL << 0);
+    }
+    if (snapshot->tracking_valid != 0U) {
+        flags |= (1UL << 1);
+    }
+    if (snapshot->timed_out != 0U) {
+        flags |= (1UL << 2);
+    }
+    if (snapshot->integral_active != 0U) {
+        flags |= (1UL << 3);
+    }
+    if (snapshot->braking_active != 0U) {
+        flags |= (1UL << 4);
+    }
+    if (snapshot->attitude_valid != 0U) {
+        flags |= (1UL << 5);
+    }
+    if (snapshot->imu_fault != 0U) {
+        flags |= (1UL << 6);
+    }
+    if (snapshot->mapping_fault != 0U) {
+        flags |= (1UL << 7);
+    }
+    return flags;
+}
+
+static void HostCalib_SendRawStream(uint32_t now_ms)
+{
+    char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
+    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
+
+    HostCalib_FormatFloat(number_text, sizeof(number_text),
+                          App_GetPipeRawAccelPitchDeg(), 4U);
+    (void) snprintf(reply, sizeof(reply), "S %lu %s",
+                    (unsigned long) now_ms, number_text);
+    HostCalib_FormatFloat(number_text, sizeof(number_text),
+                          App_GetPipeRawPitchRateDps(), 3U);
+    (void) snprintf(reply + strlen(reply),
+                    sizeof(reply) - strlen(reply), " %s",
+                    number_text);
+    HostCalib_SendLine(reply);
+}
+
+static void HostCalib_SendTuneStream(uint32_t now_ms)
+{
+    AppBallPidSnapshot snapshot;
+    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
+
+    App_GetBallPidSnapshot(&snapshot);
+    (void) snprintf(reply,
+                    sizeof(reply),
+                    "T %lu %lu %u",
+                    (unsigned long) now_ms,
+                    (unsigned long) HostCalib_BuildTuneFlags(&snapshot),
+                    (unsigned) snapshot.trajectory_phase);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.target_mm, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.position_mm, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.velocity_mm_s, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.error_mm, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.p_term_deg, 4U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.i_term_deg, 4U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), snapshot.d_term_deg, 4U);
+    HostCalib_AppendFloatField(reply,
+                              sizeof(reply),
+                              snapshot.desired_pipe_pitch_deg,
+                              3U);
+    HostCalib_AppendFloatField(reply,
+                              sizeof(reply),
+                              snapshot.measured_pipe_pitch_deg,
+                              3U);
+    HostCalib_AppendFloatField(reply,
+                              sizeof(reply),
+                              snapshot.measured_pipe_rate_dps,
+                              3U);
+    HostCalib_AppendFloatField(reply,
+                              sizeof(reply),
+                              snapshot.pipe_p_term_deg,
+                              3U);
+    HostCalib_AppendFloatField(reply,
+                              sizeof(reply),
+                              snapshot.pipe_d_term_deg,
+                              3U);
+    (void) snprintf(reply + strlen(reply),
+                    sizeof(reply) - strlen(reply),
+                    " %lu",
+                    (unsigned long) snapshot.servo_pwm_us);
+    HostCalib_SendLine(reply);
+}
+
 /* SAMPLE 会阻塞主循环，期间 ImuHeading_Poll 得不到执行。
  * 这里在循环内直接轮询 IMU 并现场计算原始加速度俯仰角，
  * 保证每个样本都是新的真实读数（否则 100 个样本全是同一个冻结值）。 */
@@ -340,9 +533,10 @@ static void HostCalib_ProcessSample(const char *argument)
 static void HostCalib_ProcessLine(const char *line)
 {
     char command[16];
-    char argument[32];
-    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
-    char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
+    char argument[64];
+    static char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
+    static char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
+    float values[5];
     int32_t parsed;
     uint8_t enabled;
     float pitch;
@@ -389,8 +583,108 @@ static void HostCalib_ProcessLine(const char *line)
         if (App_SetHostCalibrationEnabled(enabled) == 0U) {
             HostCalib_SendLine("ERR busy");
         } else {
+            if (enabled != 0U) {
+                s_protocol.tune_stream_enabled = 0U;
+            }
             HostCalib_SendLine("OK");
         }
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(command, "PID") == 0) {
+        if (App_GetHostCalibrationEnabled() != 0U) {
+            HostCalib_SendLine("ERR busy");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if (argument[0] != '\0') {
+            if (App_GetCurrentMode() != APP_MODE_STOP) {
+                HostCalib_SendLine("ERR busy");
+                g_host_calibration_invalid_command_count++;
+                return;
+            }
+            if (HostCalib_ParseFloatList(argument, values, 5U) == 0U) {
+                HostCalib_SendLine("ERR parse");
+                g_host_calibration_invalid_command_count++;
+                return;
+            }
+            if (App_SetBallPidGains(values[0],
+                                    values[1],
+                                    values[2],
+                                    values[3],
+                                    values[4]) == 0U) {
+                HostCalib_SendLine("ERR range");
+                g_host_calibration_invalid_command_count++;
+                return;
+            }
+        }
+        HostCalib_SendPidGains();
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(command, "BALANCE") == 0) {
+        if ((App_GetHostCalibrationEnabled() != 0U) ||
+            (App_GetCurrentMode() != APP_MODE_STOP)) {
+            HostCalib_SendLine("ERR busy");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if ((HostCalib_ParseInt(argument, &parsed) == 0U) ||
+            ((parsed != 0) && (parsed != 1))) {
+            HostCalib_SendLine("ERR range");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if (App_SetBallBalanceEnabled((uint8_t) parsed) == 0U) {
+            HostCalib_SendLine("ERR state");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_SendLine("OK");
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(command, "TARGET") == 0) {
+        if ((App_GetHostCalibrationEnabled() != 0U) ||
+            (App_GetCurrentMode() != APP_MODE_STOP)) {
+            HostCalib_SendLine("ERR busy");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if ((HostCalib_ParseFloatList(argument, values, 1U) == 0U) ||
+            (values[0] < -HOST_PROTOCOL_TARGET_LIMIT_MM) ||
+            (values[0] > HOST_PROTOCOL_TARGET_LIMIT_MM)) {
+            HostCalib_SendLine("ERR range");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        App_SetBallBalanceTargetMm(values[0]);
+        HostCalib_SendLine("OK");
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(command, "TSTREAM") == 0) {
+        if (App_GetHostCalibrationEnabled() != 0U) {
+            HostCalib_SendLine("ERR busy");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if ((HostCalib_ParseInt(argument, &parsed) == 0U) ||
+            ((parsed != 0) && (parsed != 1))) {
+            HostCalib_SendLine("ERR range");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        s_protocol.tune_stream_enabled = (uint8_t) parsed;
+        s_protocol.last_tune_stream_ms = Board_TimeMs();
+        if (parsed != 0) {
+            s_protocol.stream_enabled = 0U;
+        }
+        HostCalib_SendLine("OK");
         g_host_calibration_valid_command_count++;
         return;
     }
@@ -456,6 +750,9 @@ static void HostCalib_ProcessLine(const char *line)
         }
         s_protocol.stream_enabled = (uint8_t) parsed;
         s_protocol.last_stream_ms = Board_TimeMs();
+        if (parsed != 0) {
+            s_protocol.tune_stream_enabled = 0U;
+        }
         HostCalib_SendLine("OK");
         g_host_calibration_valid_command_count++;
         return;
@@ -508,6 +805,7 @@ void HostCalibrationProtocol_Init(void)
     memset(&s_protocol, 0, sizeof(s_protocol));
     s_protocol.last_servo_pwm_us = SERVO_DRIVER_CENTER_PULSE_US;
     s_protocol.last_stream_ms = Board_TimeMs();
+    s_protocol.last_tune_stream_ms = s_protocol.last_stream_ms;
     s_protocol.last_rx_overflow = HostLinkUart_GetOverflowCount();
     s_protocol.last_rx_error = HostLinkUart_GetErrorCount();
     g_host_calibration_enabled = App_GetHostCalibrationEnabled();
@@ -525,8 +823,6 @@ void HostCalibrationProtocol_Task(void)
     uint32_t overflow_count;
     uint32_t error_count;
     uint32_t now_ms;
-    char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
-    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
 
     overflow_count = HostLinkUart_GetOverflowCount();
     error_count = HostLinkUart_GetErrorCount();
@@ -548,16 +844,18 @@ void HostCalibrationProtocol_Task(void)
         if ((uint32_t) (now_ms - s_protocol.last_stream_ms) >=
             HOST_PROTOCOL_STREAM_PERIOD_MS) {
             s_protocol.last_stream_ms = now_ms;
-            HostCalib_FormatFloat(number_text, sizeof(number_text),
-                                  App_GetPipeRawAccelPitchDeg(), 4U);
-            (void) snprintf(reply, sizeof(reply), "S %lu %s",
-                            (unsigned long) now_ms, number_text);
-            HostCalib_FormatFloat(number_text, sizeof(number_text),
-                                  App_GetPipeRawPitchRateDps(), 3U);
-            (void) snprintf(reply + strlen(reply),
-                            sizeof(reply) - strlen(reply), " %s",
-                            number_text);
-            HostCalib_SendLine(reply);
+            HostCalib_SendRawStream(now_ms);
+            g_host_calibration_stream_count++;
+        }
+    }
+
+    if ((s_protocol.tune_stream_enabled != 0U) &&
+        (App_GetHostCalibrationEnabled() == 0U)) {
+        now_ms = Board_TimeMs();
+        if ((uint32_t) (now_ms - s_protocol.last_tune_stream_ms) >=
+            HOST_PROTOCOL_TUNE_STREAM_PERIOD_MS) {
+            s_protocol.last_tune_stream_ms = now_ms;
+            HostCalib_SendTuneStream(now_ms);
             g_host_calibration_stream_count++;
         }
     }
