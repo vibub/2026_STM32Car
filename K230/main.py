@@ -40,7 +40,8 @@ except ImportError:
 
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
-DISPLAY_SIZE = (800, 480)          # LCD 与 OSD 分辨率。
+DISPLAY_SIZE = (800, 480)          # IDE 虚拟帧缓冲与 OSD 分辨率。
+DISPLAY_MODE = "ide"              # 暂不连接 LCD，仅输出到 CanMV IDE。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
 # 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
@@ -59,9 +60,9 @@ STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回�
 K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
 K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 80                # OSD refresh at up to 12.5 Hz.
-CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
-CALIBRATION_HOLD_UPDATES = 250      # Keep the last calibration for about 20 seconds.
+OSD_INTERVAL_MS = 200               # OSD 最多以 5 Hz 刷新。
+CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
+CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
 OSD_TEXT_ENABLE = True             # Hide large debug text in performance mode.
@@ -344,6 +345,7 @@ def run():
             cv_size=CV_SIZE,
             ai_size=AI_SIZE,
             display_size=DISPLAY_SIZE,
+            display_mode=DISPLAY_MODE,
             to_ide=True,
         )
         pipeline.create()

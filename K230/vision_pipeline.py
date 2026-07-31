@@ -19,6 +19,7 @@ class VisionPipeline:
         display_size=(800, 480),
         hmirror=False,
         vflip=False,
+        display_mode="lcd",
         to_ide=True,
     ):
         # 传统视觉使用低分辨率 RGB565，保证红线检测可以稳定高频运行。
@@ -39,8 +40,12 @@ class VisionPipeline:
         # 同时启用水平镜像和垂直翻转，可让显示、传统视觉和 AI 三个通道方向一致。
         self.hmirror = bool(hmirror)
         self.vflip = bool(vflip)
-        # 比赛模式可关闭 IDE 视频镜像，只保留 LCD，降低 USB/显示复制带宽。
-        self.to_ide = bool(to_ide)
+        if display_mode not in ("lcd", "ide"):
+            raise ValueError("display_mode must be 'lcd' or 'ide'")
+        # ide 模式使用 Display.VIRT，不初始化任何物理 LCD 接口。
+        self.display_mode = display_mode
+        # IDE 虚拟显示必须启用帧缓冲输出；LCD 模式则允许关闭 IDE 镜像。
+        self.to_ide = True if display_mode == "ide" else bool(to_ide)
 
         self.sensor = None
         self.osd_img = None
@@ -68,7 +73,7 @@ class VisionPipeline:
             )
         )
 
-        # 通道0直接绑定LCD视频层。
+        # 通道0直接绑定物理 LCD 或 IDE 虚拟显示的视频层。
         self.sensor.set_framesize(
             width=self.display_size[0],
             height=self.display_size[1],
@@ -115,6 +120,21 @@ class VisionPipeline:
             image.ARGB8888
         )
 
+        display_type = (
+            Display.VIRT
+            if self.display_mode == "ide"
+            else Display.ST7701
+        )
+        print("S20.4: 初始化Display，模式={}".format(self.display_mode))
+        Display.init(
+            display_type,
+            width=self.display_size[0],
+            height=self.display_size[1],
+            to_ide=self.to_ide
+        )
+        self._display_initialized = True
+
+        # Display 必须先初始化，再把摄像头预览通道绑定到底层视频层。
         bind_info = self.sensor.bind_info(
             x=0,
             y=0,
@@ -124,15 +144,6 @@ class VisionPipeline:
             **bind_info,
             layer=Display.LAYER_VIDEO1
         )
-
-        print("S20.4: 初始化Display")
-        Display.init(
-            Display.ST7701,
-            width=self.display_size[0],
-            height=self.display_size[1],
-            to_ide=self.to_ide
-        )
-        self._display_initialized = True
         print("S20.5: Display初始化完成")
 
         print("S20.6: 初始化MediaManager")
