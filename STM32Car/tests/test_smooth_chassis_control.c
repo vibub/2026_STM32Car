@@ -1,0 +1,209 @@
+#include "chassis_accel_estimator.h"
+#include "chassis_motion_profile.h"
+#include "infrared_line_control.h"
+
+#include <assert.h>
+#include <stdio.h>
+
+#define TEST_EPSILON 0.0001f /* 浮点测试允许的绝对误差。 */
+
+static float test_abs(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static void assert_near(float actual, float expected, float tolerance)
+{
+    assert(test_abs(actual - expected) <= tolerance);
+}
+
+static ChassisMotionConfig build_motion_config(float completion_distance_cm)
+{
+    ChassisMotionConfig config;
+
+    config.target_speed_cm_s = 40.0f;          /* 测试使用的巡航目标速度。 */
+    config.maximum_accel_cm_s2 = 25.0f;        /* 测试使用的最大正向加速度。 */
+    config.maximum_decel_cm_s2 = 30.0f;        /* 测试使用的最大减速度。 */
+    config.maximum_jerk_cm_s3 = 100.0f;        /* 测试使用的最大加速度变化率。 */
+    config.completion_distance_cm = completion_distance_cm;
+    return config;
+}
+
+static void test_motion_profile_smooth_start(void)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionOutput output;
+    ChassisMotionConfig config = build_motion_config(0.0f);
+    float previous_speed = 0.0f;
+    float previous_accel = 0.0f;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    ChassisMotionProfile_Init(&profile);
+    assert(profile.state == CHASSIS_MOTION_STATE_IDLE);
+    assert(ChassisMotionProfile_Start(&profile, now_ms, 0.0f,
+                                      &config) != 0U);
+
+    for (index = 0U; index < 250U; index++) {
+        now_ms += 20U;
+        ChassisMotionProfile_Update(&profile, now_ms, 0.0f, &output);
+        assert(output.command_speed_cm_s + TEST_EPSILON >= previous_speed);
+        assert(output.command_speed_cm_s <= config.target_speed_cm_s +
+               TEST_EPSILON);
+        assert(output.command_accel_cm_s2 <=
+               config.maximum_accel_cm_s2 + TEST_EPSILON);
+        assert(test_abs(output.command_accel_cm_s2 - previous_accel) <=
+               config.maximum_jerk_cm_s3 * 0.020f + TEST_EPSILON);
+        previous_speed = output.command_speed_cm_s;
+        previous_accel = output.command_accel_cm_s2;
+    }
+
+    assert_near(output.command_speed_cm_s, 40.0f, 0.01f);
+    assert(output.state == CHASSIS_MOTION_STATE_CRUISING);
+}
+
+static void test_motion_profile_target_reduction(void)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionOutput output;
+    ChassisMotionConfig config = build_motion_config(0.0f);
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    assert(ChassisMotionProfile_Start(&profile, now_ms, 40.0f,
+                                      &config) != 0U);
+    ChassisMotionProfile_SetTargetSpeed(&profile, 20.0f);
+    for (index = 0U; index < 200U; index++) {
+        now_ms += 20U;
+        ChassisMotionProfile_Update(&profile, now_ms, 0.0f, &output);
+        assert(output.command_speed_cm_s >= 0.0f);
+        assert(output.command_accel_cm_s2 >=
+               -config.maximum_decel_cm_s2 - TEST_EPSILON);
+    }
+
+    assert_near(output.command_speed_cm_s, 20.0f, 0.01f);
+    assert(output.state == CHASSIS_MOTION_STATE_CRUISING);
+}
+
+static void test_motion_profile_pass_event(void)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionOutput output;
+    ChassisMotionConfig config = build_motion_config(150.0f);
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    assert(ChassisMotionProfile_Start(&profile, now_ms, 0.0f,
+                                      &config) != 0U);
+    for (index = 0U; index < 149U; index++) {
+        now_ms += 20U;
+        ChassisMotionProfile_Update(&profile, now_ms, 1.0f, &output);
+        assert(output.distance_reached == 0U);
+    }
+
+    now_ms += 20U;
+    ChassisMotionProfile_Update(&profile, now_ms, 1.0f, &output);
+    assert(output.distance_reached != 0U);
+    assert(output.state == CHASSIS_MOTION_STATE_PASSED);
+    assert_near(output.travelled_distance_cm, 150.0f, 0.001f);
+
+    now_ms += 20U;
+    ChassisMotionProfile_Update(&profile, now_ms, 2.0f, &output);
+    assert(output.state == CHASSIS_MOTION_STATE_PASSED);
+    assert(output.command_speed_cm_s > 0.0f);
+}
+
+static void test_motion_profile_rejects_invalid_config(void)
+{
+    ChassisMotionProfile profile;
+    ChassisMotionConfig config = build_motion_config(0.0f);
+
+    config.maximum_jerk_cm_s3 = 0.0f;
+    assert(ChassisMotionProfile_Start(&profile, 0U, 0.0f,
+                                      &config) == 0U);
+}
+
+static void test_chassis_accel_estimator(void)
+{
+    ChassisAccelEstimator estimator;
+    ChassisAccelOutput output;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    ChassisAccelEstimator_Init(&estimator);
+    ChassisAccelEstimator_Update(&estimator, now_ms, 0.0f, 0.0f, &output);
+    assert(output.valid == 0U);
+
+    now_ms += 20U;
+    ChassisAccelEstimator_Update(&estimator, now_ms, 10.0f, 10.0f, &output);
+    assert(output.valid != 0U);
+    assert(output.filtered_speed_cm_s > 0.0f);
+    assert(output.accel_cm_s2 > 0.0f);
+    assert(output.raw_accel_cm_s2 <= 250.0f + TEST_EPSILON);
+
+    for (index = 0U; index < 100U; index++) {
+        now_ms += 20U;
+        ChassisAccelEstimator_Update(&estimator, now_ms,
+                                     10.0f, 10.0f, &output);
+    }
+    assert_near(output.filtered_speed_cm_s, 10.0f, 0.01f);
+    assert_near(output.accel_cm_s2, 0.0f, 0.05f);
+
+    now_ms += 20U;
+    ChassisAccelEstimator_Update(&estimator, now_ms,
+                                 1000.0f, 1000.0f, &output);
+    assert(output.raw_accel_cm_s2 <= 250.0f + TEST_EPSILON);
+
+    now_ms += 200U;
+    ChassisAccelEstimator_Update(&estimator, now_ms,
+                                 20.0f, 20.0f, &output);
+    assert(output.valid == 0U);
+    assert_near(output.filtered_speed_cm_s, 20.0f, 0.001f);
+    assert_near(output.accel_cm_s2, 0.0f, 0.001f);
+}
+
+static void test_runtime_line_base_speed(void)
+{
+    InfraredLineControl control;
+    InfraredLineOutput output;
+    float average_target;
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetBaseSpeed(&control, 40.0f);
+    InfraredLineControl_Update(&control, 0U, 0x18U, 0U, &output);
+    InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
+    average_target = 0.5f *
+                     (output.left_target_cm_s + output.right_target_cm_s);
+    assert_near(average_target, 39.4f, 0.01f);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetBaseSpeed(&control, 12.0f);
+    InfraredLineControl_Update(&control, 0U, 0x18U, 0U, &output);
+    assert_near(output.left_target_cm_s, 12.0f, 0.001f);
+    assert_near(output.right_target_cm_s, 12.0f, 0.001f);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetBaseSpeed(&control, 1.0f);
+    InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
+    assert(test_abs(output.correction_cm_s) <= 1.0f + TEST_EPSILON);
+    assert(output.left_target_cm_s <= 2.0f + TEST_EPSILON);
+    assert(output.right_target_cm_s <= 2.0f + TEST_EPSILON);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetBaseSpeed(&control, -5.0f);
+    InfraredLineControl_Update(&control, 40U, 0x18U, 0U, &output);
+    assert_near(output.left_target_cm_s, 0.0f, 0.001f);
+    assert_near(output.right_target_cm_s, 0.0f, 0.001f);
+}
+
+int main(void)
+{
+    test_motion_profile_smooth_start();
+    test_motion_profile_target_reduction();
+    test_motion_profile_pass_event();
+    test_motion_profile_rejects_invalid_config();
+    test_chassis_accel_estimator();
+    test_runtime_line_base_speed();
+    puts("平滑底盘速度轨迹与加速度估计测试通过");
+    return 0;
+}
