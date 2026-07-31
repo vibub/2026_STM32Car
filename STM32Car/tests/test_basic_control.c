@@ -1,5 +1,6 @@
 #include "ball_balance_control.h"
 #include "ball_position_protocol.h"
+#include "ball_shuttle_control.h"
 #include "infrared_line_control.h"
 #include "lap_stop_detector.h"
 #include "linkage_kinematics.h"
@@ -558,6 +559,7 @@ static void test_ball_balance_control(void)
     assert(output.filtered_position_mm > 0.0f);
 
     BallBalanceControl_SetTargetMm(&control, 200.0f);
+    assert(control.desired_pipe_pitch_deg > 0.0f);
     now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(&control,
@@ -750,6 +752,130 @@ static void test_ball_balance_friction_compensation(void)
         output.desired_pipe_pitch_deg, 0.0f, 0.001f);
 }
 
+static void test_ball_balance_endpoint_integral(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
+    uint32_t now_ms = 0U;
+    uint8_t index;
+
+    build_linear_mapping(1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_SetEnabled(&control, 1U, now_ms);
+
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    }
+    assert(output.enabled != 0U);
+
+    BallBalanceControl_SetTargetMm(&control, -50.0f);
+    BallBalanceControl_SetEndpointHoldEnabled(&control, 1U);
+    measurement.valid = 1U;
+    measurement.position_d10_mm = -480;
+    measurement.quality = 80U;
+    for (index = 1U; index <= 12U; index++) {
+        measurement.sequence = index;
+        now_ms += 100U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  &measurement,
+                                  &attitude,
+                                  &output);
+    }
+
+    assert(output.endpoint_hold_enabled != 0U);
+    assert(output.i_term_deg < -0.01f);
+    assert(output.desired_pipe_pitch_deg < 0.0f);
+
+    BallBalanceControl_SetEndpointHoldEnabled(&control, 0U);
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert(output.endpoint_hold_enabled == 0U);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
+    assert_float_near_tolerance(
+        output.desired_pipe_pitch_deg, 0.0f, 0.001f);
+}
+
+static void test_ball_shuttle_control(void)
+{
+    BallShuttleControl control;
+    BallShuttleMeasurement measurement;
+    BallShuttleEvent event;
+
+    BallShuttleControl_Init(&control);
+    assert(control.state == BALL_SHUTTLE_STATE_IDLE);
+    assert(BallShuttleControl_Start(&control, 100U) != 0U);
+    assert(BallShuttleControl_IsRunning(&control) != 0U);
+
+    measurement.balance_enabled = 1U;
+    measurement.tracking_valid = 1U;
+    measurement.timed_out = 0U;
+    measurement.imu_fault = 0U;
+    measurement.mapping_fault = 0U;
+    measurement.velocity_mm_s = 20.0f;
+    measurement.filtered_position_mm = 44.0f;
+    event = BallShuttleControl_Update(&control, 200U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_NONE);
+
+    measurement.filtered_position_mm = 45.0f;
+    event = BallShuttleControl_Update(&control, 300U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_TURN_NEGATIVE);
+    assert(control.state == BALL_SHUTTLE_STATE_MOVING_NEGATIVE);
+
+    measurement.filtered_position_mm = -29.0f;
+    event = BallShuttleControl_Update(&control, 1500U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_NONE);
+
+    measurement.filtered_position_mm = -30.0f;
+    event = BallShuttleControl_Update(&control, 2500U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_ENABLE_ENDPOINT_HOLD);
+    assert(control.state == BALL_SHUTTLE_STATE_SETTLING_NEGATIVE);
+
+    measurement.filtered_position_mm = -50.0f;
+    measurement.velocity_mm_s = 4.0f;
+    event = BallShuttleControl_Update(&control, 3900U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_NONE);
+    assert(control.stable_ready != 0U);
+
+    event = BallShuttleControl_Update(&control, 4400U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_SUCCEEDED);
+    assert(BallShuttleControl_IsHolding(&control) != 0U);
+    assert(control.elapsed_ms == 4300U);
+
+    measurement.timed_out = 1U;
+    measurement.tracking_valid = 0U;
+    event = BallShuttleControl_Update(&control, 4500U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    assert(control.failure == BALL_SHUTTLE_FAILURE_TRACKING);
+
+    BallShuttleControl_Stop(&control);
+    assert(BallShuttleControl_Start(&control, 0U) != 0U);
+    measurement.timed_out = 0U;
+    measurement.tracking_valid = 1U;
+    measurement.filtered_position_mm = 0.0f;
+    measurement.velocity_mm_s = 0.0f;
+    event = BallShuttleControl_Update(&control, 5001U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    assert(control.failure == BALL_SHUTTLE_FAILURE_TIMEOUT);
+}
+
 static void test_extended_downward_pipe_limit(void)
 {
     BallBalanceControl control;
@@ -886,6 +1012,8 @@ int main(void)
     test_pipe_attitude_control();
     test_ball_balance_control();
     test_ball_balance_friction_compensation();
+    test_ball_balance_endpoint_integral();
+    test_ball_shuttle_control();
     test_flexible_pipe_mapping_limits();
     test_extended_downward_pipe_limit();
     test_nonlinear_mapping_interpolation();

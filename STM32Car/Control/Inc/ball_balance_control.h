@@ -34,6 +34,7 @@ typedef struct {
     uint8_t imu_fault;
     uint8_t feedforward_cache_valid;
     uint8_t desired_cache_valid;
+    uint8_t endpoint_hold_enabled;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
     uint32_t last_valid_ms;
@@ -79,6 +80,7 @@ typedef struct {
     uint8_t imu_fault;
     uint8_t mapping_valid;
     uint8_t mapping_fault;
+    uint8_t endpoint_hold_enabled;
     float target_mm;
     float filtered_position_mm;
     float velocity_mm_s;
@@ -113,6 +115,8 @@ uint8_t BallBalanceControl_IsEnabled(const BallBalanceControl *control);
 uint8_t BallBalanceControl_IsActive(const BallBalanceControl *control);
 void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
+void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
+                                               uint8_t enabled);
 void BallBalanceControl_SetPipeCalibration(
     BallBalanceControl *control,
     uint8_t valid,

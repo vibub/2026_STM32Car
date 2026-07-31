@@ -10,13 +10,16 @@
 #define BALL_BALANCE_MAX_PIPE_PITCH_DEG          3.0f  /* 钢球外环允许的最大抬升目标角。 */
 #define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       7.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
 #define BALL_BALANCE_POSITION_KP_DEG_PER_MM       0.040f /* 钢球位置到目标水管角的比例增益。 */
-#define BALL_BALANCE_POSITION_KI_DEG_PER_MM_S     0.000f /* 钢球位置积分增益，首版保持为 0。 */
+#define BALL_BALANCE_POSITION_KI_DEG_PER_MM_S     0.000f /* 普通平衡模式不使用位置积分。 */
+#define BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S     0.020f /* 最终端点保持时自动学习凹管坡度的积分增益。 */
+#define BALL_BALANCE_ENDPOINT_I_LIMIT_DEG          1.00f /* 端点积分允许补偿的最大持续俯仰角。 */
+#define BALL_BALANCE_ENDPOINT_I_RANGE_MM          20.0f  /* 仅在最终目标附近积累端点积分。 */
 #define BALL_BALANCE_POSITION_KD_DEG_PER_MM_S     0.030f /* 提高钢球速度阻尼，抑制秋千式往复振荡。 */
 #define BALL_BALANCE_POSITION_P_LIMIT_DEG          1.50f /* 远距离时限制加速倾角，给后续速度制动留出余量。 */
 #define BALL_BALANCE_POSITION_DEADBAND_MM          3.0f  /* 目标附近不再反复克服静摩擦。 */
 #define BALL_BALANCE_STOPPED_SPEED_MM_S            5.0f  /* 判定钢球基本静止的速度阈值。 */
 #define BALL_BALANCE_BREAKAWAY_PITCH_DEG           0.45f /* 静止且有位置误差时的最小起步倾角。 */
-#define BALL_BALANCE_INTEGRAL_LIMIT_MM_S        200.0f  /* 钢球位置误差积分绝对上限。 */
+#define BALL_BALANCE_INTEGRAL_LIMIT_MM_S        200.0f  /* 普通位置积分误差累计绝对上限。 */
 #define BALL_BALANCE_PIPE_KP                       0.60f  /* 水管姿态角误差的比例修正系数。 */
 #define BALL_BALANCE_PIPE_KD_S                     0.050f /* 水管俯仰角速度阻尼系数，单位为秒。 */
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
@@ -223,10 +226,13 @@ static void BallBalanceControl_CalculateOuterTarget(
     float candidate_i_term;
     float candidate_pitch;
     float integral_direction;
+    float integral_limit = BALL_BALANCE_INTEGRAL_LIMIT_MM_S;
+    float position_ki = BALL_BALANCE_POSITION_KI_DEG_PER_MM_S;
     float minimum_pitch;
     float maximum_pitch;
     float position_error_abs;
     float velocity_abs;
+    uint8_t integral_enabled = allow_integral;
 
     minimum_pitch = control->minimum_pipe_pitch_deg;
     maximum_pitch = control->maximum_pipe_pitch_deg;
@@ -243,32 +249,43 @@ static void BallBalanceControl_CalculateOuterTarget(
     control->d_term_deg = -BALL_BALANCE_POSITION_KD_DEG_PER_MM_S *
                           control->velocity_mm_s;
 
-    /* 钢球已经停在目标附近时保持水平，避免静摩擦补偿在零点附近来回触发。
-     * 仍在穿越目标时保留速度项制动，不能仅凭位置进入死区。 */
+    if (control->endpoint_hold_enabled != 0U) {
+        position_ki = BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S;
+        integral_limit = BALL_BALANCE_ENDPOINT_I_LIMIT_DEG /
+                         BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S;
+        if (position_error_abs > BALL_BALANCE_ENDPOINT_I_RANGE_MM) {
+            control->integral_mm_s = 0.0f;
+            candidate_integral = 0.0f;
+            integral_enabled = 0U;
+        }
+    }
+
+    /* 普通零点平衡在小球停稳后保持水平；第三题最终端点则保留积分偏置，
+     * 用它抵消凹形水管在非中心位置产生的持续回中坡度。 */
     if ((position_error_abs <= BALL_BALANCE_POSITION_DEADBAND_MM) &&
         (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S)) {
-        control->integral_mm_s = 0.0f;
         control->p_term_deg = 0.0f;
-        control->i_term_deg = 0.0f;
         control->d_term_deg = 0.0f;
-        control->desired_pipe_pitch_deg = 0.0f;
-        return;
+        if (control->endpoint_hold_enabled == 0U) {
+            control->integral_mm_s = 0.0f;
+            control->i_term_deg = 0.0f;
+            control->desired_pipe_pitch_deg = 0.0f;
+            return;
+        }
     }
 
-    if (allow_integral != 0U) {
+    if (integral_enabled != 0U) {
         candidate_integral = BallBalanceControl_Limit(
             control->integral_mm_s + control->error_mm * measurement_dt_s,
-            -BALL_BALANCE_INTEGRAL_LIMIT_MM_S,
-            BALL_BALANCE_INTEGRAL_LIMIT_MM_S);
+            -integral_limit,
+            integral_limit);
     }
 
-    candidate_i_term = BALL_BALANCE_POSITION_KI_DEG_PER_MM_S *
-                       candidate_integral;
+    candidate_i_term = position_ki * candidate_integral;
     candidate_pitch = control->p_term_deg + candidate_i_term +
                       control->d_term_deg;
-    integral_direction = BALL_BALANCE_POSITION_KI_DEG_PER_MM_S *
-                         control->error_mm;
-    if ((allow_integral != 0U) &&
+    integral_direction = position_ki * control->error_mm;
+    if ((integral_enabled != 0U) &&
         (((candidate_pitch >= minimum_pitch) &&
           (candidate_pitch <= maximum_pitch)) ||
          ((candidate_pitch > maximum_pitch) &&
@@ -278,17 +295,16 @@ static void BallBalanceControl_CalculateOuterTarget(
         control->integral_mm_s = candidate_integral;
     }
 
-    control->i_term_deg = BALL_BALANCE_POSITION_KI_DEG_PER_MM_S *
-                          control->integral_mm_s;
+    control->i_term_deg = position_ki * control->integral_mm_s;
     control->desired_pipe_pitch_deg = BallBalanceControl_Limit(
         control->p_term_deg + control->i_term_deg + control->d_term_deg,
         minimum_pitch,
         maximum_pitch);
 
-    /* 小误差产生的普通 PID 倾角可能不足以克服钢球/轨道静摩擦。
-     * 只在钢球近似静止时施加最小起步倾角；检测到运动后立即交还给 PD，
-     * 避免把该补偿当成持续偏置而造成极限环。 */
-    if ((position_error_abs > BALL_BALANCE_POSITION_DEADBAND_MM) &&
+    /* 普通运动阶段使用最小起步倾角克服静摩擦；端点保持阶段改由连续 PI
+     * 接管，避免固定起步脉冲在最终目标附近形成往复极限环。 */
+    if ((control->endpoint_hold_enabled == 0U) &&
+        (position_error_abs > BALL_BALANCE_POSITION_DEADBAND_MM) &&
         (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S) &&
         (BallBalanceControl_Abs(control->desired_pipe_pitch_deg) <
          BALL_BALANCE_BREAKAWAY_PITCH_DEG)) {
@@ -554,6 +570,7 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->imu_fault = control->imu_fault;
     output->mapping_valid = control->mapping_valid;
     output->mapping_fault = control->mapping_fault;
+    output->endpoint_hold_enabled = control->endpoint_hold_enabled;
     output->target_mm = control->target_mm;
     output->filtered_position_mm = control->filtered_position_mm;
     output->velocity_mm_s = control->velocity_mm_s;
@@ -612,6 +629,11 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     if ((normalized_enabled != 0U) && (control->mapping_valid == 0U)) {
         return;
     }
+    if (normalized_enabled == 0U) {
+        control->endpoint_hold_enabled = 0U;
+        control->integral_mm_s = 0.0f;
+        control->i_term_deg = 0.0f;
+    }
     if (control->enabled_requested == normalized_enabled) {
         return;
     }
@@ -653,6 +675,35 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
         control->target_mm = limited_target;
         control->integral_mm_s = 0.0f;
         control->i_term_deg = 0.0f;
+        if ((control->filter_ready != 0U) &&
+            (control->tracking_valid != 0U)) {
+            /* 目标切换后立即使用最近位置和速度重算，避免等待下一帧视觉
+             * 才开始在 +5 cm 折返点制动。 */
+            BallBalanceControl_CalculateOuterTarget(control, 0.0f, 0U);
+        }
+    }
+}
+
+void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
+                                               uint8_t enabled)
+{
+    uint8_t normalized_enabled;
+
+    if (control == 0) {
+        return;
+    }
+
+    normalized_enabled = (enabled != 0U) ? 1U : 0U;
+    if (normalized_enabled == control->endpoint_hold_enabled) {
+        return;
+    }
+
+    control->endpoint_hold_enabled = normalized_enabled;
+    control->integral_mm_s = 0.0f;
+    control->i_term_deg = 0.0f;
+    if ((control->filter_ready != 0U) &&
+        (control->tracking_valid != 0U)) {
+        BallBalanceControl_CalculateOuterTarget(control, 0.0f, 0U);
     }
 }
 
