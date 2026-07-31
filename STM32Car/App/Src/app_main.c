@@ -17,7 +17,7 @@
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
-/* Debug variables for IAR Watch only; they do not drive module control. */
+/* Debug variables for IAR Watch. PID gain variables intentionally drive control. */
 volatile uint8_t g_app_init_step;
 volatile uint8_t g_app_line_command_valid;
 volatile uint8_t g_app_motor_fault;
@@ -53,11 +53,18 @@ volatile uint8_t g_app_ball_timed_out;
 volatile uint8_t g_app_ball_measurement_accepted;
 volatile float g_app_ball_target_mm;
 volatile float g_app_ball_filtered_position_mm;
+volatile float g_app_ball_predicted_position_mm;
+volatile float g_app_ball_predicted_accel_mm_s2;
 volatile float g_app_ball_velocity_mm_s;
 volatile float g_app_ball_error_mm;
 volatile float g_app_ball_p_term_deg;
 volatile float g_app_ball_i_term_deg;
 volatile float g_app_ball_d_term_deg;
+volatile float g_app_ball_integral_mm_s;
+volatile uint8_t g_app_ball_integral_active;
+volatile float g_app_ball_kp = BALL_BALANCE_DEFAULT_KP_DEG_PER_MM;
+volatile float g_app_ball_ki = BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S;
+volatile float g_app_ball_kd = BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S;
 volatile float g_app_ball_desired_pipe_pitch_deg;
 volatile float g_app_ball_command_pipe_pitch_deg;
 volatile float g_app_ball_measured_pipe_pitch_deg;
@@ -141,6 +148,19 @@ static float App_Abs(float value)
     return (value < 0.0f) ? -value : value;
 }
 
+static void App_ApplyBallPidGains(void)
+{
+    float kp;
+    float ki;
+    float kd;
+
+    /* Sequence volatile reads explicitly for IAR and Live Watch updates. */
+    kp = g_app_ball_kp;
+    ki = g_app_ball_ki;
+    kd = g_app_ball_kd;
+    BallBalanceControl_SetPidGains(&s_ball_balance_control, kp, ki, kd);
+}
+
 static void App_UpdateLapStopDebug(void)
 {
     g_app_lap_distance_cm = s_lap_stop_detector.distance_cm;
@@ -162,11 +182,17 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_target_mm = s_ball_balance_output.target_mm;
     g_app_ball_filtered_position_mm =
         s_ball_balance_output.filtered_position_mm;
+    g_app_ball_predicted_position_mm =
+        s_ball_balance_output.predicted_position_mm;
+    g_app_ball_predicted_accel_mm_s2 =
+        s_ball_balance_output.predicted_accel_mm_s2;
     g_app_ball_velocity_mm_s = s_ball_balance_output.velocity_mm_s;
     g_app_ball_error_mm = s_ball_balance_output.error_mm;
     g_app_ball_p_term_deg = s_ball_balance_output.p_term_deg;
     g_app_ball_i_term_deg = s_ball_balance_output.i_term_deg;
     g_app_ball_d_term_deg = s_ball_balance_output.d_term_deg;
+    g_app_ball_integral_mm_s = s_ball_balance_output.integral_mm_s;
+    g_app_ball_integral_active = s_ball_balance_output.integral_active;
     g_app_ball_desired_pipe_pitch_deg =
         s_ball_balance_output.desired_pipe_pitch_deg;
     g_app_ball_command_pipe_pitch_deg =
@@ -407,6 +433,7 @@ static void App_BallBalanceTask(uint32_t now_ms)
         attitude_ptr = &attitude;
     }
 
+    App_ApplyBallPidGains();
     BallBalanceControl_Update(&s_ball_balance_control,
                               now_ms,
                               measurement_ptr,
@@ -635,6 +662,7 @@ void App_Init(void)
     LapStopDetector_Init(&s_lap_stop_detector);
     PipeAttitudeControl_Init(&s_pipe_attitude_control);
     BallBalanceControl_Init(&s_ball_balance_control);
+    App_ApplyBallPidGains();
     BallPositionProtocol_Init();
     WheelSpeedPid_Init(&s_left_speed_pid);
     WheelSpeedPid_Init(&s_right_speed_pid);
