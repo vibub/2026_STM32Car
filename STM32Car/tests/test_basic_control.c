@@ -833,11 +833,12 @@ static void test_ball_balance_friction_compensation(void)
                                   &attitude,
                                   &output);
     }
-    assert(output.integral_active == 0U);
-    assert_float_near_tolerance(output.integral_mm_s, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.d_term_deg, 0.0f, 0.001f);
+    /* 距离目标10毫米且静止时启用Ki，逐步建立正向水管角补偿。 */
+    assert(output.integral_active != 0U);
+    assert(output.integral_mm_s > 0.0f);
+    assert(output.i_term_deg > 0.0f);
+    assert(output.i_term_deg <= 0.80f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
     assert_float_near_tolerance(output.position_kp_deg_per_mm,
                                 0.0f,
                                 0.0001f);
@@ -848,7 +849,8 @@ static void test_ball_balance_friction_compensation(void)
                                 0.0f,
                                 0.0001f);
 
-    measurement.position_d10_mm = 200;
+    /* 离开20毫米积分区后立即清零，避免远距离控制产生积分饱和。 */
+    measurement.position_d10_mm = 1000;
     measurement.sequence = 21U;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
@@ -859,6 +861,7 @@ static void test_ball_balance_friction_compensation(void)
                               &output);
     assert(output.integral_active == 0U);
     assert_float_near_tolerance(output.integral_mm_s, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
 
     BallBalanceControl_Init(&control);
     BallBalanceControl_SetPipeCalibration(
@@ -1277,9 +1280,10 @@ static void test_ball_balance_endpoint_integral(void)
                               &attitude,
                               &output);
     assert(output.endpoint_hold_enabled == 0U);
-    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(
-        output.desired_pipe_pitch_deg, 0.0f, 0.001f);
+    assert(output.integral_active != 0U);
+    assert(output.i_term_deg > 0.0f);
+    assert(output.i_term_deg < 0.01f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
 }
 
 static void test_ball_shuttle_control(void)

@@ -32,10 +32,10 @@
 #define BALL_BALANCE_KICK_ATTEMPT_STEP_DEG              0.20f
 #define BALL_BALANCE_KICK_MAX_PITCH_DEG                 5.30f /* 破静摩擦阶段允许接近实测安全角上限。 */
 #define BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S       12.0f
-#define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 积分最大只补偿 0.8 度。 */
+#define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 普通目标点积分最大只补偿0.8度。 */
+#define BALL_BALANCE_NEAR_TARGET_I_RANGE_MM        20.0f /* 仅在距离目标点20毫米内启用位置积分。 */
 #define BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S     0.020f /* 第三题最终端点保持使用的独立积分增益。 */
 #define BALL_BALANCE_ENDPOINT_I_LIMIT_DEG          1.00f /* 端点积分允许补偿的最大持续俯仰角。 */
-#define BALL_BALANCE_ENDPOINT_I_RANGE_MM          20.0f  /* 仅在最终目标附近积累端点积分。 */
 #define BALL_BALANCE_STICTION_INTEGRAL_BOOST       3.0f  /* 钢球静止时加快积分以突破静摩擦。 */
 #define BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S    0.80f /* 钢球运动后泄放积分以降低过冲。 */
 #define BALL_BALANCE_GAIN_EPSILON                  0.000001f
@@ -385,6 +385,64 @@ static void BallBalanceControl_EnterStationaryAcceleration(
         BALL_BALANCE_STATIONARY_SAMPLE_COUNT;
 }
 
+static void BallBalanceControl_UpdateNearTargetIntegral(
+    BallBalanceControl *control,
+    uint8_t measurement_accepted,
+    float error_abs,
+    float velocity_abs)
+{
+    float ki_deg_per_mm_s;
+    float output_limit_deg;
+    float integral_limit_mm_s;
+    float leak_ratio;
+
+    ki_deg_per_mm_s = control->position_ki_deg_per_mm_s;
+    output_limit_deg = BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG;
+    if (control->endpoint_hold_enabled != 0U) {
+        /* 第三题最终端点继续使用更强的独立积分，避免终点静摩擦残差。 */
+        ki_deg_per_mm_s = BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S;
+        output_limit_deg = BALL_BALANCE_ENDPOINT_I_LIMIT_DEG;
+    }
+
+    if ((ki_deg_per_mm_s <= BALL_BALANCE_GAIN_EPSILON) ||
+        (error_abs > BALL_BALANCE_NEAR_TARGET_I_RANGE_MM) ||
+        (control->zero_crossed != 0U)) {
+        control->integral_mm_s = 0.0f;
+        control->i_term_deg = 0.0f;
+        control->integral_active = 0U;
+        return;
+    }
+
+    if ((measurement_accepted != 0U) &&
+        (control->last_measurement_dt_s > 0.0f)) {
+        if (velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
+            /* 静止残差通常来自机构静摩擦，适度加快积分消除稳态误差。 */
+            control->integral_mm_s += control->error_mm *
+                control->last_measurement_dt_s *
+                BALL_BALANCE_STICTION_INTEGRAL_BOOST;
+        } else {
+            /* 小球运动时先泄放旧积分，只在继续远离目标时缓慢累积。 */
+            leak_ratio = 1.0f - control->last_measurement_dt_s /
+                BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S;
+            leak_ratio = BallBalanceControl_Limit(leak_ratio, 0.0f, 1.0f);
+            control->integral_mm_s *= leak_ratio;
+            if ((control->error_mm * control->velocity_mm_s) > 0.0f) {
+                control->integral_mm_s += control->error_mm *
+                    control->last_measurement_dt_s;
+            }
+        }
+    }
+
+    /* 同时钳位积分状态和输出，防止限幅期间在内部继续积累。 */
+    integral_limit_mm_s = output_limit_deg / ki_deg_per_mm_s;
+    control->integral_mm_s = BallBalanceControl_Limit(
+        control->integral_mm_s,
+        -integral_limit_mm_s,
+        integral_limit_mm_s);
+    control->i_term_deg = ki_deg_per_mm_s * control->integral_mm_s;
+    control->integral_active = 1U;
+}
+
 static float BallBalanceControl_PitchFromFeedbackEffort(float effort_deg)
 {
     return -effort_deg / BALL_BALANCE_BALL_ACCEL_SIGN_PER_PITCH;
@@ -562,33 +620,7 @@ static void BallBalanceControl_UpdateTrajectory(
     kick_stage_elapsed_ms =
         (uint32_t) (now_ms - control->kick_stage_started_ms);
 
-    if (control->endpoint_hold_enabled != 0U) {
-        if (error_abs > BALL_BALANCE_ENDPOINT_I_RANGE_MM) {
-            control->integral_mm_s = 0.0f;
-            control->integral_active = 0U;
-            control->i_term_deg = 0.0f;
-        } else {
-            if ((measurement_accepted != 0U) &&
-                (control->last_measurement_dt_s > 0.0f)) {
-                control->integral_mm_s += control->error_mm *
-                    control->last_measurement_dt_s *
-                    ((velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) ?
-                     BALL_BALANCE_STICTION_INTEGRAL_BOOST : 1.0f);
-            }
-            control->i_term_deg = BallBalanceControl_Limit(
-                BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S *
-                control->integral_mm_s,
-                -BALL_BALANCE_ENDPOINT_I_LIMIT_DEG,
-                BALL_BALANCE_ENDPOINT_I_LIMIT_DEG);
-            control->integral_active = 1U;
-        }
-    } else {
-        control->integral_mm_s = 0.0f;
-        control->integral_active = 0U;
-        control->i_term_deg = 0.0f;
-    }
     control->zero_crossed = 0U;
-
     if (measurement_accepted != 0U) {
         if ((control->previous_error_ready != 0U) &&
             (((control->previous_error_mm > 0.0f) &&
@@ -604,6 +636,14 @@ static void BallBalanceControl_UpdateTrajectory(
         }
         control->previous_error_mm = control->error_mm;
         control->previous_error_ready = 1U;
+    }
+
+    BallBalanceControl_UpdateNearTargetIntegral(control,
+                                                measurement_accepted,
+                                                error_abs,
+                                                velocity_abs);
+
+    if (measurement_accepted != 0U) {
 
         if (velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
             if (control->stationary_sample_count < 0xFFU) {
@@ -772,7 +812,8 @@ static void BallBalanceControl_UpdateTrajectory(
                 }
                 break;
             }
-            if (control->endpoint_hold_enabled != 0U) {
+            if (control->integral_active != 0U) {
+                /* 目标点附近退出冻结后恢复PI/D微调，消除水平偏差和静摩擦残差。 */
                 BallBalanceControl_ApplyMovingCommand(control);
             } else {
                 control->phase_pitch_deg = 0.0f;
@@ -962,6 +1003,7 @@ static void BallBalanceControl_UpdateServoCommand(BallBalanceControl *control,
                                         control->measured_pipe_pitch_deg;
         control->pipe_p_term_deg = control->pipe_kp *
                                    control->pipe_pitch_error_deg;
+        /* 直接使用120 Hz陀螺仪X轴角速度反向修正，抑制水管快速摆动。 */
         control->pipe_d_term_deg = -control->pipe_kd_s *
                                    control->measured_pipe_rate_dps;
         corrected_pipe_command = BallBalanceControl_LimitActualPitch(

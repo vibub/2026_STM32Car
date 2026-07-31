@@ -5,11 +5,11 @@
 
 #include "linkage_kinematics.h"
 
-#define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.012f
-#define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.000f
-#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.006f
+#define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.012f /* 钢球位置比例增益，单位为度每毫米。 */
+#define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.008f /* 接近目标点时的位置积分增益，单位为度每毫米秒。 */
+#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.006f /* 钢球速度阻尼增益，单位为度每毫米每秒。 */
 #define BALL_BALANCE_DEFAULT_PIPE_KP              0.60f /* IMU姿态角误差比例修正。 */
-#define BALL_BALANCE_DEFAULT_PIPE_KD_S            0.050f /* IMU姿态角速度阻尼，单位为秒。 */
+#define BALL_BALANCE_DEFAULT_PIPE_KD_S            0.050f /* 使用120 Hz陀螺仪X轴角速度的阻尼系数，单位为秒。 */
 
 typedef struct {
     uint8_t valid;
