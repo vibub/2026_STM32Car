@@ -838,7 +838,7 @@ static void test_ball_balance_friction_compensation(void)
 
     BallBalanceControl_SetPidGains(&control, 0.0f, 0.020f, 0.0f);
     measurement.valid = 1U;
-    measurement.position_d10_mm = 100;
+    measurement.position_d10_mm = 150;
     measurement.quality = 80U;
     for (index = 1U; index <= 20U; index++) {
         measurement.sequence = index;
@@ -850,7 +850,7 @@ static void test_ball_balance_friction_compensation(void)
                                   &attitude,
                                   &output);
     }
-    /* 距离目标10毫米且静止时启用Ki，逐步建立正向水管角补偿。 */
+    /* 距离目标15毫米且静止时启用Ki，逐步建立正向水管角补偿。 */
     assert(output.integral_active != 0U);
     assert(output.integral_mm_s > 0.0f);
     assert(output.i_term_deg > 0.0f);
@@ -866,9 +866,26 @@ static void test_ball_balance_friction_compensation(void)
                                 0.0f,
                                 0.0001f);
 
-    /* 离开20毫米积分区后立即清零，避免远距离控制产生积分饱和。 */
+    /* 回到目标8毫米内后立即禁用并清除积分。 */
+    measurement.position_d10_mm = 80;
+    for (index = 21U; index <= 26U; index++) {
+        measurement.sequence = index;
+        now_ms += 100U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  &measurement,
+                                  &attitude,
+                                  &output);
+    }
+    assert(test_abs(output.error_mm) <= 10.0f);
+    assert(output.integral_active == 0U);
+    assert_float_near_tolerance(output.integral_mm_s, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
+
+    /* 离开20毫米积分区后也保持积分清零，避免远距离控制饱和。 */
     measurement.position_d10_mm = 1000;
-    measurement.sequence = 21U;
+    measurement.sequence = 27U;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(&control,
@@ -1279,7 +1296,22 @@ static void test_ball_balance_endpoint_integral(void)
                                   &output);
     }
 
+    /* 第三题端点误差为6毫米时同样不得启用积分。 */
     assert(output.endpoint_hold_enabled != 0U);
+    assert(output.integral_active == 0U);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
+
+    measurement.position_d10_mm = -350;
+    for (index = 13U; index <= 24U; index++) {
+        measurement.sequence = index;
+        now_ms += 100U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  &measurement,
+                                  &attitude,
+                                  &output);
+    }
     assert(output.integral_active != 0U);
     assert(output.i_term_deg > 0.01f);
     assert(output.desired_pipe_pitch_deg > 0.0f);
@@ -1296,7 +1328,7 @@ static void test_ball_balance_endpoint_integral(void)
     assert(output.endpoint_hold_enabled == 0U);
     assert(output.integral_active != 0U);
     assert(output.i_term_deg > 0.0f);
-    assert(output.i_term_deg < 0.01f);
+    assert(output.i_term_deg < 0.05f);
     assert(output.desired_pipe_pitch_deg > 0.0f);
 }
 

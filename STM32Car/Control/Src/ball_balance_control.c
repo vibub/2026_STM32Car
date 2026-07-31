@@ -33,7 +33,8 @@
 #define BALL_BALANCE_KICK_MAX_PITCH_DEG                 5.30f /* 破静摩擦阶段允许接近实测安全角上限。 */
 #define BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S       12.0f
 #define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 普通目标点积分最大只补偿0.8度。 */
-#define BALL_BALANCE_NEAR_TARGET_I_RANGE_MM        20.0f /* 仅在距离目标点20毫米内启用位置积分。 */
+#define BALL_BALANCE_INTEGRAL_MIN_ERROR_MM         10.0f /* 距离目标不超过10毫米时禁用位置积分。 */
+#define BALL_BALANCE_NEAR_TARGET_I_RANGE_MM        20.0f /* 仅在距离目标10～20毫米时启用位置积分。 */
 #define BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S     0.020f /* 第三题最终端点保持使用的独立积分增益。 */
 #define BALL_BALANCE_ENDPOINT_I_LIMIT_DEG          1.00f /* 端点积分允许补偿的最大持续俯仰角。 */
 #define BALL_BALANCE_STICTION_INTEGRAL_BOOST       3.0f  /* 钢球静止时加快积分以突破静摩擦。 */
@@ -419,7 +420,7 @@ static void BallBalanceControl_UpdateNearTargetIntegral(
     }
 
     if ((ki_deg_per_mm_s <= BALL_BALANCE_GAIN_EPSILON) ||
-        (error_abs <= BALL_BALANCE_POSITION_DEADBAND_MM) ||
+        (error_abs <= BALL_BALANCE_INTEGRAL_MIN_ERROR_MM) ||
         (error_abs > BALL_BALANCE_NEAR_TARGET_I_RANGE_MM) ||
         (control->zero_crossed != 0U)) {
         control->integral_mm_s = 0.0f;
