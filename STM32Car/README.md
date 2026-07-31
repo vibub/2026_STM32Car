@@ -119,10 +119,10 @@ checksum = 0x5A ^ 0xA5 ^ command
 A5 <result> <current_mode> <request> <xor>
 ```
 
-`0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page2.t0`：
+`0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page0.t0`：
 
 ```text
-page2.t0.txt="<UTF-8 中文状态>" FF FF FF
+page0.t0.txt="<UTF-8 中文状态>" FF FF FF
 ```
 
 标定状态包括准备、水平零偏采样、`采集1/9`～`采集9/9`、回中检查、成功和失败原因。舵机以30°/s移动，到达每个采样角并静止后直接平均加速度重力角；九个实测角必须严格单调，成功时显示总行程比例`S`和水平点零偏`O`，验收失败时显示`S`、`O`和回中误差`R`。每次上电必须先成功执行`0x04`，才允许在停车模式下发送`0x02`；`0x02`会先复核约500 ms的水平和静止状态，再进入平衡。
@@ -207,7 +207,7 @@ gcc -std=c11 -Wall -Wextra -Werror \
 16. 确认 IMU 刚性固定在水管另一端并随钢球所在管段同步转动，不能装在会与管端产生弯曲角差的转轴附近；保持 +Y 朝钢球、+Z 朝上，SDA/SCL 空闲电压为 3.3 V。
 17. 连接 IMU 后确认 `g_imu_ready=1`、`g_imu_who_am_i=0x70`，且 `g_imu_i2c_address` 为 `0x6A` 或 `0x6B`。
 18. 移除钢球并确认摆杆无阻挡，在停车模式发送`5A A5 04 FB`；观察舵机从86.017°开始依次经过9个采样点升至178.775°，屏幕显示`采集1/9`～`采集9/9`，最后回到水平位置；任何时候发送0x00/0x03都应中断采样并缓速回水平。
-19. 在USART HMI工程中把`page2.t0`的`vscope`设为“全局”、`txt_maxl`设为至少64并保持UTF-8编码。成功后确认`g_app_pipe_calibration_valid=1`，`g_app_pipe_mapping_pitch_deg[0..8]`严格递增，总行程`scale`在0.35～1.25、122°水平点`offset`绝对值不超过0.75°；通过`g_app_ball_minimum_pipe_pitch_deg`和`g_app_ball_maximum_pipe_pitch_deg`检查实际控制范围。
+19. 在USART HMI工程中把`page0.t0`的`vscope`设为“全局”、`txt_maxl`设为至少64并保持UTF-8编码。成功后确认`g_app_pipe_calibration_valid=1`，`g_app_pipe_mapping_pitch_deg[0..8]`严格递增，总行程`scale`在0.35～1.25、122°水平点`offset`绝对值不超过0.75°；通过`g_app_ball_minimum_pipe_pitch_deg`和`g_app_ball_maximum_pipe_pitch_deg`检查实际控制范围。
 20. 标定失败、复位或尚未执行 0x04 时发送 0x02，确认 STM32 拒绝启用钢球平衡。
 21. 放置钢球后发送 0x02，确认水管在约 500 ms 水平复核期间保持中位，随后显示“平衡已启用”。
 22. 空载手动抬高水管右端，确认 `g_app_pipe_pitch_deg` 为正，`g_app_pipe_pitch_rate_dps` 动态方向正确。

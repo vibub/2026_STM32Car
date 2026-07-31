@@ -14,7 +14,7 @@ typedef enum {
 
 #define TJC_STATUS_FRAME_BUFFER_SIZE 64U /* TJC 文本状态命令的最大发送缓存。 */
 
-static const uint8_t s_tjc_text_prefix[] = "page2.t0.txt=\"";
+static const uint8_t s_tjc_text_prefix[] = "page0.t0.txt=\"";
 static const uint8_t s_tjc_text_suffix[] = {'\"', 0xFFU, 0xFFU, 0xFFU};
 
 /* 串口屏工程使用 UTF-8，固定中文显式写成 UTF-8 字节以避免编译器转码。 */
