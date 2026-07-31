@@ -72,15 +72,15 @@ OSD_TEXT_ENABLE = True             # Hide large debug text in performance mode.
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
 VIDEO_AP_ENABLE = True
-VIDEO_AP_SSID = "K230_VIDEO"
-VIDEO_AP_KEY = "12345678"
+VIDEO_AP_SSID = "kk22330"
+VIDEO_AP_KEY = "czhhqgyyb"
 VIDEO_AP_IP = "192.168.4.1"
 VIDEO_AP_PORT = 80
 VIDEO_AP_FPS = 6
 VIDEO_AP_JPEG_QUALITY = 40
 VIDEO_AP_START_DELAY_FRAMES = 0
 
-# STEEL_BALL 使用现成 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
+# STEEL_BALL 使用 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
 TARGET_PROFILE = "STEEL_BALL"
 RING_DIAMETER_MM = 18.0
 STEEL_BALL_DIAMETER_MM = 10.0
@@ -547,9 +547,9 @@ def run():
                 gc.collect()
 
     except KeyboardInterrupt:
-        print("用户停止钢珠位置识别")
+        print("用户停止钢球位置识别")
     except BaseException as error:
-        print("钢珠位置识别异常:")
+        print("钢球位置识别异常:")
         sys.print_exception(error)
     finally:
         if video_streamer is not None:

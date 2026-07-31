@@ -71,8 +71,8 @@ class WifiApVideoStreamer:
 
     def __init__(
         self,
-        ssid="K230_VIDEO",
-        key="12345678",
+        ssid="kk22330",
+        key="czhhqgyyb",
         ip="192.168.4.1",
         port=80,
         fps=6,
