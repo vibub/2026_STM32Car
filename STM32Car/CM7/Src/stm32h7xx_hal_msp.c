@@ -11,7 +11,24 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     GPIO_InitTypeDef gpio = {0};
     RCC_PeriphCLKInitTypeDef clock = {0};
 
-    if (huart->Instance == USART2) {
+    if (huart->Instance == HOST_DEBUG_UART_INSTANCE) {
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+        __HAL_RCC_USART1_CLK_ENABLE();
+        clock.PeriphClockSelection = RCC_PERIPHCLK_USART1;       /* 选择 USART1 外设时钟配置。 */
+        clock.Usart16ClockSelection = RCC_USART16CLKSOURCE_HSI; /* 使用 HSI 作为 USART1 时钟源。 */
+        if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+            Error_Handler();
+        }
+
+        gpio.Pin = GPIO_PIN_6 | GPIO_PIN_7;      /* PB6 为 USART1_TX，PB7 为 USART1_RX。 */
+        gpio.Mode = GPIO_MODE_AF_PP;            /* 使用复用推挽输出模式。 */
+        gpio.Pull = GPIO_PULLUP;                 /* 空闲状态使用内部上拉。 */
+        gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH; /* 使用高速 GPIO 驱动能力。 */
+        gpio.Alternate = GPIO_AF7_USART1;        /* PB6/PB7 复用为 USART1。 */
+        HAL_GPIO_Init(GPIOB, &gpio);
+        HAL_NVIC_SetPriority(HOST_DEBUG_UART_IRQn, 5U, 0U); /* 调试串口中断抢占优先级为 5。 */
+        HAL_NVIC_EnableIRQ(HOST_DEBUG_UART_IRQn);
+    } else if (huart->Instance == USART2) {
         __HAL_RCC_GPIOD_CLK_ENABLE();
         __HAL_RCC_USART2_CLK_ENABLE();
         clock.PeriphClockSelection = RCC_PERIPHCLK_USART2;
@@ -142,7 +159,12 @@ void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef *htim)
 
 void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == USART2) {
+    if (huart->Instance == HOST_DEBUG_UART_INSTANCE) {
+        __HAL_RCC_USART1_FORCE_RESET();
+        __HAL_RCC_USART1_RELEASE_RESET();
+        HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6 | GPIO_PIN_7);
+        HAL_NVIC_DisableIRQ(HOST_DEBUG_UART_IRQn);
+    } else if (huart->Instance == USART2) {
         __HAL_RCC_USART2_FORCE_RESET();
         __HAL_RCC_USART2_RELEASE_RESET();
         HAL_GPIO_DeInit(GPIOD, GPIO_PIN_5 | GPIO_PIN_6);

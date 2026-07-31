@@ -19,6 +19,7 @@ __pycache__/
 .claude/
 .codegraph/
 .vscode/
+.vs/
 .idea/
 docs/superpowers
 .DS_Store

@@ -290,10 +290,25 @@ static void test_lap_stop_detector(void)
     LapStopDetector detector;
 
     LapStopDetector_Init(&detector);
+
+    /* 上电位于 A 点横线时不得直接认为已经驶离起点。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
+    assert(detector.left_start_line == 0U);
+    assert(detector.leave_clear_count == 0U);
+
+    /* 驶离条件必须来自连续有效样本，无效 I2C 采样会清零确认计数。 */
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x03U) == 0U);
+    assert(detector.leave_clear_count == 1U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0x03U) == 0U);
+    assert(detector.leave_clear_count == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x03U) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x01U) == 0U);
+    assert(detector.left_start_line != 0U);
+
+    /* 未达到 400 cm 时，即使再次出现横线也不能触发返程完成。 */
     assert(LapStopDetector_Update(&detector, 399.0f, 1U, 0xFFU) == 0U);
     assert(detector.armed == 0U);
     assert(detector.full_black_count == 0U);
-
     assert(LapStopDetector_Update(&detector, -10.0f, 1U, 0xFFU) == 0U);
     assert_float_near(detector.distance_cm, 399.0f);
 
@@ -313,7 +328,7 @@ static void test_lap_stop_detector(void)
     assert(LapStopDetector_Update(&detector, 0.0f, 0U, 0x0FU) == 0U);
     assert(detector.full_black_count == 0U);
 
-    /* 4 路和 8 路黑线均满足门槛，连续两帧后完成停车。 */
+    /* 4 路和 8 路黑线均满足门槛，连续两帧后确认返程通过 A 点。 */
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0xFFU) != 0U);
     assert(detector.completed != 0U);
@@ -323,6 +338,8 @@ static void test_lap_stop_detector(void)
 
     LapStopDetector_Init(&detector);
     assert_float_near(detector.distance_cm, 0.0f);
+    assert(detector.left_start_line == 0U);
+    assert(detector.leave_clear_count == 0U);
     assert(detector.armed == 0U);
     assert(detector.full_black_count == 0U);
     assert(detector.completed == 0U);
@@ -435,48 +452,32 @@ static void test_pipe_attitude_control(void)
     PipeAttitudeControl control;
     PipeAttitudeMeasurement measurement;
     PipeAttitudeOutput output;
-    float servo_angle;
-    float model_pitch_deg;
-    float raw_pitch_deg;
-    float previous_raw_pitch_deg = 0.0f;
-    float raw_pitch_rate_dps;
+    float raw_pitch_deg = 5.20f;
     float pitch_rad;
-    uint32_t now_ms;
+    uint32_t now_ms = 0U;
     uint16_t iteration;
 
-    servo_angle = LinkageKinematics_GetNominalServoCenterDeg();
     PipeAttitudeControl_Init(&control);
     PipeAttitudeControl_Update(&control, 0U, 0, 0.0f, &output);
     assert(output.calibration_valid == 0U);
     assert(output.attitude_valid == 0U);
 
     assert(PipeAttitudeControl_StartCalibration(
-               &control, 0U, servo_angle) != 0U);
+               &control, 0U, 2.0f) != 0U);
     PipeAttitudeControl_Update(&control, 0U, 0, 0.0f, &output);
     assert(output.status_changed != 0U);
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_READY);
     assert(output.servo_override_active != 0U);
 
-    now_ms = 0U;
-    for (iteration = 0U; iteration < 8000U; iteration++) {
+    for (iteration = 0U; iteration < 400U; iteration++) {
         now_ms += 20U;
-        assert(LinkageKinematics_ServoAngleToPipePitch(
-                   servo_angle, &model_pitch_deg) != 0U);
-        /* 模拟远端IMU符号反转和不能由单一scale/offset表示的柔性非线性。 */
-        raw_pitch_deg = -(
-            0.42f * model_pitch_deg +
-            0.002f * model_pitch_deg *
-            (model_pitch_deg + 10.0f) *
-            (model_pitch_deg - 6.8f));
-        raw_pitch_rate_dps =
-            (raw_pitch_deg - previous_raw_pitch_deg) / 0.020f;
         pitch_rad = raw_pitch_deg * TEST_PI / 180.0f;
         measurement.valid = 1U;
         measurement.timestamp_ms = now_ms;
         measurement.accel_x_g = 0.0f;
         measurement.accel_y_g = sinf(pitch_rad);
         measurement.accel_z_g = cosf(pitch_rad);
-        measurement.gyro_x_dps = 0.40f + raw_pitch_rate_dps;
+        measurement.gyro_x_dps = 0.40f;
         measurement.gyro_y_dps = 0.0f;
         measurement.gyro_z_dps = 0.0f;
         PipeAttitudeControl_Update(&control,
@@ -484,10 +485,6 @@ static void test_pipe_attitude_control(void)
                                    &measurement,
                                    0.0f,
                                    &output);
-        if (output.servo_override_active != 0U) {
-            servo_angle = output.servo_override_deg;
-        }
-        previous_raw_pitch_deg = raw_pitch_deg;
         if (output.calibration_valid != 0U) {
             break;
         }
@@ -497,39 +494,34 @@ static void test_pipe_attitude_control(void)
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_SUCCESS);
     assert(output.imu_pitch_sign == -1);
     assert_float_near_tolerance(output.gyro_x_bias_dps, 0.40f, 0.001f);
-    assert(output.negative_pitch_deg < -4.0f);
-    assert(output.center_pitch_deg > -0.1f);
-    assert(output.center_pitch_deg < 0.1f);
-    assert(output.positive_pitch_deg > 2.7f);
-    assert_float_near_tolerance(output.model_scale, 0.42f, 0.03f);
-    assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.08f);
-    assert(LinkageKinematics_GetCalibrationPoint(
-               1U, &model_pitch_deg, &servo_angle) != 0U);
-    assert(LinkageKinematics_ServoAngleToPipePitch(
-               servo_angle, &model_pitch_deg) != 0U);
-    raw_pitch_deg = 0.42f * model_pitch_deg +
-        0.002f * model_pitch_deg *
-        (model_pitch_deg + 10.0f) * (model_pitch_deg - 6.8f);
-    assert_float_near_tolerance(output.mapping_pitch_deg[1],
+    assert_float_near_tolerance(output.accel_pitch_zero_deg,
                                 raw_pitch_deg,
-                                0.08f);
-    assert(test_abs(output.return_pitch_deg - output.center_pitch_deg) < 0.1f);
+                                0.01f);
+    assert_float_near_tolerance(output.negative_pitch_deg, -5.5495f, 0.001f);
+    assert_float_near_tolerance(output.center_pitch_deg, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.positive_pitch_deg, 5.5495f, 0.001f);
+    assert_float_near_tolerance(output.model_scale, 1.0f, 0.001f);
+    assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.001f);
 
-    now_ms += 20U;
-    measurement.timestamp_ms = now_ms;
-    measurement.accel_y_g = 0.0f;
-    measurement.accel_z_g = 1.0f;
-    measurement.gyro_x_dps = 0.40f;
-    PipeAttitudeControl_Update(&control,
-                               now_ms,
-                               &measurement,
-                               100.0f,
-                               &output);
+    /* 原始IMU角减小1°，固定-1符号后应得到约+1°相对水管角。 */
+    for (iteration = 0U; iteration < 80U; iteration++) {
+        now_ms += 20U;
+        pitch_rad = (raw_pitch_deg - 1.0f) * TEST_PI / 180.0f;
+        measurement.timestamp_ms = now_ms;
+        measurement.accel_y_g = sinf(pitch_rad);
+        measurement.accel_z_g = cosf(pitch_rad);
+        measurement.gyro_x_dps = 0.40f;
+        PipeAttitudeControl_Update(&control,
+                                   now_ms,
+                                   &measurement,
+                                   0.0f,
+                                   &output);
+    }
     assert(output.attitude_valid != 0U);
-    assert(output.accel_trusted == 0U);
+    assert_float_near_tolerance(output.pitch_deg, 1.0f, 0.08f);
 
     assert(PipeAttitudeControl_StartCalibration(
-               &control, now_ms, servo_angle) != 0U);
+               &control, now_ms, 1.0f) != 0U);
     PipeAttitudeControl_AbortCalibration(&control, now_ms);
     PipeAttitudeControl_Update(&control, now_ms, 0, 0.0f, &output);
     assert(output.calibration_event == PIPE_CALIBRATION_EVENT_ABORTED);
@@ -611,11 +603,10 @@ static void test_ball_balance_control(void)
     assert(output.desired_model_pitch_deg > 0.0f);
     assert(output.desired_angle_deg > neutral_angle_deg);
     assert(output.command_angle_deg > neutral_angle_deg);
-    assert(output.command_angle_deg >= 0.0f);
-    assert(output.command_angle_deg <= 180.0f);
+    assert(output.command_angle_deg >= -5.5495f);
+    assert(output.command_angle_deg <= 5.5495f);
 
-    /* Flexible-pipe vibration is observable but must not be fed directly
-     * back into the servo command; calibrated feedforward stays unchanged. */
+    /* 线性前馈之外，IMU姿态P/D应修正水管跟随误差并抑制角速度。 */
     attitude.pitch_deg = -0.5f;
     attitude.pitch_rate_dps = 6.0f;
     now_ms += 20U;
@@ -625,11 +616,10 @@ static void test_ball_balance_control(void)
                               0,
                               &attitude,
                               &output);
-    assert_float_near_tolerance(output.pipe_p_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.pipe_d_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.desired_angle_deg,
-                                output.servo_feedforward_deg,
-                                0.001f);
+    assert(output.pipe_p_term_deg > 0.0f);
+    assert(output.pipe_d_term_deg < 0.0f);
+    assert(test_abs(output.desired_angle_deg -
+                    output.servo_feedforward_deg) > 0.01f);
     attitude.pitch_deg = 0.0f;
     attitude.pitch_rate_dps = 0.0f;
 
@@ -759,9 +749,9 @@ static void test_flexible_pipe_mapping_limits(void)
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
-        output.minimum_pipe_pitch_deg, -3.82f, 0.01f);
+        output.minimum_pipe_pitch_deg, -5.5495f, 0.001f);
     assert_float_near_tolerance(
-        output.maximum_pipe_pitch_deg, 3.00f, 0.01f);
+        output.maximum_pipe_pitch_deg, 5.5495f, 0.001f);
 
     BallBalanceControl_SetEnabled(&control, 1U, now_ms);
     attitude.valid = 1U;
@@ -860,11 +850,12 @@ static void test_ball_balance_friction_compensation(void)
                                   &attitude,
                                   &output);
     }
-    assert(output.integral_active == 0U);
-    assert_float_near_tolerance(output.integral_mm_s, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.d_term_deg, 0.0f, 0.001f);
+    /* 距离目标10毫米且静止时启用Ki，逐步建立正向水管角补偿。 */
+    assert(output.integral_active != 0U);
+    assert(output.integral_mm_s > 0.0f);
+    assert(output.i_term_deg > 0.0f);
+    assert(output.i_term_deg <= 0.80f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
     assert_float_near_tolerance(output.position_kp_deg_per_mm,
                                 0.0f,
                                 0.0001f);
@@ -875,7 +866,8 @@ static void test_ball_balance_friction_compensation(void)
                                 0.0f,
                                 0.0001f);
 
-    measurement.position_d10_mm = 200;
+    /* 离开20毫米积分区后立即清零，避免远距离控制产生积分饱和。 */
+    measurement.position_d10_mm = 1000;
     measurement.sequence = 21U;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
@@ -886,6 +878,7 @@ static void test_ball_balance_friction_compensation(void)
                               &output);
     assert(output.integral_active == 0U);
     assert_float_near_tolerance(output.integral_mm_s, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
 
     BallBalanceControl_Init(&control);
     BallBalanceControl_SetPipeCalibration(
@@ -899,28 +892,25 @@ static void test_ball_balance_friction_compensation(void)
     assert(output.enabled != 0U);
 
     BallBalanceControl_SetPidGains(&control, 0.025f, 0.015f, 0.040f);
-    /* A stationary ball anywhere inside the requested +/-10 mm success
-     * window must stay in HOLD and must not receive a final kick. */
-    measurement.position_d10_mm = 80;
-    measurement.sequence = 1U;
-    now_ms += 20U;
-    attitude.timestamp_ms = now_ms;
-    BallBalanceControl_Update(&control,
-                              now_ms,
-                              &measurement,
-                              &attitude,
-                              &output);
+    /* 小球静止在目标正向3毫米时应进入HOLD，且P/I均不产生追逐动作。 */
+    measurement.position_d10_mm = 30;
+    measurement.quality = 80U;
+    for (index = 1U; index <= 35U; index++) {
+        measurement.sequence = index;
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  &measurement,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
+    assert(output.integral_active == 0U);
+    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
+    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
     assert_float_near_tolerance(
         output.desired_pipe_pitch_deg, 0.0f, 0.001f);
-    measurement.sequence = 2U;
-    now_ms += 20U;
-    attitude.timestamp_ms = now_ms;
-    BallBalanceControl_Update(&control,
-                              now_ms,
-                              &measurement,
-                              &attitude,
-                              &output);
-    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
 }
 
 static void test_ball_balance_motion_classification(void)
@@ -1271,7 +1261,7 @@ static void test_ball_balance_endpoint_integral(void)
     BallBalanceControl_SetTargetMm(&control, -50.0f);
     BallBalanceControl_SetEndpointHoldEnabled(&control, 1U);
     measurement.valid = 1U;
-    measurement.position_d10_mm = -480;
+    measurement.position_d10_mm = -440;
     measurement.quality = 80U;
     for (index = 1U; index <= 12U; index++) {
         measurement.sequence = index;
@@ -1304,9 +1294,10 @@ static void test_ball_balance_endpoint_integral(void)
                               &attitude,
                               &output);
     assert(output.endpoint_hold_enabled == 0U);
-    assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(
-        output.desired_pipe_pitch_deg, 0.0f, 0.001f);
+    assert(output.integral_active != 0U);
+    assert(output.i_term_deg > 0.0f);
+    assert(output.i_term_deg < 0.01f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
 }
 
 static void prepare_ball_shuttle(BallShuttleControl *control,
@@ -1555,7 +1546,7 @@ static void test_extended_downward_pipe_limit(void)
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
-        output.minimum_pipe_pitch_deg, -5.50f, 0.01f);
+        output.minimum_pipe_pitch_deg, -5.5495f, 0.001f);
 
     BallBalanceControl_SetEnabled(&control, 1U, now_ms);
     attitude.valid = 1U;

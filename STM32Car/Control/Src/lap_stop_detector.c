@@ -2,9 +2,10 @@
 
 #include <string.h>
 
-#define LAP_STOP_ARM_DISTANCE_CM     400.0f /* 累计达到该里程后允许识别返程 A 点。 */
-#define LAP_STOP_MIN_ACTIVE_COUNT   4U      /* 每帧至少识别到 4 路黑线才参与终点确认。 */
-#define LAP_STOP_CONFIRM_SAMPLES     2U     /* 连续满足黑线数量门槛的有效采样数。 */
+#define LAP_STOP_ARM_DISTANCE_CM       400.0f /* 累计达到该里程后允许识别返程 A 点。 */
+#define LAP_STOP_MIN_ACTIVE_COUNT       4U    /* 每帧至少识别到 4 路黑线才参与横线确认。 */
+#define LAP_STOP_LEAVE_CLEAR_SAMPLES    2U    /* 连续两帧低于横线门槛后确认驶离起点。 */
+#define LAP_STOP_CONFIRM_SAMPLES        2U    /* 连续满足横线门槛的返程确认样本数。 */
 
 static uint8_t LapStopDetector_CountActiveSensors(uint8_t sensor_mask)
 {
@@ -44,7 +45,32 @@ uint8_t LapStopDetector_Update(LapStopDetector *detector,
         detector->distance_cm += distance_delta_cm;
     }
 
-    /* 一圈约 614 cm，先行驶 400 cm，避免把起点附近的全黑误判为终点。 */
+    /* 只接受连续有效的新采样，I2C 失败时的陈旧掩码不能推进状态。 */
+    if (sensor_sample_valid == 0U) {
+        detector->leave_clear_count = 0U;
+        detector->full_black_count = 0U;
+        return 0U;
+    }
+
+    active_count = LapStopDetector_CountActiveSensors(sensor_mask);
+    if (detector->left_start_line == 0U) {
+        if (active_count < LAP_STOP_MIN_ACTIVE_COUNT) {
+            if (detector->leave_clear_count <
+                LAP_STOP_LEAVE_CLEAR_SAMPLES) {
+                detector->leave_clear_count++;
+            }
+            if (detector->leave_clear_count >=
+                LAP_STOP_LEAVE_CLEAR_SAMPLES) {
+                detector->left_start_line = 1U;
+            }
+        } else {
+            detector->leave_clear_count = 0U;
+        }
+        detector->full_black_count = 0U;
+        return 0U;
+    }
+
+    /* 一圈约 614 cm，先行驶 400 cm，再允许确认返程 A 点横线。 */
     if (detector->distance_cm >= LAP_STOP_ARM_DISTANCE_CM) {
         detector->armed = 1U;
     }
@@ -53,13 +79,6 @@ uint8_t LapStopDetector_Update(LapStopDetector *detector,
         return 0U;
     }
 
-    /* 只接受连续有效的新采样，I2C 失败时的陈旧掩码不能用于停车。 */
-    if (sensor_sample_valid == 0U) {
-        detector->full_black_count = 0U;
-        return 0U;
-    }
-
-    active_count = LapStopDetector_CountActiveSensors(sensor_mask);
     if (active_count < LAP_STOP_MIN_ACTIVE_COUNT) {
         detector->full_black_count = 0U;
         return 0U;

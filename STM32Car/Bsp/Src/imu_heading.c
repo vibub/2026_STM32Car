@@ -18,8 +18,8 @@
 #define LSM6DSV16X_REG_OUT_TEMP_L       0x20U /* 温度、陀螺仪和加速度连续输出区起始地址。 */
 
 #define LSM6DSV16X_STATUS_GDA           0x02U     /* 陀螺仪新数据可用标志。 */
-#define LSM6DSV16X_CTRL1_XL_60HZ_2G     0x05U     /* 加速度计 60 Hz、±2 g 配置值。 */
-#define LSM6DSV16X_CTRL2_G_60HZ_250DPS  0x05U     /* 陀螺仪 60 Hz、±250 dps 配置值。 */
+#define LSM6DSV16X_CTRL1_XL_120HZ_2G     0x06U     /* 加速度计120 Hz、±2 g配置值。 */
+#define LSM6DSV16X_CTRL2_G_120HZ_250DPS  0x06U     /* 陀螺仪120 Hz、±250 dps配置值。 */
 #define LSM6DSV16X_CTRL3_BDU_IF_INC     0x44U     /* 开启块数据锁存和寄存器地址自动递增。 */
 #define LSM6DSV16X_ACCEL_2G_SENS_G      0.000061f /* ±2 g 量程的每 LSB 加速度，单位为 g。 */
 #define LSM6DSV16X_GYRO_250_SENS_DPS    0.00875f  /* ±250 dps 量程的每 LSB 角速度。 */
@@ -164,13 +164,13 @@ void ImuHeading_Init(void)
         return;
     }
     if (ImuHeading_WriteReg(LSM6DSV16X_REG_CTRL1,
-                            LSM6DSV16X_CTRL1_XL_60HZ_2G) == 0U) {
+                            LSM6DSV16X_CTRL1_XL_120HZ_2G) == 0U) {
         s_imu.init_step = 12U;
         ImuHeading_UpdateDebug();
         return;
     }
     if (ImuHeading_WriteReg(LSM6DSV16X_REG_CTRL2,
-                            LSM6DSV16X_CTRL2_G_60HZ_250DPS) == 0U) {
+                            LSM6DSV16X_CTRL2_G_120HZ_250DPS) == 0U) {
         s_imu.init_step = 13U;
         ImuHeading_UpdateDebug();
         return;
@@ -253,6 +253,16 @@ uint8_t ImuHeading_TakeSample(ImuMotionSample *sample)
 
     *sample = s_imu.latest_sample;
     s_imu.sample_ready = 0U;
+    return 1U;
+}
+
+uint8_t ImuHeading_GetLatestSample(ImuMotionSample *sample)
+{
+    if ((sample == 0) || (s_imu.read_count == 0U)) {
+        return 0U;
+    }
+
+    *sample = s_imu.latest_sample;
     return 1U;
 }
 

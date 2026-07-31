@@ -1152,6 +1152,12 @@
                 <file>
                     <name>$PROJ_DIR$\..\App\Src\app_main.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\App\Src\balance_debug_log.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\App\Src\dynamic_run_task.c</name>
+                </file>
             </group>
             <group>
                 <name>Bsp</name>
@@ -1169,6 +1175,9 @@
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\k230_uart.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\host_link_uart.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\tjc_uart.c</name>
@@ -1220,6 +1229,9 @@
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Protocol\Src\ball_position_protocol.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Protocol\Src\host_calibration_protocol.c</name>
                 </file>
             </group>
         </group>

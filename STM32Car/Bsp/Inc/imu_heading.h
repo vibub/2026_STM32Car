@@ -33,6 +33,7 @@ extern volatile uint32_t g_imu_last_sample_ms;
 void ImuHeading_Init(void);
 void ImuHeading_Poll(void);
 uint8_t ImuHeading_TakeSample(ImuMotionSample *sample);
+uint8_t ImuHeading_GetLatestSample(ImuMotionSample *sample);
 uint8_t ImuHeading_IsFresh(uint32_t now_ms);
 float ImuHeading_GetDegrees(void);
 uint8_t ImuHeading_IsReady(void);

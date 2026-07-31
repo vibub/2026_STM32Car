@@ -1,10 +1,11 @@
 #include "tjc_uart.h"
+#include "host_link_uart.h"
 #include "k230_uart.h"
 #include "main.h"
 
 #define TJC_UART_RX_BUFFER_SIZE 64U                            /* TJC UART 接收环形缓冲区容量。 */
 #define TJC_UART_RX_BUFFER_MASK (TJC_UART_RX_BUFFER_SIZE - 1U) /* 环形缓冲区下标回绕掩码。 */
-#define TJC_UART_TX_TIMEOUT_MS  100U                           /* 9600 波特率下最长文本帧的发送超时。 */
+#define TJC_UART_TX_TIMEOUT_MS  100U                           /* 115200 波特率下中文状态帧的发送超时。 */
 
 /**
  * @brief 淘晶驰串口屏按钮“弹起事件”需要发送的命令。
@@ -13,12 +14,15 @@
  * printh 5A A5 01 FE       进入八路红外巡线模式。
  * printh 5A A5 02 FD       启用中心平衡，中止第三题时回到 O 点并重新等待就绪。
  * printh 5A A5 03 FC       禁用钢球平衡并将舵机恢复到中位。
- * printh 5A A5 04 FB       停车且移除钢球后启动水管九点标定。
+ * printh 5A A5 04 FB       停车且移除钢球后回到 1050 us 并执行 IMU 单点水平标定。
  * printh 5A A5 05 FA       仅在中心稳定并显示“第三题已就绪”后启动往返，不自动启用平衡。
+ * printh 5A A5 06 F9       等待钢球中心稳定后启动第四题 A 到 B。
+ * printh 5A A5 07 F8       等待钢球中心稳定后启动第五题 ABCD 整圈。
  * printh 5A A5 0E F1       查询当前底盘停车或巡线模式。
  *
- * 推荐启动顺序：0x04 标定成功 -> 放球回 O 点 -> 0x02 中心平衡
- *               -> 等待“第三题已就绪” -> 0x05 启动第三题。
+ * 第三题：0x04 标定成功 -> 放球回 O 点 -> 0x02 中心平衡
+ *         -> 等待“第三题已就绪” -> 0x05 启动。
+ * 第四、五题：0x04 标定成功 -> 放球回 O 点 -> 0x06 或 0x07。
  * 注意：printh 直接发送上述四个字节，不需要追加 FF FF FF。
  */
 
@@ -137,12 +141,14 @@ void TjcUart_HandleError(UART_HandleTypeDef *huart)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+    HostLinkUart_HandleRxComplete(huart);
     K230Uart_HandleRxComplete(huart);
     TjcUart_HandleRxComplete(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    HostLinkUart_HandleError(huart);
     K230Uart_HandleError(huart);
     TjcUart_HandleError(huart);
 }

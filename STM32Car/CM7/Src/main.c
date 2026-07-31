@@ -8,6 +8,7 @@ TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim8;
 I2C_HandleTypeDef hi2c2;
 I2C_HandleTypeDef hi2c4;
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
@@ -24,6 +25,7 @@ static void MX_TIM4_Init(void);
 static void MX_TIM8_Init(void);
 static void MX_I2C4_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
 
@@ -51,15 +53,17 @@ int main(void)
     g_boot_step = 9U;
     MX_I2C2_Init();
     g_boot_step = 10U;
-    MX_USART2_UART_Init();
+    MX_USART1_UART_Init();
     g_boot_step = 11U;
-    MX_UART4_Init();
+    MX_USART2_UART_Init();
     g_boot_step = 12U;
-    App_Init();
+    MX_UART4_Init();
     g_boot_step = 13U;
+    App_Init();
+    g_boot_step = 14U;
 
     while (1) {
-        g_boot_step = 14U;
+        g_boot_step = 15U;
         App_Loop();
     }
 }
@@ -297,6 +301,35 @@ static void MX_TIM8_Init(void)
     master.MasterOutputTrigger2 = TIM_TRGO2_RESET;
     master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
     if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &master) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_USART1_UART_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_USART1;          /* 选择 USART1 外设时钟配置。 */
+    clock.Usart16ClockSelection = RCC_USART16CLKSOURCE_HSI;    /* 使用 64 MHz HSI 作为 USART1 时钟源。 */
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    huart1.Instance = HOST_DEBUG_UART_INSTANCE;                 /* 上位机调试串口使用 USART1。 */
+    huart1.Init.BaudRate = 115200U;                             /* 波特率 115200 bit/s。 */
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;                /* 8 位数据位。 */
+    huart1.Init.StopBits = UART_STOPBITS_1;                     /* 1 位停止位。 */
+    huart1.Init.Parity = UART_PARITY_NONE;                      /* 不使用奇偶校验。 */
+    huart1.Init.Mode = UART_MODE_TX_RX;                         /* 同时启用发送和接收。 */
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;                /* 不使用硬件流控。 */
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;            /* 使用 16 倍过采样。 */
+    huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;   /* 禁用单采样模式。 */
+    huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;           /* USART1 输入时钟不分频。 */
+    huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT; /* 不启用高级 UART 功能。 */
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK) {
         Error_Handler();
     }
 }
