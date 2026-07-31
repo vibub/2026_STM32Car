@@ -23,6 +23,16 @@ typedef struct {
     float pitch_rate_dps;
 } BallBalanceAttitude;
 
+typedef enum {
+    BALL_BALANCE_PHASE_WAIT_PIPE = 0,
+    BALL_BALANCE_PHASE_ACCELERATE = 1,
+    BALL_BALANCE_PHASE_RETURN_LEVEL = 2,
+    BALL_BALANCE_PHASE_COAST = 3,
+    BALL_BALANCE_PHASE_BRAKE = 4,
+    BALL_BALANCE_PHASE_SETTLE = 5,
+    BALL_BALANCE_PHASE_HOLD = 6
+} BallBalancePhase;
+
 typedef struct {
     uint8_t enabled_requested;
     uint8_t enabled;
@@ -37,6 +47,16 @@ typedef struct {
     uint8_t attitude_stable_ready;
     uint8_t imu_fault;
     uint8_t integral_active;
+    uint8_t braking_active;
+    int8_t brake_direction;
+    uint8_t outward_recovery_active;
+    uint8_t turnaround_hold_active;
+    uint8_t zero_hold_freeze_active;
+    uint8_t pipe_settled;
+    uint8_t pipe_settle_timer_ready;
+    uint8_t stationary_sample_count;
+    uint8_t kick_attempt_count;
+    uint8_t trajectory_phase;
     uint8_t feedforward_cache_valid;
     uint8_t desired_cache_valid;
     uint16_t last_sequence;
@@ -46,6 +66,9 @@ typedef struct {
     uint32_t last_attitude_ms;
     uint32_t last_attitude_timestamp_ms;
     uint32_t attitude_stable_since_ms;
+    uint32_t pipe_settle_since_ms;
+    uint32_t phase_started_ms;
+    uint32_t kick_stage_started_ms;
     float target_mm;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
@@ -60,8 +83,12 @@ typedef struct {
     float p_term_deg;
     float i_term_deg;
     float d_term_deg;
+    float brake_term_deg;
+    float phase_pitch_deg;
+    float stop_distance_mm;
     float desired_pipe_pitch_deg;
     float command_pipe_pitch_deg;
+    float pipe_command_rate_dps;
     float measured_pipe_pitch_deg;
     float measured_pipe_rate_dps;
     float pipe_pitch_error_deg;
@@ -91,6 +118,10 @@ typedef struct {
     uint8_t mapping_valid;
     uint8_t mapping_fault;
     uint8_t integral_active;
+    uint8_t braking_active;
+    uint8_t pipe_settled;
+    uint8_t kick_attempt_count;
+    uint8_t trajectory_phase;
     float target_mm;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
@@ -104,8 +135,12 @@ typedef struct {
     float p_term_deg;
     float i_term_deg;
     float d_term_deg;
+    float brake_term_deg;
+    float phase_pitch_deg;
+    float stop_distance_mm;
     float desired_pipe_pitch_deg;
     float command_pipe_pitch_deg;
+    float pipe_command_rate_dps;
     float measured_pipe_pitch_deg;
     float measured_pipe_rate_dps;
     float pipe_pitch_error_deg;

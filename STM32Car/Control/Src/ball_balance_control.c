@@ -2,6 +2,7 @@
 
 #include "linkage_kinematics.h"
 
+#include <math.h>
 #include <string.h>
 
 #define BALL_BALANCE_MIN_ANGLE_DEG               0.0f  /* 重新装配后的最小安全舵机内部角。 */
@@ -15,26 +16,55 @@
 #define BALL_BALANCE_POSITION_P_LIMIT_DEG          3.00f /* PD 调试阶段允许使用完整约 3 度倾角把端部钢球拉回。 */
 #define BALL_BALANCE_POSITION_D_LIMIT_DEG          2.00f /* 限制视觉速度尖峰造成的瞬时杆子抖动。 */
 #define BALL_BALANCE_POSITION_DEADBAND_MM          5.0f  /* PD 阶段在零点附近允许小范围静止。 */
-#define BALL_BALANCE_STOPPED_SPEED_MM_S           10.0f  /* 判定钢球基本静止的速度阈值。 */
+#define BALL_BALANCE_STOPPED_SPEED_MM_S            3.0f  /* 只有球真正接近静止才进入零点保持。 */
+#define BALL_BALANCE_BALL_MOVING_SPEED_MM_S         8.0f
+#define BALL_BALANCE_BALL_STOPPED_SPEED_MM_S        5.0f
+#define BALL_BALANCE_HOLD_ENTER_MM                  10.0f
+#define BALL_BALANCE_HOLD_EXIT_MM                   15.0f
+#define BALL_BALANCE_PASSIVE_CAPTURE_MM             18.0f
+#define BALL_BALANCE_STATIONARY_SAMPLE_COUNT         2U
+#define BALL_BALANCE_PIPE_SETTLE_ERROR_DEG            0.45f
+#define BALL_BALANCE_PIPE_SETTLE_RATE_DPS             1.00f
+#define BALL_BALANCE_PIPE_SETTLE_MS                  120U
+#define BALL_BALANCE_ACCEL_STAGE_MS                  600U
+#define BALL_BALANCE_ZERO_HOLD_FREEZE_MS             500U
+#define BALL_BALANCE_TURNAROUND_HOLD_MS              500U
+#define BALL_BALANCE_BRAKE_MIN_MS                     80U
+#define BALL_BALANCE_BRAKE_MAX_MS                    220U
+#define BALL_BALANCE_BRAKE_RELEASE_SPEED_MM_S          4.0f
+#define BALL_BALANCE_ACCEL_PITCH_MIN_DEG              0.75f
+#define BALL_BALANCE_ACCEL_POSITION_GAIN_DEG_PER_MM   0.012f
+#define BALL_BALANCE_KICK_ATTEMPT_STEP_DEG              0.20f
+#define BALL_BALANCE_KICK_MAX_PITCH_DEG                 3.00f
+#define BALL_BALANCE_AWAY_MIN_PITCH_DEG                0.45f
+#define BALL_BALANCE_AWAY_POSITION_GAIN_DEG_PER_MM     0.014f
+#define BALL_BALANCE_AWAY_SPEED_GAIN_DEG_PER_MM_S      0.003f
+#define BALL_BALANCE_AWAY_MAX_PITCH_DEG                2.00f
+#define BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S       12.0f
+#define BALL_BALANCE_RETURN_BRAKE_MAX_PITCH_DEG          1.10f
+#define BALL_BALANCE_RETURN_BRAKE_FULL_SPEED_MM_S      150.0f
+#define BALL_BALANCE_BRAKE_ACCEL_PER_DEG_MM_S2         70.0f
+#define BALL_BALANCE_BRAKE_VISION_GUARD_S               0.55f
+#define BALL_BALANCE_BRAKE_POSITION_MARGIN_MM           10.0f
 #define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 积分最大只补偿 0.8 度。 */
 #define BALL_BALANCE_STICTION_INTEGRAL_BOOST       3.0f  /* 钢球静止时加快积分以突破静摩擦。 */
 #define BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S    0.80f /* 钢球运动后泄放积分以降低过冲。 */
 #define BALL_BALANCE_GAIN_EPSILON                  0.000001f
-#define BALL_BALANCE_PIPE_KP                       1.00f  /* IMU 内环优先把水管拉向目标俯仰角。 */
-#define BALL_BALANCE_PIPE_KD_S                     0.120f /* 加强 IMU 角速度阻尼，抑制杆子自身振动。 */
+#define BALL_BALANCE_PIPE_KP                       0.35f
+#define BALL_BALANCE_PIPE_KD_S                     0.080f
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
-#define BALL_BALANCE_DATA_TIMEOUT_MS            200U    /* 无合格视觉数据后目标回水平的超时时间。 */
+#define BALL_BALANCE_DATA_TIMEOUT_MS            350U    /* 兼容 K230 约 5 FPS 及偶发一帧抖动，避免误判为新球。 */
 #define BALL_BALANCE_ATTITUDE_TIMEOUT_MS        100U    /* IMU 姿态数据超时时间。 */
-#define BALL_BALANCE_ATTITUDE_STABLE_MS         500U    /* 启用或故障恢复所需的连续稳定时间。 */
-#define BALL_BALANCE_ENABLE_PITCH_LIMIT_DEG       1.0f  /* 启用前允许的最大水平角误差。 */
-#define BALL_BALANCE_ENABLE_RATE_LIMIT_DPS        3.0f  /* 启用前允许的最大俯仰角速度。 */
+#define BALL_BALANCE_ATTITUDE_STABLE_MS         150U    /* 启用前只确认短时间稳定，避免点击后反应迟钝。 */
+#define BALL_BALANCE_ENABLE_PITCH_LIMIT_DEG       0.60f
+#define BALL_BALANCE_ENABLE_RATE_LIMIT_DPS        1.00f
 #define BALL_BALANCE_TARGET_LIMIT_MM            100.0f  /* 可设置钢球目标位置的绝对上限。 */
 #define BALL_BALANCE_POSITION_LIMIT_MM          130.0f  /* 合法钢球测量位置的绝对上限。 */
-#define BALL_BALANCE_PIPE_SLEW_DEG_S             30.0f  /* 远离零点或快速运动时的目标俯仰变化率。 */
-#define BALL_BALANCE_PIPE_NEAR_SLEW_DEG_S         8.0f  /* 近零低速时减慢杆子动作，避免视觉噪声激振。 */
-#define BALL_BALANCE_PIPE_FAST_ERROR_MM          15.0f  /* 超过该位置误差时使用快速俯仰变化率。 */
-#define BALL_BALANCE_PIPE_FAST_SPEED_MM_S        25.0f  /* 超过该球速时允许快速反向制动。 */
-#define BALL_BALANCE_SERVO_SLEW_DEG_S           180.0f  /* 允许舵机及时跟随 PD 的反向制动命令。 */
+#define BALL_BALANCE_PIPE_PROFILE_MAX_RATE_DPS    12.0f
+#define BALL_BALANCE_PIPE_PROFILE_ACCEL_DPS2      60.0f
+#define BALL_BALANCE_PIPE_BRAKE_MAX_RATE_DPS      20.0f
+#define BALL_BALANCE_PIPE_BRAKE_ACCEL_DPS2       120.0f
+#define BALL_BALANCE_SERVO_SLEW_DEG_S            180.0f
 #define BALL_BALANCE_DT_MIN_S                     0.010f /* 视觉测量 dt 的最小值。 */
 #define BALL_BALANCE_DT_MAX_S                     0.100f /* 视觉测量和任务 dt 的最大值。 */
 #define BALL_BALANCE_MEASUREMENT_DT_MAX_S         0.250f /* 兼容 K230 约 5~6 FPS 的真实帧间隔。 */
@@ -42,12 +72,16 @@
 #define BALL_BALANCE_VELOCITY_FILTER_TAU_S        0.120f /* 平滑速度同时保留低帧率下的制动响应。 */
 #define BALL_BALANCE_VISION_LOOKAHEAD_S            0.25f /* 补偿 K230 推理和串口位置数据的固有延迟。 */
 #define BALL_BALANCE_PREDICTION_MAX_S              0.45f /* 限制丢帧时的位置外推时间。 */
-#define BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2     100.0f /* 钢球加速度模型，正俯仰使 K230 位置向负向加速。 */
+#define BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2     100.0f /* 实机方向：正俯仰使 K230 位置向正向加速。 */
 #define BALL_BALANCE_MODEL_SCALE_MIN               0.35f  /* 柔性水管可接受模型校正比例的最小值。 */
 #define BALL_BALANCE_MODEL_SCALE_MAX               1.25f  /* 可接受模型校正比例的最大值。 */
 #define BALL_BALANCE_MODEL_OFFSET_MAX_DEG           0.75f  /* 可接受模型校正零偏的最大绝对值。 */
 #define BALL_BALANCE_CACHE_EPSILON_DEG              0.0001f /* 复用运动学缓存允许的输入误差。 */
 #define BALL_BALANCE_MAPPING_MIN_STEP_DEG             0.05f /* 九点实测映射允许的最小单调角度差。 */
+
+static uint8_t BallBalanceControl_AttitudeIsFresh(
+    const BallBalanceControl *control,
+    uint32_t now_ms);
 
 static float BallBalanceControl_Abs(float value)
 {
@@ -95,6 +129,66 @@ static float BallBalanceControl_Approach(float value,
     return target;
 }
 
+static void BallBalanceControl_UpdatePipeProfile(
+    BallBalanceControl *control,
+    float task_dt_s)
+{
+    float distance_deg;
+    float target_rate_dps;
+    float maximum_rate_change_dps;
+    float profile_accel_dps2;
+    float profile_max_rate_dps;
+    float next_pitch_deg;
+
+    if (task_dt_s <= 0.0f) {
+        return;
+    }
+    distance_deg = control->desired_pipe_pitch_deg -
+                   control->command_pipe_pitch_deg;
+    if ((control->trajectory_phase == BALL_BALANCE_PHASE_BRAKE) ||
+        (control->trajectory_phase == BALL_BALANCE_PHASE_RETURN_LEVEL)) {
+        profile_accel_dps2 = BALL_BALANCE_PIPE_BRAKE_ACCEL_DPS2;
+        profile_max_rate_dps = BALL_BALANCE_PIPE_BRAKE_MAX_RATE_DPS;
+    } else {
+        profile_accel_dps2 = BALL_BALANCE_PIPE_PROFILE_ACCEL_DPS2;
+        profile_max_rate_dps = BALL_BALANCE_PIPE_PROFILE_MAX_RATE_DPS;
+    }
+    if ((BallBalanceControl_Abs(distance_deg) <= 0.002f) &&
+        (BallBalanceControl_Abs(control->pipe_command_rate_dps) <= 0.02f)) {
+        control->command_pipe_pitch_deg = control->desired_pipe_pitch_deg;
+        control->pipe_command_rate_dps = 0.0f;
+        return;
+    }
+
+    target_rate_dps = sqrtf(
+        2.0f * profile_accel_dps2 *
+        BallBalanceControl_Abs(distance_deg));
+    target_rate_dps = BallBalanceControl_Limit(
+        target_rate_dps,
+        0.0f,
+        profile_max_rate_dps);
+    if (distance_deg < 0.0f) {
+        target_rate_dps = -target_rate_dps;
+    }
+    maximum_rate_change_dps =
+        profile_accel_dps2 * task_dt_s;
+    control->pipe_command_rate_dps = BallBalanceControl_Approach(
+        control->pipe_command_rate_dps,
+        target_rate_dps,
+        maximum_rate_change_dps);
+    next_pitch_deg = control->command_pipe_pitch_deg +
+                     control->pipe_command_rate_dps * task_dt_s;
+    if (((distance_deg >= 0.0f) &&
+         (next_pitch_deg >= control->desired_pipe_pitch_deg)) ||
+        ((distance_deg < 0.0f) &&
+         (next_pitch_deg <= control->desired_pipe_pitch_deg))) {
+        next_pitch_deg = control->desired_pipe_pitch_deg;
+        control->pipe_command_rate_dps = 0.0f;
+    }
+    control->command_pipe_pitch_deg = BallBalanceControl_LimitActualPitch(
+        control, next_pitch_deg);
+}
+
 static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
                                                 uint8_t clear_sequence)
 {
@@ -102,11 +196,24 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
     control->timed_out = 0U;
     control->filter_ready = 0U;
     control->integral_active = 0U;
+    control->braking_active = 0U;
+    control->brake_direction = 0;
+    control->outward_recovery_active = 0U;
+    control->turnaround_hold_active = 0U;
+    control->zero_hold_freeze_active = 0U;
+    control->pipe_settled = 0U;
+    control->pipe_settle_timer_ready = 0U;
+    control->stationary_sample_count = 0U;
+    control->kick_attempt_count = 0U;
+    control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
     if (clear_sequence != 0U) {
         control->sequence_ready = 0U;
         control->last_sequence = 0U;
     }
     control->last_valid_ms = 0U;
+    control->pipe_settle_since_ms = 0U;
+    control->phase_started_ms = 0U;
+    control->kick_stage_started_ms = 0U;
     control->last_measurement_dt_s = 0.0f;
     control->filtered_position_mm = 0.0f;
     control->predicted_position_mm = 0.0f;
@@ -117,7 +224,11 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
     control->p_term_deg = 0.0f;
     control->i_term_deg = 0.0f;
     control->d_term_deg = 0.0f;
+    control->brake_term_deg = 0.0f;
+    control->phase_pitch_deg = 0.0f;
+    control->stop_distance_mm = 0.0f;
     control->desired_pipe_pitch_deg = 0.0f;
+    control->pipe_command_rate_dps = 0.0f;
 }
 
 static void BallBalanceControl_InvalidateMapping(BallBalanceControl *control)
@@ -257,7 +368,7 @@ static void BallBalanceControl_UpdatePrediction(BallBalanceControl *control,
         effective_pipe_pitch_deg = BallBalanceControl_LimitActualPitch(
             control, effective_pipe_pitch_deg);
         control->predicted_accel_mm_s2 =
-            -BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2 *
+            BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2 *
             effective_pipe_pitch_deg;
     } else {
         control->predicted_accel_mm_s2 = 0.0f;
@@ -271,110 +382,561 @@ static void BallBalanceControl_UpdatePrediction(BallBalanceControl *control,
         BALL_BALANCE_POSITION_LIMIT_MM);
 }
 
-static void BallBalanceControl_CalculateOuterTarget(
-    BallBalanceControl *control,
-    float measurement_dt_s,
-    uint8_t allow_integral)
+static void BallBalanceControl_EnterPhase(BallBalanceControl *control,
+                                          BallBalancePhase phase,
+                                          uint32_t now_ms,
+                                          float pitch_deg)
 {
-    float candidate_integral = control->integral_mm_s;
-    float candidate_i_term;
-    float candidate_pitch;
-    float integral_direction;
-    float integral_limit_mm_s;
-    float integral_leak_factor;
-    float minimum_pitch;
-    float maximum_pitch;
-    float position_error_abs;
-    float velocity_abs;
+    pitch_deg = BallBalanceControl_LimitActualPitch(control, pitch_deg);
+    if (BallBalanceControl_Abs(control->desired_pipe_pitch_deg - pitch_deg) >
+        BALL_BALANCE_CACHE_EPSILON_DEG) {
+        control->pipe_settled = 0U;
+        control->pipe_settle_timer_ready = 0U;
+    }
+    control->trajectory_phase = (uint8_t) phase;
+    control->outward_recovery_active = 0U;
+    control->turnaround_hold_active = 0U;
+    control->zero_hold_freeze_active = 0U;
+    control->phase_started_ms = now_ms;
+    if (phase == BALL_BALANCE_PHASE_ACCELERATE) {
+        control->kick_stage_started_ms = now_ms;
+    }
+    control->phase_pitch_deg = pitch_deg;
+    control->desired_pipe_pitch_deg = pitch_deg;
+    control->stationary_sample_count = 0U;
+    control->braking_active =
+        (uint8_t) (phase == BALL_BALANCE_PHASE_BRAKE);
+    control->brake_direction =
+        (phase == BALL_BALANCE_PHASE_BRAKE) ?
+        ((pitch_deg >= 0.0f) ? 1 : -1) : 0;
+    control->brake_term_deg =
+        (phase == BALL_BALANCE_PHASE_BRAKE) ? pitch_deg : 0.0f;
+}
 
-    minimum_pitch = control->minimum_pipe_pitch_deg;
-    maximum_pitch = control->maximum_pipe_pitch_deg;
+static void BallBalanceControl_EnterZeroHoldFreeze(
+    BallBalanceControl *control,
+    uint32_t now_ms)
+{
+    BallBalanceControl_EnterPhase(
+        control,
+        BALL_BALANCE_PHASE_HOLD,
+        now_ms,
+        control->command_pipe_pitch_deg);
+    control->zero_hold_freeze_active = 1U;
+    control->pipe_command_rate_dps = 0.0f;
+}
 
-    /* 实机曲柄摇杆机构验证：K230 正位置必须对应正俯仰命令。
-     * P、I 与速度阻尼必须使用同一方向，避免越过零点后继续向外推。 */
-    control->error_mm = control->predicted_position_mm - control->target_mm;
-    position_error_abs = BallBalanceControl_Abs(control->error_mm);
-    velocity_abs = BallBalanceControl_Abs(control->velocity_mm_s);
-    control->p_term_deg = BallBalanceControl_Limit(
-        control->position_kp_deg_per_mm * control->error_mm,
-        -BALL_BALANCE_POSITION_P_LIMIT_DEG,
-        BALL_BALANCE_POSITION_P_LIMIT_DEG);
-    control->d_term_deg = BallBalanceControl_Limit(
-        control->position_kd_deg_per_mm_s * control->velocity_mm_s,
-        -BALL_BALANCE_POSITION_D_LIMIT_DEG,
-        BALL_BALANCE_POSITION_D_LIMIT_DEG);
+static float BallBalanceControl_SelectAccelerationPitch(
+    float error_mm,
+    uint8_t kick_attempt_count)
+{
+    float magnitude = BallBalanceControl_Abs(error_mm);
+    float pitch_deg = BALL_BALANCE_ACCEL_PITCH_MIN_DEG +
+        BALL_BALANCE_ACCEL_POSITION_GAIN_DEG_PER_MM * magnitude;
 
-    /* 钢球已经停在目标附近时保持水平，避免静摩擦补偿在零点附近来回触发。
-     * 仍在穿越目标时保留速度项制动，不能仅凭位置进入死区。 */
-    if ((position_error_abs <= BALL_BALANCE_POSITION_DEADBAND_MM) &&
-        (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S)) {
-        control->integral_mm_s = 0.0f;
-        control->integral_active = 0U;
-        control->p_term_deg = 0.0f;
-        control->i_term_deg = 0.0f;
-        control->d_term_deg = 0.0f;
-        control->desired_pipe_pitch_deg = 0.0f;
+    pitch_deg += BALL_BALANCE_KICK_ATTEMPT_STEP_DEG *
+                 (float) kick_attempt_count;
+    pitch_deg = BallBalanceControl_Limit(
+        pitch_deg, 0.0f, BALL_BALANCE_KICK_MAX_PITCH_DEG);
+    return (error_mm >= 0.0f) ? -pitch_deg : pitch_deg;
+}
+
+static void BallBalanceControl_EnterStationaryAcceleration(
+    BallBalanceControl *control,
+    uint32_t now_ms)
+{
+    BallBalanceControl_EnterPhase(
+        control,
+        BALL_BALANCE_PHASE_ACCELERATE,
+        now_ms,
+        BallBalanceControl_SelectAccelerationPitch(
+            control->error_mm, control->kick_attempt_count));
+    /* The transition into this helper is already based on two consecutive
+     * stopped K230 frames.  Preserve that evidence for staged breakaway. */
+    control->stationary_sample_count =
+        BALL_BALANCE_STATIONARY_SAMPLE_COUNT;
+}
+
+static float BallBalanceControl_SelectAwayRecoveryPitch(
+    float error_mm,
+    float velocity_mm_s)
+{
+    float pitch_deg = BALL_BALANCE_AWAY_MIN_PITCH_DEG +
+        BALL_BALANCE_AWAY_POSITION_GAIN_DEG_PER_MM *
+        BallBalanceControl_Abs(error_mm) +
+        BALL_BALANCE_AWAY_SPEED_GAIN_DEG_PER_MM_S *
+        BallBalanceControl_Abs(velocity_mm_s);
+
+    pitch_deg = BallBalanceControl_Limit(
+        pitch_deg,
+        BALL_BALANCE_AWAY_MIN_PITCH_DEG,
+        BALL_BALANCE_AWAY_MAX_PITCH_DEG);
+    return (error_mm >= 0.0f) ? -pitch_deg : pitch_deg;
+}
+
+static void BallBalanceControl_EnterTurnaroundHold(
+    BallBalanceControl *control,
+    uint32_t now_ms)
+{
+    /* Freeze the pipe exactly where it is at the side turning point.  This
+     * prevents either an extra lift or a return-level movement while ball
+     * speed is close to zero. */
+    BallBalanceControl_EnterPhase(
+        control,
+        BALL_BALANCE_PHASE_ACCELERATE,
+        now_ms,
+        control->command_pipe_pitch_deg);
+    control->turnaround_hold_active = 1U;
+    control->pipe_command_rate_dps = 0.0f;
+}
+
+static void BallBalanceControl_EnterOutwardRecovery(
+    BallBalanceControl *control,
+    uint32_t now_ms)
+{
+    if (BallBalanceControl_Abs(control->velocity_mm_s) <=
+        BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S) {
+        BallBalanceControl_EnterTurnaroundHold(control, now_ms);
         return;
     }
+    BallBalanceControl_EnterPhase(
+        control,
+        BALL_BALANCE_PHASE_ACCELERATE,
+        now_ms,
+        BallBalanceControl_SelectAwayRecoveryPitch(
+            control->error_mm, control->velocity_mm_s));
+    control->outward_recovery_active = 1U;
+}
 
+static float BallBalanceControl_SelectReturnBrakePitch(float velocity_mm_s)
+{
+    float velocity_abs = BallBalanceControl_Abs(velocity_mm_s);
+    float speed_scale = BallBalanceControl_Limit(
+        (velocity_abs - BALL_BALANCE_BRAKE_RELEASE_SPEED_MM_S) /
+        (BALL_BALANCE_RETURN_BRAKE_FULL_SPEED_MM_S -
+         BALL_BALANCE_BRAKE_RELEASE_SPEED_MM_S),
+        0.0f,
+        1.0f);
+    float pitch_deg = BALL_BALANCE_RETURN_BRAKE_MAX_PITCH_DEG * speed_scale;
+
+    /* Returning-to-zero braking is deliberately position independent.  It
+     * fades to level with speed and only reaches full strength when fast. */
+    return (velocity_mm_s >= 0.0f) ? -pitch_deg : pitch_deg;
+}
+
+static uint8_t BallBalanceControl_BrakeIsDue(
+    BallBalanceControl *control,
+    float error_abs,
+    float velocity_mm_s,
+    float *brake_pitch_deg)
+{
+    float velocity_abs;
+    float braking_accel_mm_s2;
+    float remaining_distance_mm;
+
+    velocity_abs = BallBalanceControl_Abs(velocity_mm_s);
+    if (velocity_abs < BALL_BALANCE_BALL_MOVING_SPEED_MM_S) {
+        control->stop_distance_mm = 0.0f;
+        return 0U;
+    }
+
+    *brake_pitch_deg = BallBalanceControl_SelectReturnBrakePitch(
+        velocity_mm_s);
+    braking_accel_mm_s2 = BALL_BALANCE_BRAKE_ACCEL_PER_DEG_MM_S2 *
+                          BallBalanceControl_Abs(*brake_pitch_deg);
+    control->stop_distance_mm =
+        velocity_abs * velocity_abs / (2.0f * braking_accel_mm_s2) +
+        velocity_abs * BALL_BALANCE_BRAKE_VISION_GUARD_S;
+    remaining_distance_mm = error_abs -
+                            BALL_BALANCE_BRAKE_POSITION_MARGIN_MM;
+    if (remaining_distance_mm < 0.0f) {
+        remaining_distance_mm = 0.0f;
+    }
+    return (uint8_t) (control->stop_distance_mm >= remaining_distance_mm);
+}
+
+static void BallBalanceControl_UpdatePipeSettled(BallBalanceControl *control,
+                                                 uint32_t now_ms)
+{
+    uint8_t stable;
+
+    stable = (uint8_t) (
+        (BallBalanceControl_AttitudeIsFresh(control, now_ms) != 0U) &&
+        (BallBalanceControl_Abs(control->command_pipe_pitch_deg -
+                                control->measured_pipe_pitch_deg) <=
+         BALL_BALANCE_PIPE_SETTLE_ERROR_DEG) &&
+        (BallBalanceControl_Abs(control->measured_pipe_rate_dps) <=
+         BALL_BALANCE_PIPE_SETTLE_RATE_DPS));
+    if (stable == 0U) {
+        control->pipe_settled = 0U;
+        control->pipe_settle_timer_ready = 0U;
+        return;
+    }
+    if (control->pipe_settle_timer_ready == 0U) {
+        control->pipe_settle_timer_ready = 1U;
+        control->pipe_settle_since_ms = now_ms;
+        return;
+    }
+    if ((uint32_t) (now_ms - control->pipe_settle_since_ms) >=
+        BALL_BALANCE_PIPE_SETTLE_MS) {
+        control->pipe_settled = 1U;
+    }
+}
+
+static void BallBalanceControl_UpdateTrajectory(
+    BallBalanceControl *control,
+    uint32_t now_ms,
+    uint8_t measurement_accepted)
+{
+    uint32_t phase_elapsed_ms;
+    uint32_t kick_stage_elapsed_ms;
+    float error_abs;
+    float velocity_abs;
+    float brake_pitch_deg;
+    float candidate_pitch_deg;
+    uint8_t moving_away_from_target;
+    uint8_t moving_toward_target;
+
+    control->error_mm = control->filtered_position_mm - control->target_mm;
+    error_abs = BallBalanceControl_Abs(control->error_mm);
+    velocity_abs = BallBalanceControl_Abs(control->velocity_mm_s);
+    moving_toward_target =
+        (uint8_t) ((control->error_mm * control->velocity_mm_s) < 0.0f);
+    moving_away_from_target =
+        (uint8_t) ((control->error_mm * control->velocity_mm_s) > 0.0f);
+    phase_elapsed_ms = (uint32_t) (now_ms - control->phase_started_ms);
+    kick_stage_elapsed_ms =
+        (uint32_t) (now_ms - control->kick_stage_started_ms);
+
+    /* The position PID is intentionally inactive in trajectory mode. */
+    control->integral_mm_s = 0.0f;
     control->integral_active = 0U;
-    if (control->position_ki_deg_per_mm_s <=
-        BALL_BALANCE_GAIN_EPSILON) {
-        control->integral_mm_s = 0.0f;
-        candidate_integral = 0.0f;
-    } else if (allow_integral != 0U) {
-        /* A direction reversal invalidates the stored breakaway effort. */
-        if ((control->integral_mm_s * control->error_mm) < 0.0f) {
-            control->integral_mm_s = 0.0f;
-        }
+    control->p_term_deg = 0.0f;
+    control->i_term_deg = 0.0f;
+    control->d_term_deg = 0.0f;
 
-        if (velocity_abs <= BALL_BALANCE_STOPPED_SPEED_MM_S) {
-            candidate_integral = control->integral_mm_s +
-                control->error_mm * measurement_dt_s *
-                BALL_BALANCE_STICTION_INTEGRAL_BOOST;
-            control->integral_active = 1U;
-        } else {
-            integral_leak_factor =
-                BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S /
-                (BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S +
-                 measurement_dt_s);
-            candidate_integral = control->integral_mm_s *
-                                 integral_leak_factor;
-        }
+    switch ((BallBalancePhase) control->trajectory_phase) {
+        case BALL_BALANCE_PHASE_WAIT_PIPE:
+            control->desired_pipe_pitch_deg = 0.0f;
+            if ((control->pipe_settled == 0U) ||
+                (measurement_accepted == 0U)) {
+                break;
+            }
+            /* The first valid frame initializes position only.  Use the next
+             * frame to distinguish a freely rolling ball from stiction. */
+            if (control->last_measurement_dt_s <= 0.0f) {
+                break;
+            }
+            if ((error_abs <= BALL_BALANCE_HOLD_ENTER_MM) &&
+                (velocity_abs <= BALL_BALANCE_BALL_STOPPED_SPEED_MM_S)) {
+                BallBalanceControl_EnterZeroHoldFreeze(control, now_ms);
+            } else if ((moving_toward_target != 0U) &&
+                       (velocity_abs >
+                        BALL_BALANCE_BALL_STOPPED_SPEED_MM_S)) {
+                if (BallBalanceControl_BrakeIsDue(
+                        control,
+                        error_abs,
+                        control->velocity_mm_s,
+                        &brake_pitch_deg) != 0U) {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_BRAKE,
+                        now_ms,
+                        brake_pitch_deg);
+                } else {
+                    BallBalanceControl_EnterPhase(
+                        control, BALL_BALANCE_PHASE_COAST, now_ms, 0.0f);
+                }
+            } else if ((moving_away_from_target != 0U) &&
+                       (velocity_abs >
+                        BALL_BALANCE_BALL_STOPPED_SPEED_MM_S)) {
+                BallBalanceControl_EnterOutwardRecovery(control, now_ms);
+            } else {
+                control->kick_attempt_count = 0U;
+                BallBalanceControl_EnterStationaryAcceleration(
+                    control, now_ms);
+            }
+            break;
 
-        integral_limit_mm_s = BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG /
-                              control->position_ki_deg_per_mm_s;
-        candidate_integral = BallBalanceControl_Limit(
-            candidate_integral,
-            -integral_limit_mm_s,
-            integral_limit_mm_s);
+        case BALL_BALANCE_PHASE_ACCELERATE:
+            if (control->turnaround_hold_active != 0U) {
+                control->desired_pipe_pitch_deg = control->phase_pitch_deg;
+                control->pipe_command_rate_dps = 0.0f;
+                if ((measurement_accepted != 0U) &&
+                    (moving_toward_target != 0U) &&
+                    (velocity_abs >=
+                     BALL_BALANCE_BALL_STOPPED_SPEED_MM_S)) {
+                    control->kick_attempt_count = 0U;
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_RETURN_LEVEL,
+                        now_ms,
+                        0.0f);
+                } else if (phase_elapsed_ms >=
+                           BALL_BALANCE_TURNAROUND_HOLD_MS) {
+                    /* A side-turn freeze is only a short no-motion window.
+                     * Resume normal two-frame stop classification after it. */
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_ACCELERATE,
+                        now_ms,
+                        control->phase_pitch_deg);
+                    control->pipe_command_rate_dps = 0.0f;
+                }
+                break;
+            }
+            /* At an outward turning point, freeze the pipe before the ball
+             * reaches zero speed.  Do not move it or raise a stiction stage
+             * until the measured ball direction has turned inward. */
+            if ((measurement_accepted != 0U) &&
+                (control->outward_recovery_active != 0U) &&
+                (velocity_abs <=
+                 BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S)) {
+                BallBalanceControl_EnterTurnaroundHold(control, now_ms);
+                break;
+            }
+            if (measurement_accepted != 0U) {
+                if (velocity_abs <=
+                    BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
+                    if (control->stationary_sample_count < 0xFFU) {
+                        control->stationary_sample_count++;
+                    }
+                } else {
+                    control->stationary_sample_count = 0U;
+                }
+            }
+            /* Raise exactly one level only after a fresh vision frame still
+             * confirms that the ball is stationary.  Hold each level for a
+             * full interval; never catch up several levels at once. */
+            if ((measurement_accepted != 0U) &&
+                (control->stationary_sample_count >=
+                 BALL_BALANCE_STATIONARY_SAMPLE_COUNT) &&
+                (control->kick_attempt_count < 0xFFU) &&
+                (kick_stage_elapsed_ms >= BALL_BALANCE_ACCEL_STAGE_MS)) {
+                control->kick_attempt_count++;
+                control->kick_stage_started_ms = now_ms;
+                kick_stage_elapsed_ms = 0U;
+                candidate_pitch_deg =
+                    BallBalanceControl_SelectAccelerationPitch(
+                        control->error_mm,
+                        control->kick_attempt_count);
+                if (BallBalanceControl_Abs(candidate_pitch_deg) >
+                    BallBalanceControl_Abs(control->phase_pitch_deg)) {
+                    control->phase_pitch_deg = candidate_pitch_deg;
+                }
+            }
+            if ((measurement_accepted != 0U) &&
+                (moving_away_from_target != 0U) &&
+                (velocity_abs >
+                 BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S)) {
+                candidate_pitch_deg =
+                    BallBalanceControl_SelectAwayRecoveryPitch(
+                        control->error_mm,
+                        control->velocity_mm_s);
+                control->phase_pitch_deg = candidate_pitch_deg;
+                control->outward_recovery_active = 1U;
+            }
+            control->desired_pipe_pitch_deg = control->phase_pitch_deg;
+            if ((measurement_accepted != 0U) &&
+                (((moving_toward_target != 0U) &&
+                  (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) ||
+                 (error_abs <= BALL_BALANCE_HOLD_ENTER_MM))) {
+                control->kick_attempt_count = 0U;
+                if ((moving_toward_target != 0U) &&
+                    (BallBalanceControl_BrakeIsDue(
+                         control,
+                         error_abs,
+                         control->velocity_mm_s,
+                         &brake_pitch_deg) != 0U)) {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_BRAKE,
+                        now_ms,
+                        brake_pitch_deg);
+                } else {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_RETURN_LEVEL,
+                        now_ms,
+                        0.0f);
+                }
+            }
+            break;
+
+        case BALL_BALANCE_PHASE_RETURN_LEVEL:
+            control->desired_pipe_pitch_deg = 0.0f;
+            if ((measurement_accepted != 0U) &&
+                (moving_away_from_target != 0U) &&
+                (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) {
+                BallBalanceControl_EnterOutwardRecovery(control, now_ms);
+                break;
+            }
+            if (control->pipe_settled != 0U) {
+                BallBalanceControl_EnterPhase(
+                    control, BALL_BALANCE_PHASE_COAST, now_ms, 0.0f);
+            }
+            break;
+
+        case BALL_BALANCE_PHASE_COAST:
+            control->desired_pipe_pitch_deg = 0.0f;
+            if (measurement_accepted == 0U) {
+                break;
+            }
+            if ((moving_away_from_target != 0U) &&
+                (velocity_abs > BALL_BALANCE_BALL_STOPPED_SPEED_MM_S)) {
+                BallBalanceControl_EnterOutwardRecovery(control, now_ms);
+                break;
+            }
+            if ((moving_toward_target != 0U) &&
+                (BallBalanceControl_BrakeIsDue(
+                     control,
+                     error_abs,
+                     control->velocity_mm_s,
+                     &brake_pitch_deg) != 0U)) {
+                BallBalanceControl_EnterPhase(
+                    control,
+                    BALL_BALANCE_PHASE_BRAKE,
+                    now_ms,
+                    brake_pitch_deg);
+            } else if (velocity_abs <=
+                       BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
+                BallBalanceControl_EnterPhase(
+                    control, BALL_BALANCE_PHASE_SETTLE, now_ms, 0.0f);
+            }
+            break;
+
+        case BALL_BALANCE_PHASE_BRAKE:
+            if (((measurement_accepted != 0U) &&
+                 (phase_elapsed_ms >= BALL_BALANCE_BRAKE_MIN_MS) &&
+                 ((velocity_abs <= BALL_BALANCE_BRAKE_RELEASE_SPEED_MM_S) ||
+                  ((control->velocity_mm_s *
+                    (float) control->brake_direction) > 0.0f))) ||
+                (phase_elapsed_ms >= BALL_BALANCE_BRAKE_MAX_MS)) {
+                BallBalanceControl_EnterPhase(
+                    control, BALL_BALANCE_PHASE_SETTLE, now_ms, 0.0f);
+                break;
+            }
+            if (measurement_accepted != 0U) {
+                candidate_pitch_deg = BallBalanceControl_Abs(
+                    BallBalanceControl_SelectReturnBrakePitch(
+                        control->velocity_mm_s));
+                control->phase_pitch_deg =
+                    (float) control->brake_direction * candidate_pitch_deg;
+                control->brake_term_deg = control->phase_pitch_deg;
+            }
+            control->desired_pipe_pitch_deg = control->phase_pitch_deg;
+            break;
+
+        case BALL_BALANCE_PHASE_SETTLE:
+            control->desired_pipe_pitch_deg = 0.0f;
+            if ((control->pipe_settled == 0U) ||
+                (measurement_accepted == 0U)) {
+                break;
+            }
+            if ((moving_away_from_target != 0U) &&
+                (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) {
+                BallBalanceControl_EnterOutwardRecovery(control, now_ms);
+                break;
+            }
+            if ((moving_toward_target != 0U) &&
+                (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) {
+                if (BallBalanceControl_BrakeIsDue(
+                        control,
+                        error_abs,
+                        control->velocity_mm_s,
+                        &brake_pitch_deg) != 0U) {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_BRAKE,
+                        now_ms,
+                        brake_pitch_deg);
+                } else {
+                    BallBalanceControl_EnterPhase(
+                        control, BALL_BALANCE_PHASE_COAST, now_ms, 0.0f);
+                }
+                break;
+            }
+            if (velocity_abs > BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
+                control->stationary_sample_count = 0U;
+                break;
+            }
+            if (control->stationary_sample_count < 0xFFU) {
+                control->stationary_sample_count++;
+            }
+            if (control->stationary_sample_count >=
+                BALL_BALANCE_STATIONARY_SAMPLE_COUNT) {
+                if (error_abs <= BALL_BALANCE_HOLD_ENTER_MM) {
+                    control->kick_attempt_count = 0U;
+                    BallBalanceControl_EnterZeroHoldFreeze(control, now_ms);
+                } else {
+                    BallBalanceControl_EnterStationaryAcceleration(
+                        control, now_ms);
+                }
+            }
+            break;
+
+        case BALL_BALANCE_PHASE_HOLD:
+        default:
+            if (control->zero_hold_freeze_active != 0U) {
+                control->desired_pipe_pitch_deg = control->phase_pitch_deg;
+                control->pipe_command_rate_dps = 0.0f;
+                if (phase_elapsed_ms >= BALL_BALANCE_ZERO_HOLD_FREEZE_MS) {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_HOLD,
+                        now_ms,
+                        0.0f);
+                }
+                break;
+            }
+            control->desired_pipe_pitch_deg = 0.0f;
+            control->kick_attempt_count = 0U;
+            if ((control->pipe_settled == 0U) ||
+                (measurement_accepted == 0U)) {
+                break;
+            }
+            if ((moving_away_from_target != 0U) &&
+                (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) {
+                BallBalanceControl_EnterOutwardRecovery(control, now_ms);
+                break;
+            }
+            if ((moving_toward_target != 0U) &&
+                (velocity_abs >= BALL_BALANCE_BALL_MOVING_SPEED_MM_S)) {
+                if (BallBalanceControl_BrakeIsDue(
+                        control,
+                        error_abs,
+                        control->velocity_mm_s,
+                        &brake_pitch_deg) != 0U) {
+                    BallBalanceControl_EnterPhase(
+                        control,
+                        BALL_BALANCE_PHASE_BRAKE,
+                        now_ms,
+                        brake_pitch_deg);
+                } else {
+                    BallBalanceControl_EnterPhase(
+                        control, BALL_BALANCE_PHASE_COAST, now_ms, 0.0f);
+                }
+                break;
+            }
+            if (velocity_abs > BALL_BALANCE_BALL_STOPPED_SPEED_MM_S) {
+                BallBalanceControl_EnterPhase(
+                    control, BALL_BALANCE_PHASE_SETTLE, now_ms, 0.0f);
+                break;
+            }
+            if (error_abs >= BALL_BALANCE_HOLD_EXIT_MM) {
+                if (control->stationary_sample_count < 0xFFU) {
+                    control->stationary_sample_count++;
+                }
+            } else {
+                control->stationary_sample_count = 0U;
+            }
+            if (control->stationary_sample_count >=
+                BALL_BALANCE_STATIONARY_SAMPLE_COUNT) {
+                BallBalanceControl_EnterStationaryAcceleration(
+                    control, now_ms);
+            }
+            break;
     }
-
-    candidate_i_term = control->position_ki_deg_per_mm_s *
-                       candidate_integral;
-    candidate_pitch = control->p_term_deg + candidate_i_term +
-                      control->d_term_deg;
-    integral_direction = control->position_ki_deg_per_mm_s *
-                         control->error_mm;
-    if ((allow_integral != 0U) &&
-        ((BallBalanceControl_Abs(candidate_integral) <
-          BallBalanceControl_Abs(control->integral_mm_s)) ||
-         ((candidate_pitch >= minimum_pitch) &&
-          (candidate_pitch <= maximum_pitch)) ||
-         ((candidate_pitch > maximum_pitch) &&
-          (integral_direction < 0.0f)) ||
-         ((candidate_pitch < minimum_pitch) &&
-          (integral_direction > 0.0f)))) {
-        control->integral_mm_s = candidate_integral;
-    }
-
-    control->i_term_deg = control->position_ki_deg_per_mm_s *
-                          control->integral_mm_s;
-    control->desired_pipe_pitch_deg = BallBalanceControl_Limit(
-        control->p_term_deg + control->i_term_deg + control->d_term_deg,
-        minimum_pitch,
-        maximum_pitch);
-
 }
 
 static uint8_t BallBalanceControl_AcceptMeasurement(
@@ -521,6 +1083,11 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         control->imu_fault = 0U;
         control->enabled_since_ms = now_ms;
         BallBalanceControl_ClearVisionState(control, 1U);
+        /* The enable gate has already held the same strict stillness
+         * condition longer than the trajectory settle gate. */
+        control->pipe_settled = 1U;
+        control->pipe_settle_timer_ready = 1U;
+        control->pipe_settle_since_ms = now_ms;
     }
 }
 
@@ -539,10 +1106,19 @@ static void BallBalanceControl_UpdateServoCommand(BallBalanceControl *control,
     if ((control->enabled != 0U) && (attitude_fresh != 0U)) {
         control->pipe_pitch_error_deg = control->command_pipe_pitch_deg -
                                         control->measured_pipe_pitch_deg;
-        control->pipe_p_term_deg = BALL_BALANCE_PIPE_KP *
-                                   control->pipe_pitch_error_deg;
-        control->pipe_d_term_deg = -BALL_BALANCE_PIPE_KD_S *
-                                   control->measured_pipe_rate_dps;
+        if (BallBalanceControl_Abs(control->measured_pipe_rate_dps) <=
+            BALL_BALANCE_PIPE_SETTLE_RATE_DPS) {
+            control->pipe_p_term_deg = BALL_BALANCE_PIPE_KP *
+                                       control->pipe_pitch_error_deg;
+            control->pipe_d_term_deg = -BALL_BALANCE_PIPE_KD_S *
+                                       control->measured_pipe_rate_dps;
+        } else {
+            /* While the linkage is moving or ringing, keep only the mapped
+             * feedforward trajectory.  Repeated IMU corrections at this
+             * point pump energy into the crank-rocker oscillation. */
+            control->pipe_p_term_deg = 0.0f;
+            control->pipe_d_term_deg = 0.0f;
+        }
         corrected_pipe_command = BallBalanceControl_LimitActualPitch(
             control,
             control->command_pipe_pitch_deg + control->pipe_p_term_deg +
@@ -627,6 +1203,10 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->mapping_valid = control->mapping_valid;
     output->mapping_fault = control->mapping_fault;
     output->integral_active = control->integral_active;
+    output->braking_active = control->braking_active;
+    output->pipe_settled = control->pipe_settled;
+    output->kick_attempt_count = control->kick_attempt_count;
+    output->trajectory_phase = control->trajectory_phase;
     output->target_mm = control->target_mm;
     output->position_kp_deg_per_mm = control->position_kp_deg_per_mm;
     output->position_ki_deg_per_mm_s =
@@ -642,8 +1222,12 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->p_term_deg = control->p_term_deg;
     output->i_term_deg = control->i_term_deg;
     output->d_term_deg = control->d_term_deg;
+    output->brake_term_deg = control->brake_term_deg;
+    output->phase_pitch_deg = control->phase_pitch_deg;
+    output->stop_distance_mm = control->stop_distance_mm;
     output->desired_pipe_pitch_deg = control->desired_pipe_pitch_deg;
     output->command_pipe_pitch_deg = control->command_pipe_pitch_deg;
+    output->pipe_command_rate_dps = control->pipe_command_rate_dps;
     output->measured_pipe_pitch_deg = control->measured_pipe_pitch_deg;
     output->measured_pipe_rate_dps = control->measured_pipe_rate_dps;
     output->pipe_pitch_error_deg = control->pipe_pitch_error_deg;
@@ -740,6 +1324,10 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
         control->target_mm = limited_target;
         control->integral_mm_s = 0.0f;
         control->i_term_deg = 0.0f;
+        control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
+        control->phase_pitch_deg = 0.0f;
+        control->desired_pipe_pitch_deg = 0.0f;
+        control->stationary_sample_count = 0U;
     }
 }
 
@@ -891,8 +1479,6 @@ void BallBalanceControl_Update(BallBalanceControl *control,
 {
     uint32_t elapsed_ms;
     float task_dt_s = 0.0f;
-    float maximum_delta;
-    float pipe_slew_deg_s;
     uint8_t measurement_accepted = 0U;
 
     if (control == 0) {
@@ -913,6 +1499,7 @@ void BallBalanceControl_Update(BallBalanceControl *control,
 
     BallBalanceControl_AcceptAttitude(control, now_ms, attitude);
     BallBalanceControl_UpdateEnableState(control, now_ms);
+    BallBalanceControl_UpdatePipeSettled(control, now_ms);
 
     if (control->enabled != 0U) {
         measurement_accepted = BallBalanceControl_AcceptMeasurement(
@@ -924,11 +1511,8 @@ void BallBalanceControl_Update(BallBalanceControl *control,
                 control->timed_out = 1U;
             } else {
                 BallBalanceControl_UpdatePrediction(control, now_ms);
-                BallBalanceControl_CalculateOuterTarget(
-                    control,
-                    control->last_measurement_dt_s,
-                    (uint8_t) ((measurement_accepted != 0U) &&
-                               (control->last_measurement_dt_s > 0.0f)));
+                BallBalanceControl_UpdateTrajectory(
+                    control, now_ms, measurement_accepted);
             }
         } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
                    BALL_BALANCE_DATA_TIMEOUT_MS) {
@@ -937,24 +1521,10 @@ void BallBalanceControl_Update(BallBalanceControl *control,
         }
     } else {
         control->desired_pipe_pitch_deg = 0.0f;
+        control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
     }
 
-    if (task_dt_s > 0.0f) {
-        pipe_slew_deg_s =
-            ((BallBalanceControl_Abs(control->error_mm) >=
-              BALL_BALANCE_PIPE_FAST_ERROR_MM) ||
-             (BallBalanceControl_Abs(control->velocity_mm_s) >=
-              BALL_BALANCE_PIPE_FAST_SPEED_MM_S)) ?
-            BALL_BALANCE_PIPE_SLEW_DEG_S :
-            BALL_BALANCE_PIPE_NEAR_SLEW_DEG_S;
-        maximum_delta = pipe_slew_deg_s * task_dt_s;
-        control->command_pipe_pitch_deg = BallBalanceControl_Approach(
-            control->command_pipe_pitch_deg,
-            control->desired_pipe_pitch_deg,
-            maximum_delta);
-    }
-    control->command_pipe_pitch_deg = BallBalanceControl_LimitActualPitch(
-        control, control->command_pipe_pitch_deg);
+    BallBalanceControl_UpdatePipeProfile(control, task_dt_s);
 
     BallBalanceControl_UpdateServoCommand(control, task_dt_s, now_ms);
     BallBalanceControl_FillOutput(control,

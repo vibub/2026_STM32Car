@@ -60,13 +60,21 @@ volatile float g_app_ball_error_mm;
 volatile float g_app_ball_p_term_deg;
 volatile float g_app_ball_i_term_deg;
 volatile float g_app_ball_d_term_deg;
+volatile float g_app_ball_brake_term_deg;
 volatile float g_app_ball_integral_mm_s;
 volatile uint8_t g_app_ball_integral_active;
+volatile uint8_t g_app_ball_braking_active;
+volatile uint8_t g_app_ball_pipe_settled;
+volatile uint8_t g_app_ball_kick_attempt_count;
+volatile uint8_t g_app_ball_trajectory_phase;
+volatile float g_app_ball_phase_pitch_deg;
+volatile float g_app_ball_stop_distance_mm;
 volatile float g_app_ball_kp = BALL_BALANCE_DEFAULT_KP_DEG_PER_MM;
 volatile float g_app_ball_ki = BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S;
 volatile float g_app_ball_kd = BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S;
 volatile float g_app_ball_desired_pipe_pitch_deg;
 volatile float g_app_ball_command_pipe_pitch_deg;
+volatile float g_app_ball_pipe_command_rate_dps;
 volatile float g_app_ball_measured_pipe_pitch_deg;
 volatile float g_app_ball_measured_pipe_rate_dps;
 volatile float g_app_ball_pipe_error_deg;
@@ -191,12 +199,22 @@ static void App_UpdateBallBalanceDebug(void)
     g_app_ball_p_term_deg = s_ball_balance_output.p_term_deg;
     g_app_ball_i_term_deg = s_ball_balance_output.i_term_deg;
     g_app_ball_d_term_deg = s_ball_balance_output.d_term_deg;
+    g_app_ball_brake_term_deg = s_ball_balance_output.brake_term_deg;
     g_app_ball_integral_mm_s = s_ball_balance_output.integral_mm_s;
     g_app_ball_integral_active = s_ball_balance_output.integral_active;
+    g_app_ball_braking_active = s_ball_balance_output.braking_active;
+    g_app_ball_pipe_settled = s_ball_balance_output.pipe_settled;
+    g_app_ball_kick_attempt_count =
+        s_ball_balance_output.kick_attempt_count;
+    g_app_ball_trajectory_phase = s_ball_balance_output.trajectory_phase;
+    g_app_ball_phase_pitch_deg = s_ball_balance_output.phase_pitch_deg;
+    g_app_ball_stop_distance_mm = s_ball_balance_output.stop_distance_mm;
     g_app_ball_desired_pipe_pitch_deg =
         s_ball_balance_output.desired_pipe_pitch_deg;
     g_app_ball_command_pipe_pitch_deg =
         s_ball_balance_output.command_pipe_pitch_deg;
+    g_app_ball_pipe_command_rate_dps =
+        s_ball_balance_output.pipe_command_rate_dps;
     g_app_ball_measured_pipe_pitch_deg =
         s_ball_balance_output.measured_pipe_pitch_deg;
     g_app_ball_measured_pipe_rate_dps =
