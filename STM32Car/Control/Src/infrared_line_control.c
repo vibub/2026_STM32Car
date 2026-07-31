@@ -46,6 +46,36 @@ static float InfraredLine_LimitDelta(float value, float previous, float delta)
     return value;
 }
 
+static float InfraredLine_ApplyBaseSpeedSlew(InfraredLineControl *control,
+                                              float target_speed_cm_s,
+                                              uint8_t immediate_slowdown)
+{
+    float maximum_delta;
+
+    if (control->base_speed_ready == 0U) {
+        control->base_speed_ready = 1U;
+        control->applied_base_speed_cm_s = target_speed_cm_s;
+        return target_speed_cm_s;
+    }
+
+    if ((immediate_slowdown != 0U) &&
+        (target_speed_cm_s < control->applied_base_speed_cm_s)) {
+        control->applied_base_speed_cm_s = target_speed_cm_s;
+        return target_speed_cm_s;
+    }
+
+    maximum_delta = ((target_speed_cm_s >=
+                      control->applied_base_speed_cm_s) ?
+                     APP_LINE_MAX_ACCEL_CM_S2 :
+                     APP_LINE_MAX_DECEL_CM_S2) *
+                    ((float) APP_CONTROL_PERIOD_MS * 0.001f);
+    control->applied_base_speed_cm_s = InfraredLine_LimitDelta(
+        target_speed_cm_s,
+        control->applied_base_speed_cm_s,
+        maximum_delta);
+    return control->applied_base_speed_cm_s;
+}
+
 static uint8_t InfraredLine_CalculateError(uint8_t mask, float *error)
 {
     /* 相邻探头中心距 12 mm，bit0 在车辆左侧，单位为厘米。 */
@@ -72,15 +102,26 @@ static uint8_t InfraredLine_CalculateError(uint8_t mask, float *error)
     return active_count;
 }
 
-static void InfraredLine_SetTargets(float base_speed,
-                                    float correction,
-                                    InfraredLineOutput *output)
+static float InfraredLine_SetTargets(float base_speed,
+                                     float correction,
+                                     InfraredLineOutput *output)
 {
-    float left_target = base_speed + correction;
-    float right_target = base_speed - correction;
+    float left_target;
+    float right_target;
+    float correction_limit = base_speed;
     float maximum;
     float minimum;
     float shift;
+
+    /* 起步低速阶段限制差速量，防止单轮绕过基础速度轨迹突然跃升。 */
+    if (correction_limit > IR_LINE_CORRECTION_LIMIT_CM_S) {
+        correction_limit = IR_LINE_CORRECTION_LIMIT_CM_S;
+    }
+    correction = InfraredLine_Limit(correction,
+                                    -correction_limit,
+                                    correction_limit);
+    left_target = base_speed + correction;
+    right_target = base_speed - correction;
 
     /* 左右目标成对平移，避免独立限幅把已经计算出的差速削平。 */
     maximum = (left_target > right_target) ? left_target : right_target;
@@ -101,12 +142,23 @@ static void InfraredLine_SetTargets(float base_speed,
         left_target, 0.0f, IR_LINE_TARGET_MAX_CM_S);
     output->right_target_cm_s = InfraredLine_Limit(
         right_target, 0.0f, IR_LINE_TARGET_MAX_CM_S);
+    return correction;
 }
 
 void InfraredLineControl_Init(InfraredLineControl *control)
 {
     if (control != 0) {
         memset(control, 0, sizeof(*control));
+        control->base_speed_cm_s = APP_BASE_SPEED_CM_S;
+    }
+}
+
+void InfraredLineControl_SetBaseSpeed(InfraredLineControl *control,
+                                      float base_speed_cm_s)
+{
+    if (control != 0) {
+        control->base_speed_cm_s = InfraredLine_Limit(
+            base_speed_cm_s, 0.0f, IR_LINE_TARGET_MAX_CM_S);
     }
 }
 
@@ -122,7 +174,7 @@ void InfraredLineControl_Update(InfraredLineControl *control,
     float reported_error;
     float derivative = 0.0f;
     float target_correction;
-    float base_speed = APP_BASE_SPEED_CM_S;
+    float base_speed;
     float abs_error;
 
     if (output == 0) {
@@ -133,6 +185,7 @@ void InfraredLineControl_Update(InfraredLineControl *control,
         return;
     }
 
+    base_speed = control->base_speed_cm_s;
     sensor_mask &= IR_LINE_SENSOR_MASK;
     output->sensor_mask = sensor_mask;
     active_count = InfraredLine_CalculateError(sensor_mask, &raw_error);
@@ -224,10 +277,15 @@ void InfraredLineControl_Update(InfraredLineControl *control,
             IR_LINE_CORRECTION_SLEW_CM_S);
     }
 
+    base_speed = InfraredLine_ApplyBaseSpeedSlew(
+        control,
+        base_speed,
+        (uint8_t) ((output->line_lost != 0U) ||
+                   (force_wide_slowdown != 0U)));
     output->command_valid = 1U;
     output->filtered_error = reported_error;
-    output->correction_cm_s = control->last_correction_cm_s;
-    InfraredLine_SetTargets(base_speed,
-                            control->last_correction_cm_s,
-                            output);
+    output->correction_cm_s = InfraredLine_SetTargets(
+        base_speed,
+        control->last_correction_cm_s,
+        output);
 }
