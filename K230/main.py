@@ -55,7 +55,7 @@ if actual_mapping_version != EXPECTED_BALL_POSITION_MAPPING_VERSION:
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
 DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
-DISPLAY_MODE = "ide"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
 IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
@@ -78,8 +78,8 @@ STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回�
 
 K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
 K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
-SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 40                # 检测框以 25 Hz 刷新，与 UART 上报周期一致。
+SEND_INTERVAL_MS = 20               # 钢球位置按 20 ms 相位节拍通过 UART 上报。
+OSD_INTERVAL_MS = 40                # 检测框仍以 25 Hz 刷新，避免增加显示开销。
 CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
 CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
@@ -87,7 +87,7 @@ GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop j
 OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
 
 # K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
-VIDEO_AP_ENABLE = False
+VIDEO_AP_ENABLE = True
 VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
 VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
 VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
@@ -555,7 +555,15 @@ def run():
                 stage_start_us = time.ticks_us()
                 uart.write(format_ball_message(result, sequence))
                 sequence = (sequence + 1) & 0xFFFF
-                last_send_ms = now_ms
+                last_send_ms = time.ticks_add(
+                    last_send_ms,
+                    SEND_INTERVAL_MS,
+                )
+                if (
+                    time.ticks_diff(now_ms, last_send_ms)
+                    >= SEND_INTERVAL_MS
+                ):
+                    last_send_ms = now_ms
                 perf_uart_us += time.ticks_diff(
                     time.ticks_us(),
                     stage_start_us,
