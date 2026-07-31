@@ -39,7 +39,8 @@
 #define BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S    0.80f /* 钢球运动后泄放积分以降低过冲。 */
 #define BALL_BALANCE_GAIN_EPSILON                  0.000001f
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
-#define BALL_BALANCE_DATA_TIMEOUT_MS            350U    /* 兼容 K230 约 5 FPS 及偶发一帧抖动，避免误判为新球。 */
+#define BALL_BALANCE_IDLE_DATA_TIMEOUT_MS      1000U    /* 等待/破静摩擦时容忍 YOLO 短时漏检，避免杆反复回平重启。 */
+#define BALL_BALANCE_MOVING_DATA_TIMEOUT_MS     350U    /* 球已运动后仍快速退出盲控，避免失联时继续加速。 */
 #define BALL_BALANCE_ATTITUDE_TIMEOUT_MS        100U    /* IMU 姿态数据超时时间。 */
 #define BALL_BALANCE_ATTITUDE_STABLE_MS         150U    /* 启用前只确认短时间稳定，避免点击后反应迟钝。 */
 #define BALL_BALANCE_ENABLE_PITCH_LIMIT_DEG       0.60f
@@ -69,6 +70,16 @@
 static uint8_t BallBalanceControl_AttitudeIsFresh(
     const BallBalanceControl *control,
     uint32_t now_ms);
+
+static uint32_t BallBalanceControl_DataTimeoutMs(
+    const BallBalanceControl *control)
+{
+    if ((control != 0) &&
+        (control->trajectory_phase == BALL_BALANCE_PHASE_MOVING)) {
+        return BALL_BALANCE_MOVING_DATA_TIMEOUT_MS;
+    }
+    return BALL_BALANCE_IDLE_DATA_TIMEOUT_MS;
+}
 
 static float BallBalanceControl_Abs(float value)
 {
@@ -795,7 +806,7 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
     filter_was_ready = control->filter_ready;
     elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
     if ((filter_was_ready == 0U) ||
-        (elapsed_ms > BALL_BALANCE_DATA_TIMEOUT_MS)) {
+        (elapsed_ms > BallBalanceControl_DataTimeoutMs(control))) {
         control->filtered_position_mm = position_mm;
         control->velocity_mm_s = 0.0f;
         control->integral_mm_s = 0.0f;
@@ -1328,7 +1339,7 @@ void BallBalanceControl_Update(BallBalanceControl *control,
             control, now_ms, measurement);
         if (control->tracking_valid != 0U) {
             elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
-            if (elapsed_ms > BALL_BALANCE_DATA_TIMEOUT_MS) {
+            if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
                 BallBalanceControl_ClearVisionState(control, 0U);
                 control->timed_out = 1U;
             } else {
@@ -1337,7 +1348,7 @@ void BallBalanceControl_Update(BallBalanceControl *control,
                     control, now_ms, measurement_accepted);
             }
         } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
-                   BALL_BALANCE_DATA_TIMEOUT_MS) {
+                   BALL_BALANCE_IDLE_DATA_TIMEOUT_MS) {
             control->timed_out = 1U;
             control->desired_pipe_pitch_deg = 0.0f;
         }

@@ -678,6 +678,16 @@ static void test_ball_balance_control(void)
                               0,
                               &attitude,
                               &output);
+    assert(output.timed_out == 0U);
+    assert(output.tracking_valid != 0U);
+
+    now_ms += 650U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              0,
+                              &attitude,
+                              &output);
     assert(output.timed_out != 0U);
     assert(output.tracking_valid == 0U);
     assert_float_near(output.desired_pipe_pitch_deg, 0.0f);
@@ -948,6 +958,16 @@ static void test_ball_balance_motion_classification(void)
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_BREAKAWAY);
     assert(output.desired_pipe_pitch_deg < 0.0f);
     initial_pitch_abs = test_abs(output.desired_pipe_pitch_deg);
+    /* A short YOLO-validity gap must hold the breakaway angle rather than
+     * level the pipe and restart the two-frame stationary classification. */
+    now_ms += 700U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, 0, &attitude, &output);
+    assert(output.timed_out == 0U);
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_BREAKAWAY);
+    assert_float_near_tolerance(
+        test_abs(output.desired_pipe_pitch_deg), initial_pitch_abs, 0.001f);
     for (index = 1U; index <= 7U; index++) {
         if (index == 1U) {
             /* A tiny negative-side outward jitter must not be mistaken for
