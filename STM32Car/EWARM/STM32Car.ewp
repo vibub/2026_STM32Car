@@ -1195,7 +1195,19 @@
                     <name>$PROJ_DIR$\..\Control\Src\lap_stop_detector.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Control\Src\chassis_motion_profile.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\chassis_accel_estimator.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\linkage_kinematics.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Control\Src\ball_balance_control.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\ball_shuttle_control.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\pipe_attitude_control.c</name>

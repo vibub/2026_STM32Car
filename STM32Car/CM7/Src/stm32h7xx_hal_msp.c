@@ -102,7 +102,7 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
         gpio.Alternate = GPIO_AF1_TIM2;
         HAL_GPIO_Init(GPIOA, &gpio);
     } else if (htim->Instance == SERVO_PWM_INSTANCE) {
-        /* PD15 复用为 TIM4_CH4，输出 SG90 所需的 50 Hz PWM。 */
+        /* PD15 复用为 TIM4_CH4，输出 270°位置舵机所需的 50 Hz PWM。 */
         __HAL_RCC_TIM4_CLK_ENABLE();
         __HAL_RCC_GPIOD_CLK_ENABLE();
         gpio.Pin = SERVO_PWM_PIN;

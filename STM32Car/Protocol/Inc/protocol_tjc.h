@@ -7,10 +7,13 @@
 #define TJC_REQUEST_HEADER_1       0xA5U /* TJC 请求帧第二个帧头字节。 */
 #define TJC_REQUEST_FRAME_SIZE     4U    /* TJC 请求帧固定字节数。 */
 #define TJC_COMMAND_STOP           0x00U /* TJC 全局停车命令编号。 */
-#define TJC_COMMAND_BASIC_LINE     0x01U /* TJC 基础八路巡线命令编号。 */
+#define TJC_COMMAND_BASIC_LINE     0x01U /* TJC 基础八路红外巡线命令编号。 */
 #define TJC_COMMAND_BALL_ENABLE    0x02U /* TJC 中心钢球平衡启用命令编号。 */
 #define TJC_COMMAND_BALL_DISABLE   0x03U /* TJC 钢球平衡禁用命令编号。 */
-#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管 IMU 和齿轮三点标定命令编号。 */
+#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管 IMU 和连杆模型九点标定命令编号。 */
+#define TJC_COMMAND_BALL_SHUTTLE   0x05U /* TJC 第三题 O 到正负 5 cm 往返命令编号。 */
+#define TJC_COMMAND_AB             0x06U /* TJC 第四项 AB 中心稳定通过命令。 */
+#define TJC_COMMAND_ABCD           0x07U /* TJC 第五项 ABCD 整圈中心稳定通过命令。 */
 #define TJC_COMMAND_QUERY          0x0EU /* TJC 当前底盘模式查询命令编号。 */
 #define TJC_RESPONSE_HEADER        0xA5U /* STM32 返回帧的帧头字节。 */
 
@@ -40,7 +43,20 @@ typedef enum {
     TJC_STATUS_BALANCE_ENABLED,
     TJC_STATUS_BALANCE_IMU_FAULT,
     TJC_STATUS_BALANCE_RECOVERED,
-    TJC_STATUS_BALANCE_DISABLED
+    TJC_STATUS_BALANCE_DISABLED,
+    TJC_STATUS_SHUTTLE_PREPARING,
+    TJC_STATUS_SHUTTLE_RUNNING,
+    TJC_STATUS_SHUTTLE_TURNING,
+    TJC_STATUS_SHUTTLE_SUCCESS,
+    TJC_STATUS_SHUTTLE_FAILED,
+    TJC_STATUS_AB_PREPARING,
+    TJC_STATUS_AB_RUNNING,
+    TJC_STATUS_AB_PASSED,
+    TJC_STATUS_AB_FAILED,
+    TJC_STATUS_ABCD_PREPARING,
+    TJC_STATUS_ABCD_RUNNING,
+    TJC_STATUS_ABCD_PASSED,
+    TJC_STATUS_ABCD_FAILED
 } Tjc_StatusText;
 
 extern volatile uint32_t g_tjc_rx_byte_count;
@@ -59,7 +75,14 @@ void Protocol_Tjc_Task(void);
 void Protocol_Tjc_SendResult(Tjc_Result result,
                              uint8_t current_mode,
                              uint8_t request);
-void Protocol_Tjc_SendStatusText(Tjc_StatusText status,
-                                 int16_t ratio_x100);
+void Protocol_Tjc_SendStatusText(Tjc_StatusText status);
+void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
+                                       uint8_t point_count);
+void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
+                                         int16_t offset_x100);
+void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
+                                              int16_t offset_x100,
+                                              int16_t return_error_x100);
+void Protocol_Tjc_SetBallLimitWarning(uint8_t active);
 
 #endif /* PROTOCOL_TJC_H */

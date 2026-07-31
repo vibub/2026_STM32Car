@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="500" viewBox="0 0 920 500" role="img" aria-labelledby="title desc">
+  <title id="title">连杆机构正负六度运动包络</title>
+  <desc id="desc">叠加显示BD俯仰角负六度、零度和正六度时的水管、连杆与摇臂位置。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#334155"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "Microsoft YaHei", sans-serif; fill: #0f172a; font-size: 16px; }
+      .small { font-size: 14px; fill: #475569; }
+      .point { fill: #fff; stroke: #0f172a; stroke-width: 2; }
+      .minus { stroke: #dc2626; }
+      .zero { stroke: #2563eb; }
+      .plus { stroke: #16a34a; }
+      .pipe { stroke-width: 8; stroke-linecap: round; fill: none; }
+      .thin { stroke-width: 5; stroke-linecap: round; fill: none; }
+    </style>
+  </defs>
+  <rect width="920" height="500" fill="#ffffff"/>
+  <text x="34" y="36" font-size="22" font-weight="600">±6° 全行程运动包络</text>
+  <text class="small" x="34" y="62">AG = 19.0 cm，CF = 7.0717 cm，GF = 1.9 cm</text>
+
+  <line x1="90" y1="410" x2="820" y2="410" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="90" y1="410" x2="90" y2="185" stroke="#64748b" stroke-width="10" stroke-linecap="round"/>
+  <rect x="535" y="320" width="60" height="48" rx="5" fill="#fffbeb" stroke="#f59e0b" stroke-width="2.5"/>
+
+  <!-- theta = -6 deg -->
+  <g opacity="0.88">
+    <line class="minus pipe" x1="90" y1="185" x2="711.6" y2="250.3"/>
+    <line class="minus thin" x1="711.6" y1="250.3" x2="705.0" y2="312.5"/>
+    <line class="minus thin" x1="705.0" y1="312.5" x2="528.4" y2="304.7"/>
+    <line class="minus thin" x1="565" y1="335" x2="528.4" y2="304.7"/>
+    <circle cx="705.0" cy="312.5" r="5" fill="#fff" stroke="#dc2626" stroke-width="2"/>
+    <text x="720" y="331" fill="#b91c1c">θ = −6°</text>
+  </g>
+
+  <!-- theta = 0 deg -->
+  <g opacity="0.9">
+    <line class="zero pipe" x1="90" y1="185" x2="715" y2="185"/>
+    <line class="zero thin" x1="715" y1="185" x2="715" y2="247.5"/>
+    <line class="zero thin" x1="715" y1="247.5" x2="544.0" y2="292.4"/>
+    <line class="zero thin" x1="565" y1="335" x2="544.0" y2="292.4"/>
+    <circle cx="715" cy="247.5" r="5" fill="#fff" stroke="#2563eb" stroke-width="2"/>
+    <text x="732" y="254" fill="#1d4ed8">θ = 0°</text>
+  </g>
+
+  <!-- theta = +6 deg -->
+  <g opacity="0.88">
+    <line class="plus pipe" x1="90" y1="185" x2="711.6" y2="119.7"/>
+    <line class="plus thin" x1="711.6" y1="119.7" x2="718.1" y2="181.8"/>
+    <line class="plus thin" x1="718.1" y1="181.8" x2="577.7" y2="289.2"/>
+    <line class="plus thin" x1="565" y1="335" x2="577.7" y2="289.2"/>
+    <circle cx="718.1" cy="181.8" r="5" fill="#fff" stroke="#16a34a" stroke-width="2"/>
+    <text x="738" y="177" fill="#15803d">θ = +6°</text>
+  </g>
+
+  <!-- Fixed points -->
+  <circle class="point" cx="90" cy="410" r="6"/><text x="68" y="435">A</text>
+  <circle class="point" cx="90" cy="185" r="6"/><text x="66" y="173">B</text>
+  <circle class="point" cx="565" cy="335" r="6"/><text x="548" y="394">G</text>
+
+  <!-- Direction annotations -->
+  <path d="M760 300 Q815 248 764 194" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="810" y="238">C点运动</text>
+  <path d="M515 350 A68 68 0 0 1 594 278" fill="none" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="423" y="375" fill="#b45309">舵机 φ：140.36° → 74.52°</text>
+
+  <g transform="translate(75 468)">
+    <line x1="0" y1="0" x2="38" y2="0" stroke="#dc2626" stroke-width="7"/><text x="48" y="6">−6°</text>
+    <line x1="150" y1="0" x2="188" y2="0" stroke="#2563eb" stroke-width="7"/><text x="198" y="6">0°</text>
+    <line x1="300" y1="0" x2="338" y2="0" stroke="#16a34a" stroke-width="7"/><text x="348" y="6">+6°</text>
+    <text class="small" x="480" y="6">舵机总行程：65.83°</text>
+  </g>
+</svg>

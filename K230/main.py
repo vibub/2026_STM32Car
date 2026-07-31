@@ -1,939 +1,593 @@
+"""CanMV K230 ball-position entry point."""
+
 import gc
 import os
 import sys
 import time
 
+# CanMV IDE 的“运行当前脚本”会把 main.py 作为临时代码执行，部分固件不会
+# 自动把 SD 卡根目录加入模块搜索路径。显式加入后，同卡的依赖文件才能导入。
+for module_dir in ("/sdcard/app", "/sdcard"):
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
 
-K230_UART_TX_IO = 44
-K230_UART_RX_IO = 45
+from machine import UART, FPIOA
 
-# DELIVERY 为比赛视觉主程序；LINE 和 TARGET 保留独立联调入口。
-RUN_MODE = "DELIVERY"
-LINE_MODE = "LINE"
-DELIVERY_MODE = "DELIVERY"
-TARGET_MODE = "TARGET"
-
-LINE_CV_SIZE = (320, 240)
-TARGET_CV_SIZE = (640, 360)
-AI_SIZE = (640, 360)
-DISPLAY_SIZE = (800, 480)
-
-TARGET_MODEL_INPUT_SIZE = [320, 320]
-TARGET_MODEL_PATH = "/sdcard/models/yolo11n_det_320.kmodel"
-TARGET_LABELS = {0: "Target"}
-TARGET_CONFIDENCE_THRESHOLD = 0.8
-
-# 初版沿用 digit_camera.py 已验证的 320×320、1～8 类模型配置。
-DIGIT_MODEL_INPUT_SIZE = [320, 320]
-DIGIT_MODEL_PATH = "/sdcard/models/yolo11n_det_320.kmodel"
-DIGIT_LABELS = ["1", "2", "3", "4", "5", "6", "7", "8"]
-DIGIT_CONFIDENCE_THRESHOLD = 0.60
-# 4 Hz 足以在 1200 ms 决策窗口内形成 3 帧共识，同时给红线循环留出余量。
-DIGIT_INFERENCE_INTERVAL_MS = 250
-# 药房目标静止不动，允许较慢 YOLO 帧在 2.5 s 内继续累计三帧共识。
-# 该窗口只用于出发前目标锁存，不放宽行驶中路口数字的实时决策窗口。
-DIGIT_PHARMACY_CONSENSUS_MAX_GAP_MS = 2500
-# AI 通道异常时禁止沿用 snapshot 默认 1000 ms 超时长期阻塞红线。
-DIGIT_CAPTURE_TIMEOUT_MS = 60
-DIGIT_DEBUG_INTERVAL_RUNS = 10
-DIGIT_OVERLAY_HOLD_MS = 800
-# 全屏 ARGB OSD 仅用于观察，5 Hz 已足够且可明显降低显示复制带宽。
-OSD_UPDATE_INTERVAL_MS = 200
-DELIVERY_GC_INTERVAL_MS = 2000
-DELIVERY_IDE_PREVIEW = False
-
-NMS_THRESHOLD = 0.45
-DEAD_ZONE_X = 5
-DEAD_ZONE_Y = 5
-TARGET_SEND_INTERVAL_MS = 100
-LINE_SEND_INTERVAL_MS = 40
-LINE_DEBUG_INTERVAL_FRAMES = 25
-GC_INTERVAL_FRAMES = 32
-UART_RX_LINE_SIZE = 64
-DEBUG_PRINT = True
+try:
+    from ball_position import (
+        BallPositionDetector,
+        RING_TARGET_THRESHOLDS,
+        STEEL_BALL_TARGET_THRESHOLDS,
+        format_ball_message,
+        scale_detection_box,
+        select_best_yolo_box,
+    )
+    from libs.YOLO import YOLOv8
+    from vision_pipeline import VisionPipeline
+    try:
+        from wifi_ap_rtsp import WifiApRtspStreamer
+    except ImportError:
+        WifiApRtspStreamer = None
+except ImportError:
+    print("K230 module import failed")
+    print("sys.path:", sys.path)
+    try:
+        print("/sdcard files:", os.listdir("/sdcard"))
+    except Exception as list_error:
+        print("cannot read /sdcard:", list_error)
+    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/YOLO.py")
+    raise
 
 
-fpioa = None
-uart = None
-pipeline = None
-yolo = None
-uart_rx_line = bytearray()
-uart_rx_discard = False
-uart_rx_byte_count = 0
-uart_rx_line_count = 0
-uart_valid_command_count = 0
-uart_last_line = "NONE"
-uart_last_status = "WAIT V"
-uart_last_ack_ms = 0
-osd_error_logged = False
+CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
+DISPLAY_SIZE = (800, 480)          # 恢复完整 IDE/RTSP 显示分辨率。
+DISPLAY_MODE = "rtsp"             # RTSP 模式关闭 IDE 帧缓冲，避免 WBC 通道冲突。
+IDE_FRAME_QUALITY = 90             # IDE 模式使用高质量帧缓冲。
+AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
+# 钢球只会出现在管道附近；CV 坐标系为 640x360。
+# 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
+STEEL_BALL_YOLO_ROI_CV = (0, 100, 640, 130)
+
+STEEL_BALL_MODEL_INPUT_SIZE = [192, 192]  # YOLOv5n 钢球模型的固定输入尺寸。
+STEEL_BALL_MODEL_PATHS = (
+    "/sdcard/models/ball_yolov5n_192.kmodel",
+)
+STEEL_BALL_LABELS = ["ball"]             # 单类别钢球检测标签。
+STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40   # 钢球检测最低置信度。
+STEEL_BALL_NMS_THRESHOLD = 0.50          # 重叠钢球框的 NMS 阈值。
+STEEL_BALL_MAX_BOXES = 4                 # 单钢球场景仅保留少量候选框。
+STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回退。
+
+K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
+K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
+SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
+OSD_INTERVAL_MS = 40                # 检测框以 25 Hz 刷新，与 UART 上报周期一致。
+CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
+CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
+INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
+GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
+OSD_TEXT_ENABLE = True             # RTSP 调试画面显示完整钢球状态信息。
+
+# K230 创建 Wi-Fi AP，并通过 WBC 硬件 H.264 编码提供 RTSP 图传。
+VIDEO_AP_ENABLE = True
+VIDEO_AP_SSID = "kk22330"          # K230 无线热点名称。
+VIDEO_AP_KEY = "czhhqgyyb"         # K230 无线热点密码。
+VIDEO_AP_IP = "192.168.4.1"        # K230 AP 固定地址。
+VIDEO_RTSP_PORT = 8554              # RTSP 服务端口。
+VIDEO_RTSP_SESSION = "test"        # RTSP 会话名称。
+VIDEO_RTSP_FPS = 15                 # H.264 图传目标帧率。
+VIDEO_RTSP_BITRATE_KBPS = 2048      # 800×480 H.264 高质量目标码率。
+VIDEO_AP_START_DELAY_FRAMES = 0     # 主循环启动后立即开启图传。
+
+# STEEL_BALL 使用 YOLO；临时圆环联调时改回 RING，使用传统颜色检测。
+TARGET_PROFILE = "STEEL_BALL"
+RING_DIAMETER_MM = 18.0
+STEEL_BALL_DIAMETER_MM = 10.0
 
 
-def select_best_target(result):
-    boxes = result[0]
-    scores = result[2]
+def _target_diameter_mm():
+    if TARGET_PROFILE == "RING":
+        return RING_DIAMETER_MM
+    if TARGET_PROFILE == "STEEL_BALL":
+        return STEEL_BALL_DIAMETER_MM
+    raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
-    if len(boxes) == 0:
-        return None
 
-    best_index = 0
-    best_score = float(scores[0])
+def _target_thresholds():
+    if TARGET_PROFILE == "RING":
+        return RING_TARGET_THRESHOLDS
+    if TARGET_PROFILE == "STEEL_BALL":
+        return STEEL_BALL_TARGET_THRESHOLDS
+    raise ValueError("unknown TARGET_PROFILE: " + str(TARGET_PROFILE))
 
-    for index in range(1, len(boxes)):
-        score = float(scores[index])
-        if score > best_score:
-            best_index = index
-            best_score = score
 
-    box = boxes[best_index]
-
-    # YOLO11 video 模式返回 AI 坐标系中的 [x, y, width, height]。
-    return (
-        int(box[0]),
-        int(box[1]),
-        int(box[2]),
-        int(box[3]),
-        best_score,
+def _resolve_steel_ball_model_path():
+    for path in STEEL_BALL_MODEL_PATHS:
+        try:
+            os.stat(path)
+            return path
+        except Exception:
+            pass
+    raise OSError(
+        "steel-ball kmodel missing: " + ", ".join(STEEL_BALL_MODEL_PATHS)
     )
 
 
-def target_box_to_bounds(target):
-    x, y, width, height, confidence = target
-    x1 = max(0, min(AI_SIZE[0] - 1, int(x)))
-    y1 = max(0, min(AI_SIZE[1] - 1, int(y)))
-    x2 = max(x1 + 1, min(AI_SIZE[0], int(x + width)))
-    y2 = max(y1 + 1, min(AI_SIZE[1], int(y + height)))
-    return x1, y1, x2, y2, confidence
+def _ai_roi_from_cv_roi(cv_roi):
+    x, y, width, height = cv_roi
+    return (
+        int(round(x * AI_SIZE[0] / CV_SIZE[0])),
+        int(round(y * AI_SIZE[1] / CV_SIZE[1])),
+        max(1, int(round(width * AI_SIZE[0] / CV_SIZE[0]))),
+        max(1, int(round(height * AI_SIZE[1] / CV_SIZE[1]))),
+    )
 
 
-def apply_dead_zone(error_x, error_y):
-    if abs(error_x) <= DEAD_ZONE_X:
-        error_x = 0
+def _crop_ai_array(ai_array, roi):
+    x, y, width, height = roi
+    shape = getattr(ai_array, "shape", None)
+    if shape is None:
+        return ai_array
+    if len(shape) == 4:
+        return ai_array[:, :, y:y + height, x:x + width]
+    if len(shape) == 3 and shape[0] in (1, 3, 4):
+        return ai_array[:, y:y + height, x:x + width]
+    if len(shape) == 3:
+        return ai_array[y:y + height, x:x + width, :]
+    return ai_array
 
-    if abs(error_y) <= DEAD_ZONE_Y:
-        error_y = 0
 
-    return error_x, error_y
+def _scale_roi_detection_box(detection, source_roi, target_roi):
+    if detection is None:
+        return None
+    scaled = scale_detection_box(
+        detection,
+        (source_roi[2], source_roi[3]),
+        (target_roi[2], target_roi[3]),
+    )
+    x, y, width, height, confidence = scaled
+    return (
+        x + target_roi[0],
+        y + target_roi[1],
+        width,
+        height,
+        confidence,
+    )
 
 
-def create_uart(UART, FPIOA):
-    global fpioa
+def _create_steel_ball_yolo():
+    model_path = _resolve_steel_ball_model_path()
+    print("loading steel-ball YOLOv5n-192 with anchor-free postprocess:", model_path)
+    detector = YOLOv8(
+        task_type="detect",
+        mode="video",
+        kmodel_path=model_path,
+        labels=STEEL_BALL_LABELS,
+        rgb888p_size=list(AI_SIZE),
+        model_input_size=STEEL_BALL_MODEL_INPUT_SIZE,
+        # 该 YOLOv5n KModel 使用 anchor-free 转置输出，因此复用 YOLOv8 后处理。
+        # 不调用 draw_result()，让后处理直接返回 AI 通道坐标，再统一转换到
+        # 640×360 的红色刻度标定坐标系。
+        display_size=list(AI_SIZE),
+        conf_thresh=STEEL_BALL_CONFIDENCE_THRESHOLD,
+        nms_thresh=STEEL_BALL_NMS_THRESHOLD,
+        max_boxes_num=STEEL_BALL_MAX_BOXES,
+        debug_mode=0,
+    )
+    detector.config_preprocess()
+    return detector
 
-    print("S10: 初始化UART")
+
+def _scale_rect(rect):
+    x, y, width, height = rect
+    return (
+        int(x * DISPLAY_SIZE[0] // CV_SIZE[0]),
+        int(y * DISPLAY_SIZE[1] // CV_SIZE[1]),
+        max(1, int(width * DISPLAY_SIZE[0] // CV_SIZE[0])),
+        max(1, int(height * DISPLAY_SIZE[1] // CV_SIZE[1])),
+    )
+
+
+def _draw_overlay(
+    pipeline,
+    detector,
+    result,
+    inference_fps,
+    yolo=None,
+    yolo_result=None,
+):
+    osd = pipeline.osd_img
+    pipeline.clear_osd()
+    green = (0, 255, 0)
+    red = (255, 0, 0)
+    yellow = (255, 255, 0)
+    cyan = (0, 255, 255)
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+
+    calibration = detector.calibration
+    if calibration is not None:
+        if hasattr(calibration, "marker_columns"):
+            marker_centers = []
+            marker_rects = []
+            for rect in calibration.marker_rects():
+                x, y, width, height = _scale_rect(rect)
+                osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+                marker_centers.append((x + width // 2, y + height // 2))
+                marker_rects.append((x, y, width, height))
+            marker_labels = ("+50", "0", "-50", "-100")
+            ordered_markers = sorted(
+                zip(marker_centers, marker_rects),
+                key=lambda item: item[0][0],
+            )
+            for index, marker in enumerate(ordered_markers[:len(marker_labels)]):
+                center, rect = marker
+                osd.draw_string_advanced(
+                    rect[0],
+                    max(0, rect[1] - 18),
+                    14,
+                    marker_labels[index],
+                    color=black,
+                )
+            if len(marker_centers) >= 2:
+                marker_centers.sort(key=lambda point: point[0])
+                osd.draw_line(
+                    marker_centers[0][0],
+                    marker_centers[0][1],
+                    marker_centers[-1][0],
+                    marker_centers[-1][1],
+                    color=black,
+                    thickness=3,
+                )
+        else:
+            for row in (calibration.upper, calibration.lower):
+                x, y, width, height = _scale_rect(row.rect)
+                osd.draw_rectangle(x, y, width, height, color=cyan, thickness=2)
+
+    if TARGET_PROFILE == "STEEL_BALL":
+        x, y, width, height = _scale_rect(STEEL_BALL_YOLO_ROI_CV)
+        osd.draw_rectangle(x, y, width, height, color=yellow, thickness=1)
+
+    if result.target_rect is not None:
+        x, y, width, height = _scale_rect(result.target_rect)
+        osd.draw_rectangle(x, y, width, height, color=green, thickness=3)
+        center_x = x + width // 2
+        center_y = y + height // 2
+        osd.draw_line(center_x - 10, center_y, center_x + 10, center_y, color=green, thickness=2)
+        osd.draw_line(center_x, center_y - 10, center_x, center_y + 10, color=green, thickness=2)
+
+    scale_ok = calibration is not None
+    marker_count = (
+        calibration.marker_count
+        if scale_ok and hasattr(calibration, "marker_count")
+        else (2 if scale_ok else 0)
+    )
+    position_abs_d10 = abs(result.position_d10_mm)
+    if result.valid:
+        position_text = "{}{}.{} mm".format(
+            "-" if result.position_d10_mm < 0 else "+",
+            position_abs_d10 // 10,
+            position_abs_d10 % 10,
+        )
+    else:
+        position_text = "--.- mm"
+    if OSD_TEXT_ENABLE:
+        osd.draw_string_advanced(
+            8, 8, 20,
+            "MARK {}/4 Q{}".format(marker_count, result.scale_quality),
+            color=cyan if scale_ok else red,
+        )
+        osd.draw_string_advanced(
+            8, 34, 20,
+            "TARGET {} V{} Q{}".format(
+                TARGET_PROFILE,
+                int(result.valid),
+                result.quality,
+            ),
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8, 60, 24,
+            "BALL POS " + position_text,
+            color=green if result.valid else yellow,
+        )
+        osd.draw_string_advanced(
+            8,
+            92,
+            18,
+            "BALL FPS {:.1f}".format(inference_fps),
+            color=white,
+        )
+    pipeline.show_osd()
+
+
+def _create_uart():
     fpioa = FPIOA()
-    fpioa.set_function(K230_UART_TX_IO, FPIOA.UART2_TXD)
-    fpioa.set_function(K230_UART_RX_IO, FPIOA.UART2_RXD)
-
-    result = UART(
-        UART.UART2,
+    fpioa.set_function(K230_UART_TX_IO, FPIOA.UART1_TXD)
+    fpioa.set_function(K230_UART_RX_IO, FPIOA.UART1_RXD)
+    return UART(
+        UART.UART1,
         baudrate=115200,
         bits=UART.EIGHTBITS,
         parity=UART.PARITY_NONE,
         stop=UART.STOPBITS_ONE,
         timeout=0,
     )
-    print("S11: UART初始化完成")
-    return result
 
 
-def poll_uart_lines():
-    """非阻塞读取文本行，同时兼容 CR、LF 和 CRLF 结尾。"""
-    global uart_rx_line, uart_rx_discard
-    global uart_rx_byte_count, uart_rx_line_count, uart_last_line
-
-    completed = []
-    received = uart.read()
-    if not received:
-        return completed
-
-    uart_rx_byte_count += len(received)
-    for byte in received:
-        if uart_rx_discard:
-            if byte in (10, 13):
-                uart_rx_discard = False
-                uart_rx_line = bytearray()
-            continue
-
-        # 部分串口终端回车只发送 CR；CRLF 中第二个 LF 会因缓冲区为空而被忽略。
-        if byte in (10, 13):
-            if len(uart_rx_line) != 0:
-                try:
-                    decoded_line = uart_rx_line.decode()
-                    completed.append(decoded_line)
-                    uart_rx_line_count += 1
-                    uart_last_line = decoded_line
-                except Exception:
-                    uart_last_line = "DECODE ERR"
-                uart_rx_line = bytearray()
-            continue
-
-        if len(uart_rx_line) < UART_RX_LINE_SIZE - 1:
-            uart_rx_line.append(byte)
-        else:
-            uart_rx_line = bytearray()
-            uart_rx_discard = True
-
-    return completed
-
-
-def process_visual_commands(
-    current_command,
-    pharmacy_consensus,
-    route_consensus,
-    parse_visual_command,
-):
-    """处理 MSPM0 V 命令；旧 ACK/调试回包只消费，不形成应答回环。"""
-    global uart_valid_command_count, uart_last_status, uart_last_ack_ms
-
-    for line in poll_uart_lines():
-        command = parse_visual_command(line)
-        if command is None:
-            if not line.startswith("ACK,"):
-                uart_last_status = "INVALID LINE"
-                if DEBUG_PRINT:
-                    print("UART RX invalid:", line)
-            continue
-
-        epoch_changed = current_command.epoch != command.epoch
-        route_changed = (
-            current_command.mode != command.mode or
-            current_command.route_region != command.route_region or
-            current_command.target_digit != command.target_digit
-        )
-        if epoch_changed:
-            pharmacy_consensus.reset(command.epoch)
-            route_consensus.reset((command.epoch << 4) | command.route_region)
-        elif route_changed:
-            route_consensus.reset((command.epoch << 4) | command.route_region)
-
-        current_command = command
-        uart.write(
-            "A,V,{},{},{},{}\r\n".format(
-                command.mode,
-                command.target_digit,
-                command.route_region,
-                command.epoch,
-            )
-        )
-        uart_valid_command_count += 1
-        uart_last_status = "V OK"
-        uart_last_ack_ms = time.ticks_ms()
-        if DEBUG_PRINT:
-            print(
-                "VISUAL COMMAND",
-                "mode=", command.mode,
-                "target=", command.target_digit,
-                "region=", command.route_region,
-                "epoch=", command.epoch,
-            )
-    return current_command
-
-
-def format_line_message(result):
-    if result.valid:
-        return "L,1,{},{},{},{}\r\n".format(
-            result.error_x,
-            result.angle_d10,
-            result.quality,
-            result.direction_mask,
-        )
-    # 无线帧仍证明视觉循环在线，但禁止下位机使用旧误差继续控制。
-    return "L,0,0,0,{},0\r\n".format(result.quality)
-
-
-def _scale_coordinate(value, source_size, display_size):
-    return int(int(value) * int(display_size) // int(source_size))
-
-
-def _draw_osd_text(osd, x, y, text, color):
-    """统一使用高级文字接口，避免不同固件的基础字体缩放差异。"""
-    osd.draw_string_advanced(x, y, 18, str(text), color=color)
-
-
-def draw_delivery_overlay(
-    line_result,
-    command,
-    last_yolo_result,
-    last_yolo_result_ms,
-    locked_overlay,
-    now_ms,
-    max_line_processing_ms,
-    max_line_send_gap_ms,
-    max_digit_inference_ms,
-    yolo_load_ms,
-):
-    """使用YOLO原生绘制叠加数字框，再补充红线和UART状态。"""
-    global osd_error_logged
+def run():
+    pipeline = None
+    uart = None
+    yolo = None
+    video_streamer = None
+    os.exitpoint(os.EXITPOINT_ENABLE)
 
     try:
-        osd = pipeline.osd_img
-        pipeline.clear_osd()
-
-        # 与官方示例一致，由YOLO11根据rgb888p_size/display_size绘制真实检测框。
-        if last_yolo_result is not None and yolo is not None:
-            result_age_ms = time.ticks_diff(now_ms, last_yolo_result_ms)
-            # 目标锁定后停止推理，但冻结最后一次真实检测框作为操作反馈。
-            if locked_overlay or 0 <= result_age_ms <= DIGIT_OVERLAY_HOLD_MS:
-                yolo.draw_result(last_yolo_result, osd)
-
-        white = (255, 255, 255)
-        green = (0, 255, 0)
-        red = (255, 0, 0)
-        yellow = (255, 255, 0)
-        cyan = (0, 255, 255)
-
-        # 红线参考中心和当前控制点使用 320×240 到显示坐标的缩放。
-        display_center_x = DISPLAY_SIZE[0] // 2
-        control_y = _scale_coordinate(204, LINE_CV_SIZE[1], DISPLAY_SIZE[1])
-        line_x = _scale_coordinate(
-            (LINE_CV_SIZE[0] // 2) + line_result.error_x,
-            LINE_CV_SIZE[0],
-            DISPLAY_SIZE[0],
+        diameter_mm = _target_diameter_mm()
+        print("启动双排刻度识别，目标模式:", TARGET_PROFILE, "直径/mm:", diameter_mm)
+        pipeline = VisionPipeline(
+            cv_size=CV_SIZE,
+            ai_size=AI_SIZE,
+            display_size=DISPLAY_SIZE,
+            display_mode=DISPLAY_MODE,
+            ide_quality=IDE_FRAME_QUALITY,
+            to_ide=False,
         )
-        line_color = green if line_result.valid else red
-        osd.draw_line(
-            display_center_x, DISPLAY_SIZE[1] // 2,
-            display_center_x, DISPLAY_SIZE[1] - 1,
-            color=cyan, thickness=2,
+        pipeline.create()
+        uart = _create_uart()
+        use_yolo = TARGET_PROFILE == "STEEL_BALL"
+        detector = BallPositionDetector(
+            thresholds=_target_thresholds(),
+            # The classical fallback must search the same pipe band as YOLO;
+            # otherwise dark/red hardware elsewhere in the frame can be
+            # mistaken for the ball.
+            roi=STEEL_BALL_YOLO_ROI_CV if use_yolo else None,
+            target_diameter_mm=diameter_mm,
+            scale_refresh_frames=1 if use_yolo else 10,
+            scale_hold_frames=CALIBRATION_HOLD_UPDATES,
         )
-        osd.draw_line(
-            line_x - 12, control_y, line_x + 12, control_y,
-            color=line_color, thickness=3,
-        )
-        osd.draw_line(
-            line_x, control_y - 12, line_x, control_y + 12,
-            color=line_color, thickness=3,
-        )
-
-        _draw_osd_text(
-            osd, 8, 6,
-            "LINE V{} E{} A{} Q{} M{} P{}".format(
-                int(line_result.valid),
-                line_result.error_x,
-                line_result.angle_d10,
-                line_result.quality,
-                line_result.direction_mask,
-                line_result.point_count,
-            ),
-            line_color,
-        )
-        _draw_osd_text(
-            osd, 8, 30,
-            "V MODE{} TARGET{} REGION{} EPOCH{}".format(
-                command.mode,
-                command.target_digit,
-                command.route_region,
-                command.epoch,
-            ),
-            yellow,
-        )
-        _draw_osd_text(
-            osd, 8, 54,
-            "UART B{} L{} OK{} {}".format(
-                uart_rx_byte_count,
-                uart_rx_line_count,
-                uart_valid_command_count,
-                uart_last_status,
-            ),
-            green if uart_valid_command_count else yellow,
-        )
-        _draw_osd_text(
-            osd, 8, 78,
-            "RX " + uart_last_line[:28],
-            white,
-        )
-        _draw_osd_text(
-            osd, 8, 102,
-            "LINE{}ms GAP{}ms YOLO{}ms".format(
-                max_line_processing_ms,
-                max_line_send_gap_ms,
-                max_digit_inference_ms,
-            ),
-            white,
-        )
-        _draw_osd_text(
-            osd, 8, 126,
-            "YOLO LOAD{}ms".format(yolo_load_ms),
-            white,
-        )
-
-        pipeline.show_osd()
-        osd_error_logged = False
-    except BaseException as error:
-        if DEBUG_PRINT and not osd_error_logged:
-            osd_error_logged = True
-            print("OSD绘制异常:")
-            sys.print_exception(error)
-
-
-def create_digit_yolo(YOLO11):
-    print("S30D: 加载数字YOLO模型", DIGIT_MODEL_PATH)
-    print("S30D: 输入", DIGIT_MODEL_INPUT_SIZE, "标签", DIGIT_LABELS)
-    detector = YOLO11(
-        task_type="detect",
-        mode="video",
-        kmodel_path=DIGIT_MODEL_PATH,
-        labels=DIGIT_LABELS,
-        rgb888p_size=list(AI_SIZE),
-        model_input_size=DIGIT_MODEL_INPUT_SIZE,
-        display_size=list(pipeline.display_size),
-        conf_thresh=DIGIT_CONFIDENCE_THRESHOLD,
-        nms_thresh=NMS_THRESHOLD,
-        max_boxes_num=50,
-        debug_mode=0,
-    )
-    detector.config_preprocess()
-    print("S31D: 数字YOLO模型加载完成")
-    return detector
-
-
-def run_line_mode(RedLineDetector, VisionPipeline):
-    global pipeline
-
-    print("S20: 初始化红线视觉管线")
-    pipeline = VisionPipeline(
-        cv_size=LINE_CV_SIZE,
-        ai_size=AI_SIZE,
-        display_size=DISPLAY_SIZE,
-    )
-    pipeline.create()
-    detector = RedLineDetector()
-    clock = time.clock()
-    frame_count = 0
-    last_send_ms = time.ticks_ms()
-
-    if DEBUG_PRINT:
-        print("K230红线视觉启动")
-        print("传统视觉:", LINE_CV_SIZE, "AI:", AI_SIZE)
-
-    while True:
-        os.exitpoint()
-        clock.tick()
-
-        frame = pipeline.capture_vision_frame()
-        result = detector.detect(frame)
-        frame = None
-
+        if use_yolo:
+            yolo = _create_steel_ball_yolo()
+        sequence = 0
+        frame_count = 0
         now_ms = time.ticks_ms()
-        if time.ticks_diff(now_ms, last_send_ms) >= LINE_SEND_INTERVAL_MS:
-            uart.write(format_line_message(result))
-            last_send_ms = now_ms
-            received_lines = poll_uart_lines()
-            if DEBUG_PRINT and received_lines:
-                print("UART RX:", received_lines)
+        last_send_ms = now_ms
+        last_osd_ms = now_ms
+        last_calibration_ms = None
+        inference_window_start_ms = now_ms
+        inference_window_frames = 0
+        inference_fps = 0.0
+        yolo_parse_reported = False
+        video_ap_started = False
+        perf_window_start_ms = now_ms
+        perf_frames = 0
+        perf_cv_us = 0
+        perf_ai_capture_us = 0
+        perf_yolo_us = 0
+        perf_post_us = 0
+        perf_uart_us = 0
+        perf_osd_us = 0
+        perf_loop_us = 0
 
-        frame_count += 1
-        if DEBUG_PRINT and frame_count % LINE_DEBUG_INTERVAL_FRAMES == 0:
-            print(
-                "LINE",
-                "valid=", int(result.valid),
-                "error=", result.error_x,
-                "angle10=", result.angle_d10,
-                "quality=", result.quality,
-                "mask=", result.direction_mask,
-                "points=", result.point_count,
-                "fps=", clock.fps(),
+        while True:
+            os.exitpoint()
+            loop_start_us = time.ticks_us()
+            now_ms = time.ticks_ms()
+            if (
+                VIDEO_AP_ENABLE and
+                not video_ap_started and
+                frame_count >= VIDEO_AP_START_DELAY_FRAMES
+            ):
+                video_ap_started = True
+                if WifiApRtspStreamer is None:
+                    print("wifi_ap_rtsp.py missing, keep control loop running")
+                else:
+                    try:
+                        video_streamer = WifiApRtspStreamer(
+                            ssid=VIDEO_AP_SSID,
+                            key=VIDEO_AP_KEY,
+                            ip=VIDEO_AP_IP,
+                            port=VIDEO_RTSP_PORT,
+                            session_name=VIDEO_RTSP_SESSION,
+                            fps=VIDEO_RTSP_FPS,
+                            bitrate_kbps=VIDEO_RTSP_BITRATE_KBPS,
+                        )
+                        video_streamer.start()
+                    except BaseException as error:
+                        print("RTSP AP start failed, keep control loop running:")
+                        sys.print_exception(error)
+                        video_streamer = None
+
+            # RTSP 图传在线程中直接读取 Display WBC，不占用主循环 CV 帧。
+            frame = None
+            yolo_result = None
+            ai_frame = None
+            ai_array = None
+            if use_yolo:
+                calibration_due = (
+                    last_calibration_ms is None or
+                    time.ticks_diff(now_ms, last_calibration_ms)
+                    >= CALIBRATION_INTERVAL_MS
+                )
+                # RTSP 直接编码 Display WBC；CV 通道只用于低频红色刻度标定。
+                if calibration_due:
+                    stage_start_us = time.ticks_us()
+                    frame = pipeline.capture_vision_frame()
+                    detector.update_calibration(frame)
+                    last_calibration_ms = now_ms
+                    perf_cv_us += time.ticks_diff(
+                        time.ticks_us(),
+                        stage_start_us,
+                    )
+
+                stage_start_us = time.ticks_us()
+                ai_frame, ai_array = pipeline.capture_ai_frame()
+                perf_ai_capture_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+
+                stage_start_us = time.ticks_us()
+                yolo_result = yolo.run(ai_array)
+                perf_yolo_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+
+                stage_start_us = time.ticks_us()
+                previous_ai_x = None
+                if detector.previous_center_x is not None:
+                    previous_ai_x = (
+                        detector.previous_center_x
+                        * float(AI_SIZE[0])
+                        / float(CV_SIZE[0])
+                    )
+                detection = select_best_yolo_box(
+                    yolo_result,
+                    previous_ai_x,
+                    image_size=AI_SIZE,
+                )
+                if detection is not None and not yolo_parse_reported:
+                    print("YOLOV5_PARSED:", detection)
+                    yolo_parse_reported = True
+                detection = scale_detection_box(
+                    detection,
+                    AI_SIZE,
+                    CV_SIZE,
+                )
+                result = detector.result_from_yolo_box(detection)
+                if (
+                    not result.valid and
+                    STEEL_BALL_CLASSICAL_FALLBACK
+                ):
+                    if frame is None:
+                        frame = pipeline.capture_vision_frame()
+                    fallback_result = detector.detect(frame)
+                    if fallback_result.valid:
+                        result = fallback_result
+                perf_post_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+                frame = None
+            else:
+                frame = pipeline.capture_vision_frame()
+                result = detector.detect(frame)
+                frame = None
+
+            # 统计单位时间内真正完成的钢球识别次数，包含实际摄像头与系统开销。
+            inference_window_frames += 1
+            now_ms = time.ticks_ms()
+            inference_elapsed_ms = time.ticks_diff(
+                now_ms,
+                inference_window_start_ms,
             )
+            if inference_elapsed_ms >= INFERENCE_FPS_WINDOW_MS:
+                inference_fps = (
+                    inference_window_frames * 1000.0
+                    / float(inference_elapsed_ms)
+                )
+                # IDE画面刷新可能低于控制循环帧率，串口值用于区分显示卡顿和推理卡顿。
+                print("BALL LOOP FPS: {:.1f}".format(inference_fps))
+                inference_window_frames = 0
+                inference_window_start_ms = now_ms
 
-        if frame_count % GC_INTERVAL_FRAMES == 0:
-            gc.collect()
+            if time.ticks_diff(now_ms, last_send_ms) >= SEND_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
+                uart.write(format_ball_message(result, sequence))
+                sequence = (sequence + 1) & 0xFFFF
+                last_send_ms = now_ms
+                perf_uart_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
+            if time.ticks_diff(now_ms, last_osd_ms) >= OSD_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
+                _draw_overlay(
+                    pipeline,
+                    detector,
+                    result,
+                    inference_fps,
+                    yolo,
+                    yolo_result,
+                )
+                last_osd_ms = now_ms
+                perf_osd_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
-def run_delivery_mode(
-    RedLineDetector,
-    VisionPipeline,
-    YOLO11,
-    DigitConsensus,
-    VisualCommand,
-    make_detections,
-    parse_visual_command,
-    format_digit_frame,
-    is_digit_inference_due,
-    is_locked_off_command,
-    constants,
-):
-    """比赛视觉循环：红线优先，按 MSPM0 状态低频运行数字 YOLO。"""
-    global pipeline, yolo
-
-    pipeline = VisionPipeline(
-        cv_size=LINE_CV_SIZE,
-        ai_size=AI_SIZE,
-        display_size=DISPLAY_SIZE,
-        to_ide=DELIVERY_IDE_PREVIEW,
-    )
-    pipeline.create()
-    red_line_detector = RedLineDetector()
-    pharmacy_consensus = DigitConsensus(
-        history_size=5,
-        required_votes=3,
-        max_gap_ms=DIGIT_PHARMACY_CONSENSUS_MAX_GAP_MS,
-    )
-    route_consensus = DigitConsensus(history_size=5, required_votes=3)
-    command = VisualCommand(constants["VISUAL_MODE_OFF"], 0, 0, 0)
-
-    # 模型加载约需数百毫秒，必须在实时红线计时开始前完成，避免首次 V 命令阻塞 L 帧。
-    yolo_load_start_ms = time.ticks_ms()
-    yolo = create_digit_yolo(YOLO11)
-    yolo_load_ms = time.ticks_diff(time.ticks_ms(), yolo_load_start_ms)
-
-    # 预热一次 AI 通道和 KPU，后续任务阶段只承担稳定的单帧推理开销。
-    warmup_frame = None
-    warmup_array = None
-    warmup_result = None
-    warmup_start_ms = time.ticks_ms()
-    try:
-        warmup_frame, warmup_array = pipeline.capture_ai_frame()
-        warmup_result = yolo.run(warmup_array)
-        print(
-            "S32D: 数字YOLO预热完成",
-            "load_ms=", yolo_load_ms,
-            "warmup_ms=", time.ticks_diff(time.ticks_ms(), warmup_start_ms),
-        )
-    except BaseException as error:
-        # 预热失败不销毁已加载模型，实时阶段仍可在下一次 V 命令时重试。
-        print("数字YOLO预热异常:")
-        sys.print_exception(error)
-    finally:
-        warmup_frame = None
-        warmup_array = None
-        warmup_result = None
-        gc.collect()
-
-    # 所有实时性能计时都从模型加载和预热完成后开始。
-    realtime_start_ms = time.ticks_ms()
-    frame_count = 0
-    digit_run_count = 0
-    first_result_logged = False
-    last_line_send_ms = realtime_start_ms
-    last_digit_run_ms = realtime_start_ms
-    last_osd_ms = realtime_start_ms
-    last_gc_ms = realtime_start_ms
-    last_yolo_result = None
-    last_yolo_result_ms = 0
-    locked_overlay = False
-    max_line_processing_ms = 0
-    max_line_send_gap_ms = 0
-    max_digit_inference_ms = 0
-    clock = time.clock()
-
-    print("K230比赛视觉启动：红线优先，数字推理与OSD分时运行")
-    print("V命令必须从UART2 RX IO{}输入，ACK从TX IO{}输出".format(
-        K230_UART_RX_IO, K230_UART_TX_IO))
-    print("CanMV IDE USB终端输入不会进入该硬件UART；命令支持CR、LF或CRLF结尾")
-
-    while True:
-        os.exitpoint()
-        clock.tick()
-
-        previous_command = command
-        command = process_visual_commands(
-            command,
-            pharmacy_consensus,
-            route_consensus,
-            parse_visual_command,
-        )
-        command_changed = (
-            command.mode != previous_command.mode or
-            command.target_digit != previous_command.target_digit or
-            command.route_region != previous_command.route_region or
-            command.epoch != previous_command.epoch
-        )
-        locked_overlay = is_locked_off_command(command)
-        if command_changed:
-            # 锁定 OFF 保留刚确认的框；普通关闭或新任务必须清除上一轮结果。
-            preserve_locked_result = (
-                locked_overlay and
-                command.epoch == previous_command.epoch
-            )
-            if not preserve_locked_result:
-                last_yolo_result = None
-                last_yolo_result_ms = 0
-
-        # 红线始终优先运行和发送，后续低优先级任务只能使用发送后的空档。
-        line_processing_start_ms = time.ticks_ms()
-        vision_frame = pipeline.capture_vision_frame()
-        line_result = red_line_detector.detect(vision_frame)
-        vision_frame = None
-        line_processing_ms = time.ticks_diff(
-            time.ticks_ms(),
-            line_processing_start_ms,
-        )
-        if line_processing_ms > max_line_processing_ms:
-            max_line_processing_ms = line_processing_ms
-
-        line_sent = False
-        now_ms = time.ticks_ms()
-        if time.ticks_diff(now_ms, last_line_send_ms) >= LINE_SEND_INTERVAL_MS:
-            line_gap_ms = time.ticks_diff(now_ms, last_line_send_ms)
-            if line_gap_ms > max_line_send_gap_ms:
-                max_line_send_gap_ms = line_gap_ms
-            uart.write(format_line_message(line_result))
-            last_line_send_ms = now_ms
-            line_sent = True
-
-        # YOLO 只允许紧跟一次 L 帧发送运行，保证阻塞前下位机已拿到最新红线结果。
-        digit_ran = False
-        digit_enabled = command.mode != constants["VISUAL_MODE_OFF"]
-        if line_sent and digit_enabled and is_digit_inference_due(
-            now_ms,
-            last_digit_run_ms,
-            DIGIT_INFERENCE_INTERVAL_MS,
-        ):
-            digit_ran = True
             ai_frame = None
             ai_array = None
             yolo_result = None
-            detections = None
-            detection = None
-            inference_start_ms = time.ticks_ms()
-            try:
-                ai_frame, ai_array = pipeline.capture_ai_frame(
-                    DIGIT_CAPTURE_TIMEOUT_MS,
-                )
-                yolo_result = yolo.run(ai_array)
 
-                if DEBUG_PRINT and not first_result_logged:
-                    first_result_logged = True
-                    print(
-                        "DIGIT RESULT STRUCTURE",
-                        "parts=", len(yolo_result),
-                        "boxes=", len(yolo_result[0]),
-                        "classes=", len(yolo_result[1]),
-                        "scores=", len(yolo_result[2]),
-                    )
+            frame_count += 1
+            if frame_count % GC_INTERVAL_FRAMES == 0:
+                gc.collect()
 
-                target_filter = (
-                    command.target_digit
-                    if command.mode == constants["VISUAL_MODE_TARGET"]
-                    else None
-                )
-                detections = make_detections(
-                    yolo_result,
-                    DIGIT_LABELS,
-                    DIGIT_CONFIDENCE_THRESHOLD,
-                    target_filter,
-                )
-                if len(yolo_result[0]) != 0:
-                    # 复制模型原始三数组结果，OSD直接复用示例程序的draw_result。
-                    last_yolo_result = (
-                        [list(box) for box in yolo_result[0]],
-                        [int(class_id) for class_id in yolo_result[1]],
-                        [float(score) for score in yolo_result[2]],
-                    )
-                    # 从推理完成时开始计算显示寿命，避免慢推理让新框立即过期。
-                    last_yolo_result_ms = time.ticks_ms()
-                detection = detections[0] if detections else None
-                flags = 0
-                consensus = (
-                    route_consensus
-                    if command.mode == constants["VISUAL_MODE_TARGET"]
-                    else pharmacy_consensus
-                )
-
-                if detection is not None:
-                    flags |= constants["DIGIT_FLAG_VALID"]
-                    if target_filter in (None, 0) or detection.digit == target_filter:
-                        flags |= constants["DIGIT_FLAG_TARGET_MATCH"]
-                    status = consensus.observe(detection, now_ms)
-                    if status["confirmed"]:
-                        flags |= constants["DIGIT_FLAG_CONSENSUS"]
-                    if pharmacy_consensus.status()["confirmed"]:
-                        flags |= constants["DIGIT_FLAG_LOCKED"]
-
-                    uart.write(
-                        format_digit_frame(
-                            True,
-                            detection.digit,
-                            detection.x,
-                            detection.y,
-                            detection.width,
-                            detection.height,
-                            detection.side,
-                            int(detection.confidence * 100),
-                            flags,
-                        )
-                    )
-                else:
-                    if pharmacy_consensus.status()["confirmed"]:
-                        flags |= constants["DIGIT_FLAG_LOCKED"]
-                    uart.write(format_digit_frame(False, 0, 0, 0, 0, 0, 0, 0, flags))
-
-                # 原始结果缓存到下一次推理，避免低频YOLO框在OSD刷新时闪烁。
-            except BaseException as error:
-                uart.write(
-                    format_digit_frame(
-                        False, 0, 0, 0, 0, 0, 0, 0,
-                        constants["DIGIT_FLAG_ERROR"],
-                    )
-                )
-                print("数字识别异常:")
-                sys.print_exception(error)
-            finally:
-                ai_frame = None
-                ai_array = None
-                yolo_result = None
-                detections = None
-                detection = None
-
-            inference_ms = time.ticks_diff(time.ticks_ms(), inference_start_ms)
-            if inference_ms > max_digit_inference_ms:
-                max_digit_inference_ms = inference_ms
-            last_digit_run_ms = time.ticks_ms()
-            digit_run_count += 1
-
-            if DEBUG_PRINT and digit_run_count % DIGIT_DEBUG_INTERVAL_RUNS == 0:
+            perf_loop_us += time.ticks_diff(
+                time.ticks_us(),
+                loop_start_us,
+            )
+            perf_frames += 1
+            perf_now_ms = time.ticks_ms()
+            if (
+                perf_frames > 0
+                and time.ticks_diff(perf_now_ms, perf_window_start_ms)
+                >= INFERENCE_FPS_WINDOW_MS
+            ):
+                divisor = float(perf_frames) * 1000.0
                 print(
-                    "DIGIT PERF",
-                    "last_ms=", inference_ms,
-                    "max_ms=", max_digit_inference_ms,
-                    "line_max_ms=", max_line_processing_ms,
-                    "line_max_gap_ms=", max_line_send_gap_ms,
-                    "load_ms=", yolo_load_ms,
+                    "PERF ms/frame loop={:.1f} cv={:.1f} ai={:.1f} "
+                    "yolo={:.1f} post={:.1f} uart={:.1f} osd={:.1f}".format(
+                        perf_loop_us / divisor,
+                        perf_cv_us / divisor,
+                        perf_ai_capture_us / divisor,
+                        perf_yolo_us / divisor,
+                        perf_post_us / divisor,
+                        perf_uart_us / divisor,
+                        perf_osd_us / divisor,
+                    )
                 )
+                perf_window_start_ms = perf_now_ms
+                perf_frames = 0
+                perf_cv_us = 0
+                perf_ai_capture_us = 0
+                perf_yolo_us = 0
+                perf_post_us = 0
+                perf_uart_us = 0
+                perf_osd_us = 0
+                perf_loop_us = 0
 
-        # 全屏 OSD 与 YOLO 分开到不同轮次，并且同样只能占用 L 帧发送后的空档。
-        osd_updated = False
-        osd_now_ms = time.ticks_ms()
-        if (
-            line_sent and
-            not digit_ran and
-            time.ticks_diff(osd_now_ms, last_osd_ms) >= OSD_UPDATE_INTERVAL_MS
-        ):
-            draw_delivery_overlay(
-                line_result,
-                command,
-                last_yolo_result,
-                last_yolo_result_ms,
-                locked_overlay,
-                osd_now_ms,
-                max_line_processing_ms,
-                max_line_send_gap_ms,
-                max_digit_inference_ms,
-                yolo_load_ms,
-            )
-            last_osd_ms = time.ticks_ms()
-            osd_updated = True
-
-        frame_count += 1
-        if DEBUG_PRINT and frame_count % LINE_DEBUG_INTERVAL_FRAMES == 0:
-            print(
-                "DELIVERY LINE",
-                "valid=", int(line_result.valid),
-                "error=", line_result.error_x,
-                "mask=", line_result.direction_mask,
-                "line_ms=", line_processing_ms,
-                "line_max_ms=", max_line_processing_ms,
-                "gap_max_ms=", max_line_send_gap_ms,
-                "visual_mode=", command.mode,
-                "target=", command.target_digit,
-                "region=", command.route_region,
-                "fps=", clock.fps(),
-            )
-
-        # GC 也不与 YOLO/OSD 叠加；即使发生停顿，停顿前已经发出了最新 L 帧。
-        gc_now_ms = time.ticks_ms()
-        if (
-            line_sent and
-            not digit_ran and
-            not osd_updated and
-            time.ticks_diff(gc_now_ms, last_gc_ms) >= DELIVERY_GC_INTERVAL_MS
-        ):
-            gc.collect()
-            last_gc_ms = time.ticks_ms()
-
-
-def run_target_mode(YOLO11, VisionPipeline, locate_target_center):
-    global pipeline, yolo
-
-    print("S20: 初始化靶标视觉管线")
-    # 旧靶标几何算法要求传统视觉帧和 YOLO 框使用相同的 640×360 坐标系。
-    pipeline = VisionPipeline(
-        cv_size=TARGET_CV_SIZE,
-        ai_size=AI_SIZE,
-        display_size=DISPLAY_SIZE,
-    )
-    pipeline.create()
-
-    print("S30: 加载YOLO模型")
-    yolo = YOLO11(
-        task_type="detect",
-        mode="video",
-        kmodel_path=TARGET_MODEL_PATH,
-        labels=TARGET_LABELS,
-        rgb888p_size=list(AI_SIZE),
-        model_input_size=TARGET_MODEL_INPUT_SIZE,
-        display_size=list(pipeline.display_size),
-        conf_thresh=TARGET_CONFIDENCE_THRESHOLD,
-        nms_thresh=NMS_THRESHOLD,
-        max_boxes_num=50,
-        debug_mode=0,
-    )
-    yolo.config_preprocess()
-    print("S31: YOLO模型加载完成")
-
-    image_center_x = AI_SIZE[0] // 2
-    image_center_y = AI_SIZE[1] // 2
-    last_send_ms = time.ticks_ms()
-    previous_center = None
-    gc_counter = 0
-
-    while True:
-        os.exitpoint()
-
-        ai_frame, ai_array = pipeline.capture_ai_frame()
-        result = yolo.run(ai_array)
-        pipeline.clear_osd()
-        yolo.draw_result(result, pipeline.osd_img)
-        target = select_best_target(result)
-
-        if target is not None:
-            display_box = target[0:4]
-            x1, y1, x2, y2, confidence = target_box_to_bounds(target)
-            vision_frame = None
-
+    except KeyboardInterrupt:
+        print("用户停止钢球位置识别")
+    except BaseException as error:
+        print("钢球位置识别异常:")
+        sys.print_exception(error)
+    finally:
+        if video_streamer is not None:
             try:
-                vision_frame = pipeline.capture_vision_frame()
-                center_x, center_y, center_source, geometry_score = locate_target_center(
-                    vision_frame,
-                    (x1, y1, x2, y2),
-                    previous_center,
-                )
-            finally:
-                vision_frame = None
-
-            previous_center = (center_x, center_y)
-            error_x = center_x - image_center_x
-            error_y = center_y - image_center_y
-            error_x, error_y = apply_dead_zone(error_x, error_y)
-
-            now_ms = time.ticks_ms()
-            if time.ticks_diff(now_ms, last_send_ms) >= TARGET_SEND_INTERVAL_MS:
-                uart.write(
-                    "T,{},{},{}\r\n".format(
-                        error_x,
-                        error_y,
-                        int(confidence * 100),
-                    )
-                )
-                last_send_ms = now_ms
-
-                if DEBUG_PRINT:
-                    print(
-                        "TARGET",
-                        "source=", center_source,
-                        "display_box=", display_box,
-                        "center=", (center_x, center_y),
-                        "error=", (error_x, error_y),
-                        "geometry=", geometry_score,
-                        "confidence=", int(confidence * 100),
-                    )
-        else:
-            previous_center = None
-            now_ms = time.ticks_ms()
-            if time.ticks_diff(now_ms, last_send_ms) >= TARGET_SEND_INTERVAL_MS:
-                uart.write("N\r\n")
-                last_send_ms = now_ms
-
-        poll_uart_lines()
-        pipeline.show_osd()
-        ai_frame = None
-        ai_array = None
-        gc_counter += 1
-
-        if gc_counter >= 8:
-            gc_counter = 0
-            gc.collect()
+                video_streamer.stop()
+            except BaseException as error:
+                sys.print_exception(error)
+        if yolo is not None:
+            try:
+                yolo.deinit()
+            except BaseException as error:
+                sys.print_exception(error)
+        if pipeline is not None:
+            try:
+                pipeline.destroy()
+            except BaseException as error:
+                sys.print_exception(error)
+        if uart is not None:
+            try:
+                uart.deinit()
+            except BaseException as error:
+                sys.print_exception(error)
+        gc.collect()
 
 
-try:
-    print("S00: 导入K230模块")
-    from machine import UART, FPIOA
-    from vision_pipeline import VisionPipeline
-
-    if RUN_MODE == LINE_MODE:
-        from red_line import RedLineDetector
-    elif RUN_MODE == DELIVERY_MODE:
-        from red_line import RedLineDetector
-        from libs.YOLO import YOLO11
-        from digit_logic import (
-            DIGIT_FLAG_CONSENSUS,
-            DIGIT_FLAG_ERROR,
-            DIGIT_FLAG_LOCKED,
-            DIGIT_FLAG_TARGET_MATCH,
-            DIGIT_FLAG_VALID,
-            VISUAL_MODE_OFF,
-            VISUAL_MODE_TARGET,
-            DigitConsensus,
-            VisualCommand,
-            format_digit_frame,
-            is_digit_inference_due,
-            is_locked_off_command,
-            make_detections,
-            parse_visual_command,
-        )
-    elif RUN_MODE == TARGET_MODE:
-        from libs.YOLO import YOLO11
-        from target_geometry import locate_target_center
-    else:
-        raise ValueError("未知RUN_MODE: " + str(RUN_MODE))
-    print("S01: 模块导入完成")
-
-    uart = create_uart(UART, FPIOA)
-
-    if RUN_MODE == LINE_MODE:
-        run_line_mode(RedLineDetector, VisionPipeline)
-    elif RUN_MODE == DELIVERY_MODE:
-        run_delivery_mode(
-            RedLineDetector,
-            VisionPipeline,
-            YOLO11,
-            DigitConsensus,
-            VisualCommand,
-            make_detections,
-            parse_visual_command,
-            format_digit_frame,
-            is_digit_inference_due,
-            is_locked_off_command,
-            {
-                "VISUAL_MODE_OFF": VISUAL_MODE_OFF,
-                "VISUAL_MODE_TARGET": VISUAL_MODE_TARGET,
-                "DIGIT_FLAG_VALID": DIGIT_FLAG_VALID,
-                "DIGIT_FLAG_TARGET_MATCH": DIGIT_FLAG_TARGET_MATCH,
-                "DIGIT_FLAG_CONSENSUS": DIGIT_FLAG_CONSENSUS,
-                "DIGIT_FLAG_LOCKED": DIGIT_FLAG_LOCKED,
-                "DIGIT_FLAG_ERROR": DIGIT_FLAG_ERROR,
-            },
-        )
-    else:
-        run_target_mode(YOLO11, VisionPipeline, locate_target_center)
-
-except KeyboardInterrupt:
-    print("K230程序已由用户停止")
-
-except BaseException as error:
-    print("K230运行异常:")
-    sys.print_exception(error)
-
-finally:
-    if yolo is not None:
-        try:
-            yolo.deinit()
-        except BaseException as error:
-            print("YOLO清理异常:")
-            sys.print_exception(error)
-
-    if pipeline is not None:
-        try:
-            pipeline.destroy()
-        except BaseException as error:
-            print("摄像头管线清理异常:")
-            sys.print_exception(error)
-
-    if uart is not None:
-        try:
-            uart.deinit()
-        except BaseException as error:
-            print("UART清理异常:")
-            sys.print_exception(error)
-
-    gc.collect()
-    print("K230资源释放完成")
+if __name__ == "__main__":
+    run()
