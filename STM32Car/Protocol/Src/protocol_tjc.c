@@ -601,6 +601,16 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
     g_tjc_last_command = command;
     current_mode = App_GetCurrentMode();
 
+    if ((App_GetHostCalibrationEnabled() != 0U) &&
+        (command != TJC_COMMAND_QUERY) &&
+        (command != TJC_COMMAND_STOP)) {
+        /* 上位机标定模式：禁止通过串口屏启动任何任务。 */
+        g_tjc_valid_command_count++;
+        Protocol_Tjc_SendResult(TJC_RESULT_ENTER_FAILED, current_mode,
+                                command);
+        return;
+    }
+
     if (command == TJC_COMMAND_QUERY) {
         g_tjc_valid_command_count++;
         Protocol_Tjc_SendResult(TJC_RESULT_STATE, current_mode, command);

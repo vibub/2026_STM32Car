@@ -23,6 +23,11 @@
 - 舵机 PWM：TIM4_CH4 / PD15，50 Hz；500～2500 μs对应0°～270°，重新调整连接件后名义水平命令为122.0°，舵机允许使用0°～180°；当前模型实际命令约86.017°～178.775°。
 - 安全停车：停止模式、持续丢线或编码器反馈故障时清空速度控制器并停止电机。
 - LSM6DSV16X：通过 I2C2（PB10/PB11）接入，自动探测 `0x6A`/`0x6B` 并读取三轴陀螺仪和三轴加速度计。
+- 上位机标定链路：USART1（PB6/PB7，115200 8N1）通过 USB-TTL 连接 PC，
+  `Tools/pipe_calibration/calib_gui.py` 提供基础区（实时 IMU + 舵机手动控制）、
+  标定区（参数化扫描 + 多轮建表）和验证区（查表误差分析）。
+  标定模式默认关闭，PC 端发送 `CAL 1` 后进入（同时停车），未开启时其他命令
+  返回 `ERR disabled`，不会干扰行驶；协议见 `Tools/pipe_calibration/PROTOCOL.md`。
 
 K230 红线协议和视觉巡线控制已移除，底盘巡线输入为八路 I²C 红外传感器；K230 UART4 当前用于接收 `B,<valid>,<position_d10_mm>,<quality>,<sequence>` 钢球位置消息。
 
@@ -34,6 +39,8 @@ K230 红线协议和视觉巡线控制已移除，底盘巡线输入为八路 I�
 | TJC UART RX | USART2_RX / PD6 |
 | K230 UART TX | UART4_TX / PB9 |
 | K230 UART RX | UART4_RX / PB8 |
+| 上位机标定 UART TX | USART1_TX / PB6 |
+| 上位机标定 UART RX | USART1_RX / PB7 |
 | 右电机 PWM | TIM2_CH1 / PA0 |
 | 右电机方向 | PA1 |
 | 左电机 PWM | TIM2_CH3 / PA2 |

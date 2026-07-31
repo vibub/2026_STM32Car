@@ -8,6 +8,8 @@
 #include "chassis_accel_estimator.h"
 #include "chassis_motion_profile.h"
 #include "encoder_driver.h"
+#include "host_calibration_protocol.h"
+#include "host_link_uart.h"
 #include "imu_heading.h"
 #include "infrared_line_control.h"
 #include "infrared_line_sensor.h"
@@ -190,6 +192,9 @@ static uint8_t s_ball_shuttle_start_pending;
 static uint32_t s_ball_shuttle_prepare_since_ms;
 static uint8_t s_tjc_status_pending;
 static Tjc_StatusText s_pending_tjc_status;
+static uint8_t s_host_calibration_enabled = APP_HOST_CALIBRATION_DEFAULT;
+
+volatile uint8_t g_app_host_calibration_enabled;
 
 typedef enum {
     APP_DYNAMIC_RUN_IDLE = 0,
@@ -569,7 +574,8 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
         App_SendPipeCalibrationEvent(
             s_pipe_attitude_output.calibration_event);
     }
-    if (s_pipe_attitude_output.servo_override_active != 0U) {
+    if ((s_pipe_attitude_output.servo_override_active != 0U) &&
+        (App_GetHostCalibrationEnabled() == 0U)) {
         ServoDriver_SetAngle(s_pipe_attitude_output.servo_override_deg);
     }
     App_UpdatePipeAttitudeDebug();
@@ -689,6 +695,12 @@ static void App_BallBalanceTask(uint32_t now_ms)
         BallPositionProtocol_FeedByte(byte);
     }
 
+    if (App_GetHostCalibrationEnabled() != 0U) {
+        /* 上位机标定模式：跳过钢球平衡、往返和动态行驶任务，
+         * 舵机由上机位独占，主循环只保留姿态估计与标定协议。 */
+        return;
+    }
+
     if (BallPositionProtocol_TakeSample(&sample) != 0U) {
         g_app_ball_sample_valid = sample.valid;
         g_app_ball_position_d10_mm = sample.position_d10_mm;
@@ -723,7 +735,8 @@ static void App_BallBalanceTask(uint32_t now_ms)
                               &s_ball_balance_output);
     App_BallShuttleTask(now_ms);
     App_DynamicRunTask(now_ms);
-    if (s_pipe_attitude_output.servo_override_active == 0U) {
+    if ((s_pipe_attitude_output.servo_override_active == 0U) &&
+        (App_GetHostCalibrationEnabled() == 0U)) {
         ServoDriver_SetAngle(s_ball_balance_output.command_angle_deg);
     }
     App_BalanceDebugLogTask(now_ms);
@@ -1269,6 +1282,10 @@ void App_Init(void)
     ImuHeading_Init();
 #endif
     K230Uart_Init();
+#if APP_USE_HOST_CALIBRATION
+    HostLinkUart_Init();
+    HostCalibrationProtocol_Init();
+#endif
     ServoDriver_Init(BallBalanceControl_GetNeutralAngleDeg());
     TjcUart_Init();
     Protocol_Tjc_Init();
@@ -1306,6 +1323,7 @@ void App_Init(void)
     s_ball_limit_clear_count = 0U;
     g_app_dynamic_run_state = (uint8_t) APP_DYNAMIC_RUN_IDLE;
     g_app_dynamic_run_failure = (uint8_t) APP_DYNAMIC_FAILURE_NONE;
+    g_app_host_calibration_enabled = s_host_calibration_enabled;
     g_app_ball_limit_warning = 0U;
     g_app_ball_limit_warning_count = 0U;
     s_tjc_status_pending = 0U;
@@ -1338,6 +1356,9 @@ void App_Loop(void)
     uint32_t now_ms;
 
     Protocol_Tjc_Task();
+#if APP_USE_HOST_CALIBRATION
+    HostCalibrationProtocol_Task();
+#endif
     App_SendPendingTjcStatus();
 #if APP_USE_IMU
     ImuHeading_Poll();
@@ -1595,4 +1616,58 @@ uint8_t App_GetPipeCalibrationValid(void)
 void App_SetBallBalanceTargetMm(float target_mm)
 {
     BallBalanceControl_SetTargetMm(&s_ball_balance_control, target_mm);
+}
+
+uint8_t App_SetHostCalibrationEnabled(uint8_t enabled)
+{
+    if (enabled != 0U) {
+        /* 进入标定模式：先停车并禁用所有自动任务。
+         * App_RequestMode(STOP) 内部已通过 App_SetBallBalanceEnabled(0)
+         * 停止往返、禁用平衡、中止水管标定，这里只置标志；
+         * 不要在此追加深层调用，CAL 路径与 1KB 栈的余量很小。 */
+        if (App_RequestMode(APP_MODE_STOP) == 0U) {
+            return 0U;
+        }
+        s_host_calibration_enabled = 1U;
+    } else {
+        s_host_calibration_enabled = 0U;
+    }
+    g_app_host_calibration_enabled = s_host_calibration_enabled;
+    return 1U;
+}
+
+uint8_t App_GetHostCalibrationEnabled(void)
+{
+    return s_host_calibration_enabled;
+}
+
+float App_GetPipePitchDeg(void)
+{
+    return s_pipe_attitude_output.pitch_deg;
+}
+
+float App_GetPipePitchRateDps(void)
+{
+    return s_pipe_attitude_output.pitch_rate_dps;
+}
+
+uint8_t App_GetPipeAttitudeValid(void)
+{
+    return s_pipe_attitude_output.attitude_valid;
+}
+
+float App_GetPipeRawAccelPitchDeg(void)
+{
+    /* 原始加速度俯仰角：不受九点标定门控，标定模式下供上位机直接使用。 */
+    return s_pipe_attitude_output.raw_accel_pitch_deg;
+}
+
+float App_GetPipeRawPitchRateDps(void)
+{
+    ImuMotionSample sample;
+
+    if (ImuHeading_GetLatestSample(&sample) != 0U) {
+        return sample.gyro_x_dps;
+    }
+    return 0.0f;
 }

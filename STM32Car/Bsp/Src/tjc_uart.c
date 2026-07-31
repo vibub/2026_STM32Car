@@ -1,4 +1,5 @@
 #include "tjc_uart.h"
+#include "host_link_uart.h"
 #include "k230_uart.h"
 #include "main.h"
 
@@ -136,12 +137,14 @@ void TjcUart_HandleError(UART_HandleTypeDef *huart)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
+    HostLinkUart_HandleRxComplete(huart);
     K230Uart_HandleRxComplete(huart);
     TjcUart_HandleRxComplete(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    HostLinkUart_HandleError(huart);
     K230Uart_HandleError(huart);
     TjcUart_HandleError(huart);
 }

@@ -42,4 +42,15 @@ uint8_t App_GetPipeCalibrationActive(void);
 uint8_t App_GetPipeCalibrationValid(void);
 void App_SetBallBalanceTargetMm(float target_mm);
 
+/* 上位机标定模式开关与水管姿态数据访问（供 HostCalibrationProtocol 使用）。 */
+uint8_t App_SetHostCalibrationEnabled(uint8_t enabled);
+uint8_t App_GetHostCalibrationEnabled(void);
+float App_GetPipePitchDeg(void);
+float App_GetPipePitchRateDps(void);
+uint8_t App_GetPipeAttitudeValid(void);
+float App_GetPipeRawAccelPitchDeg(void);
+float App_GetPipeRawPitchRateDps(void);
+
+extern volatile uint8_t g_app_host_calibration_enabled;
+
 #endif /* APP_MAIN_H */

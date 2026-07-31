@@ -256,6 +256,16 @@ uint8_t ImuHeading_TakeSample(ImuMotionSample *sample)
     return 1U;
 }
 
+uint8_t ImuHeading_GetLatestSample(ImuMotionSample *sample)
+{
+    if ((sample == 0) || (s_imu.read_count == 0U)) {
+        return 0U;
+    }
+
+    *sample = s_imu.latest_sample;
+    return 1U;
+}
+
 uint8_t ImuHeading_IsFresh(uint32_t now_ms)
 {
     if ((s_imu.ready == 0U) || (s_imu.read_count == 0U)) {

@@ -1174,6 +1174,9 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\k230_uart.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\host_link_uart.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\tjc_uart.c</name>
                 </file>
                 <file>
@@ -1223,6 +1226,9 @@
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Protocol\Src\ball_position_protocol.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Protocol\Src\host_calibration_protocol.c</name>
                 </file>
             </group>
         </group>

@@ -7,6 +7,12 @@
 #define APP_ENABLE_BALANCE_LOG              0U  /* 钢球平衡诊断日志开关，比赛固件可设为0释放约98 KiB RAM。 */
 #endif
 
+/* 上位机标定链路：USART1（PB6/PB7，115200 8N1）。
+ * 默认关闭（APP_HOST_CALIBRATION_DEFAULT=0），收到 CAL 1 后才进入标定模式并停车，
+ * 避免标定命令与循迹/平衡任务互相干扰。 */
+#define APP_USE_HOST_CALIBRATION            1U  /* 上位机标定协议总开关，0 表示整模块不编译。 */
+#define APP_HOST_CALIBRATION_DEFAULT        0U  /* 上电时标定模式默认状态。 */
+
 #define APP_CONTROL_PERIOD_MS              20U  /* 主控制循环周期，单位为毫秒。 */
 #define APP_BASE_SPEED_CM_S                40.0f /* 基础巡线目标速度，单位为厘米每秒。 */
 #define APP_LINE_MAX_ACCEL_CM_S2           25.0f /* 动态滚球行驶时允许的最大目标加速度。 */
