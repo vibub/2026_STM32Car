@@ -111,6 +111,16 @@ static const uint8_t s_text_shuttle_preparing[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
     0xE5U, 0x87U, 0x86U, 0xE5U, 0xA4U, 0x87U
 };
+static const uint8_t s_text_shuttle_ready[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xB8U, 0x89U,
+    0xE9U, 0xA2U, 0x98U, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0xB0U, 0xB1U, 0xE7U, 0xBBU, 0xAAU
+};
+static const uint8_t s_text_shuttle_not_ready[] = {
+    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0x85U, 0x88U,
+    0xE4U, 0xB8U, 0xADU, 0xE5U, 0xBFU, 0x83U,
+    0xE7U, 0xA8U, 0xB3U, 0xE5U, 0xAEU, 0x9AU
+};
 static const uint8_t s_text_shuttle_running[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
     0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU
@@ -372,6 +382,14 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
         case TJC_STATUS_SHUTTLE_PREPARING:
             text = s_text_shuttle_preparing;
             text_length = (uint16_t) sizeof(s_text_shuttle_preparing);
+            break;
+        case TJC_STATUS_SHUTTLE_READY:
+            text = s_text_shuttle_ready;
+            text_length = (uint16_t) sizeof(s_text_shuttle_ready);
+            break;
+        case TJC_STATUS_SHUTTLE_NOT_READY:
+            text = s_text_shuttle_not_ready;
+            text_length = (uint16_t) sizeof(s_text_shuttle_not_ready);
             break;
         case TJC_STATUS_SHUTTLE_RUNNING:
             text = s_text_shuttle_running;
