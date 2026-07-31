@@ -12,7 +12,7 @@ typedef enum {
     TJC_RX_WAIT_CHECKSUM
 } Tjc_RxState;
 
-#define TJC_STATUS_FRAME_BUFFER_SIZE 64U /* TJC 文本状态命令的最大发送缓存。 */
+#define TJC_STATUS_FRAME_BUFFER_SIZE 128U /* TJC 中文状态和动态结果命令的最大发送缓存。 */
 
 static const uint8_t s_tjc_text_prefix[] = "page0.t0.txt=\"";
 static const uint8_t s_tjc_text_suffix[] = {'\"', 0xFFU, 0xFFU, 0xFFU};
@@ -127,23 +127,129 @@ static const uint8_t s_text_shuttle_failed[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
     0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
 };
-static const uint8_t s_text_ab_preparing[] = "AB PREPARING";
-static const uint8_t s_text_ab_running[] = "AB RUNNING";
-static const uint8_t s_text_ab_passed[] = "AB PASSED";
-static const uint8_t s_text_ab_failed[] = "AB FAILED";
-static const uint8_t s_text_abcd_preparing[] = "ABCD PREPARING";
-static const uint8_t s_text_abcd_running[] = "ABCD RUNNING";
-static const uint8_t s_text_abcd_passed[] = "ABCD PASSED";
-static const uint8_t s_text_abcd_failed[] = "ABCD FAILED";
-static const uint8_t s_text_run_failed_imu[] = "FAIL IMU";
-static const uint8_t s_text_run_failed_mapping[] = "FAIL MAP";
-static const uint8_t s_text_run_failed_ready[] = "FAIL READY";
-static const uint8_t s_text_run_failed_motion[] = "FAIL PROFILE";
-static const uint8_t s_text_run_failed_balance[] = "FAIL BALANCE";
-static const uint8_t s_text_run_failed_vision[] = "FAIL VISION";
-static const uint8_t s_text_run_failed_sensor[] = "FAIL SENSOR";
-static const uint8_t s_text_run_failed_line[] = "FAIL LINE";
-static const uint8_t s_text_run_failed_motor[] = "FAIL MOTOR";
+static const uint8_t s_text_ab_preparing[] = {
+    0xE7U, 0xACU, 0xACU, 0xE5U, 0x9BU, 0x9BU, 0xE9U, 0xA2U, 0x98U,
+    0xE7U, 0xADU, 0x89U, 0xE5U, 0xBEU, 0x85U, 0xE9U, 0x92U, 0xA2U,
+    0xE7U, 0x90U, 0x83U, 0xE7U, 0xA8U, 0xB3U, 0xE5U, 0xAEU, 0x9AU
+};
+static const uint8_t s_text_ab_running[] = {
+    0xE7U, 0xACU, 0xACU, 0xE5U, 0x9BU, 0x9BU, 0xE9U, 0xA2U, 0x98U,
+    0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU, 0xE4U, 0xB8U, 0xADU
+};
+static const uint8_t s_text_ab_passed[] = {
+    0xE7U, 0xACU, 0xACU, 0xE5U, 0x9BU, 0x9BU, 0xE9U, 0xA2U, 0x98U,
+    0xE9U, 0x80U, 0x9AU, 0xE8U, 0xBFU, 0x87U
+};
+static const uint8_t s_text_ab_failed[] = {
+    0xE7U, 0xACU, 0xACU, 0xE5U, 0x9BU, 0x9BU, 0xE9U, 0xA2U, 0x98U,
+    0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
+};
+static const uint8_t s_text_abcd_preparing[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xBAU, 0x94U, 0xE9U, 0xA2U, 0x98U,
+    0xE7U, 0xADU, 0x89U, 0xE5U, 0xBEU, 0x85U, 0xE9U, 0x92U, 0xA2U,
+    0xE7U, 0x90U, 0x83U, 0xE7U, 0xA8U, 0xB3U, 0xE5U, 0xAEU, 0x9AU
+};
+static const uint8_t s_text_abcd_running[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xBAU, 0x94U, 0xE9U, 0xA2U, 0x98U,
+    0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU, 0xE4U, 0xB8U, 0xADU
+};
+static const uint8_t s_text_abcd_passed[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xBAU, 0x94U, 0xE9U, 0xA2U, 0x98U,
+    0xE9U, 0x80U, 0x9AU, 0xE8U, 0xBFU, 0x87U
+};
+static const uint8_t s_text_abcd_failed[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xBAU, 0x94U, 0xE9U, 0xA2U, 0x98U,
+    0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
+};
+static const uint8_t s_text_run_failed_imu[] = {
+    0x49U, 0x4DU, 0x55U, 0xE6U, 0x95U, 0x85U, 0xE9U, 0x9AU, 0x9CU,
+    0xEFU, 0xBCU, 0x8CU, 0xE5U, 0xB7U, 0xB2U, 0xE5U, 0x81U, 0x9CU,
+    0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_failed_mapping[] = {
+    0xE6U, 0xA0U, 0x87U, 0xE5U, 0xAEU, 0x9AU, 0xE6U, 0x98U, 0xA0U,
+    0xE5U, 0xB0U, 0x84U, 0xE6U, 0x95U, 0x85U, 0xE9U, 0x9AU, 0x9CU
+};
+static const uint8_t s_text_run_failed_ready[] = {
+    0xE9U, 0x92U, 0xA2U, 0xE7U, 0x90U, 0x83U, 0xE6U, 0x9CU, 0xAAU,
+    0xE7U, 0xA8U, 0xB3U, 0xE5U, 0xAEU, 0x9AU
+};
+static const uint8_t s_text_run_failed_motion[] = {
+    0xE9U, 0x80U, 0x9FU, 0xE5U, 0xBAU, 0xA6U, 0xE8U, 0xA7U, 0x84U,
+    0xE5U, 0x88U, 0x92U, 0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
+};
+static const uint8_t s_text_run_failed_balance[] = {
+    0xE5U, 0xB9U, 0xB3U, 0xE8U, 0xA1U, 0xA1U, 0xE8U, 0xA2U, 0xABU,
+    0xE7U, 0xA6U, 0x81U, 0xE7U, 0x94U, 0xA8U, 0xEFU, 0xBCU, 0x8CU,
+    0xE5U, 0xB7U, 0xB2U, 0xE5U, 0x81U, 0x9CU, 0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_failed_vision[] = {
+    0xE8U, 0xA7U, 0x86U, 0xE8U, 0xA7U, 0x89U, 0xE8U, 0xB6U, 0x85U,
+    0xE6U, 0x97U, 0xB6U, 0xEFU, 0xBCU, 0x8CU, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0x81U, 0x9CU, 0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_failed_sensor[] = {
+    0xE7U, 0xBAU, 0xA2U, 0xE5U, 0xA4U, 0x96U, 0xE6U, 0x95U, 0x85U,
+    0xE9U, 0x9AU, 0x9CU, 0xEFU, 0xBCU, 0x8CU, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0x81U, 0x9CU, 0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_failed_line[] = {
+    0xE6U, 0x8CU, 0x81U, 0xE7U, 0xBBU, 0xADU, 0xE4U, 0xB8U, 0xA2U,
+    0xE7U, 0xBAU, 0xBFU, 0xEFU, 0xBCU, 0x8CU, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0x81U, 0x9CU, 0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_failed_motor[] = {
+    0xE7U, 0x94U, 0xB5U, 0xE6U, 0x9CU, 0xBAU, 0xE6U, 0x95U, 0x85U,
+    0xE9U, 0x9AU, 0x9CU, 0xEFU, 0xBCU, 0x8CU, 0xE5U, 0xB7U, 0xB2U,
+    0xE5U, 0x81U, 0x9CU, 0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_command_locked[] = {
+    0xE5U, 0x8AU, 0xA8U, 0xE6U, 0x80U, 0x81U, 0xE4U, 0xBBU, 0xBBU,
+    0xE5U, 0x8AU, 0xA1U, 0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU,
+    0xE4U, 0xB8U, 0xADU
+};
+static const uint8_t s_text_run_reject_stop[] = {
+    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0x85U, 0x88U, 0xE5U, 0x81U, 0x9CU,
+    0xE8U, 0xBDU, 0xA6U
+};
+static const uint8_t s_text_run_reject_calibrating[] = {
+    0xE6U, 0xA0U, 0x87U, 0xE5U, 0xAEU, 0x9AU, 0xE6U, 0xADU, 0xA3U,
+    0xE5U, 0x9CU, 0xA8U, 0xE8U, 0xBFU, 0x9BU, 0xE8U, 0xA1U, 0x8CU
+};
+static const uint8_t s_text_run_reject_calibration[] = {
+    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0x85U, 0x88U, 0xE5U, 0xAEU, 0x8CU,
+    0xE6U, 0x88U, 0x90U, 0xE4U, 0xB9U, 0x9DU, 0xE7U, 0x82U, 0xB9U,
+    0xE6U, 0xA0U, 0x87U, 0xE5U, 0xAEU, 0x9AU
+};
+static const uint8_t s_text_run_reject_busy[] = {
+    0xE5U, 0x85U, 0xB6U, 0xE4U, 0xBBU, 0x96U, 0xE4U, 0xBBU, 0xBBU,
+    0xE5U, 0x8AU, 0xA1U, 0xE8U, 0xBFU, 0x90U, 0xE8U, 0xA1U, 0x8CU,
+    0xE4U, 0xB8U, 0xADU
+};
+static const uint8_t s_text_run_reject_balance[] = {
+    0xE5U, 0xB9U, 0xB3U, 0xE8U, 0xA1U, 0xA1U, 0xE6U, 0x97U, 0xA0U,
+    0xE6U, 0xB3U, 0x95U, 0xE5U, 0x90U, 0xAFU, 0xE7U, 0x94U, 0xA8U
+};
+static const uint8_t s_text_result_ab[] = {
+    0xE7U, 0xACU, 0xACU, 0xE5U, 0x9BU, 0x9BU, 0xE9U, 0xA2U, 0x98U
+};
+static const uint8_t s_text_result_abcd[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xBAU, 0x94U, 0xE9U, 0xA2U, 0x98U
+};
+static const uint8_t s_text_result_passed[] = {
+    0xE9U, 0x80U, 0x9AU, 0xE8U, 0xBFU, 0x87U
+};
+static const uint8_t s_text_result_overrange[] = {
+    0xE5U, 0xAEU, 0x8CU, 0xE6U, 0x88U, 0x90U, 0xE4U, 0xBDU, 0x86U,
+    0xE8U, 0xB6U, 0x85U, 0xE5U, 0xB7U, 0xAEU
+};
+static const uint8_t s_text_result_timeout[] = {
+    0xE8U, 0xB6U, 0x85U, 0xE6U, 0x97U, 0xB6U
+};
+static const uint8_t s_text_result_max_error[] = {
+    0x20U, 0xE6U, 0x9CU, 0x80U, 0xE5U, 0xA4U, 0xA7U,
+    0xE8U, 0xAFU, 0xAFU, 0xE5U, 0xB7U, 0xAEU
+};
 
 static const uint8_t s_tjc_command_suffix[] = {0xFFU, 0xFFU, 0xFFU};
 static const uint8_t s_tjc_warning_circle_100[] =
@@ -232,6 +338,26 @@ static uint16_t Protocol_Tjc_AppendFixedX100(uint8_t *buffer,
     buffer[length++] = (uint8_t) '.';
     buffer[length++] = (uint8_t) ('0' + fraction_part / 10U);
     buffer[length++] = (uint8_t) ('0' + fraction_part % 10U);
+    return length;
+}
+
+static uint16_t Protocol_Tjc_AppendUnsignedX10(uint8_t *buffer,
+                                               uint16_t length,
+                                               uint32_t value_x10)
+{
+    uint32_t integer_part = value_x10 / 10U;
+    uint32_t divisor = 1U;
+
+    while ((integer_part / divisor) >= 10U) {
+        divisor *= 10U;
+    }
+    do {
+        buffer[length++] = (uint8_t) ('0' +
+            (uint8_t) ((integer_part / divisor) % 10U));
+        divisor /= 10U;
+    } while (divisor != 0U);
+    buffer[length++] = (uint8_t) '.';
+    buffer[length++] = (uint8_t) ('0' + value_x10 % 10U);
     return length;
 }
 
@@ -391,71 +517,95 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
             break;
         case TJC_STATUS_AB_PREPARING:
             text = s_text_ab_preparing;
-            text_length = (uint16_t) (sizeof(s_text_ab_preparing) - 1U);
+            text_length = (uint16_t) sizeof(s_text_ab_preparing);
             break;
         case TJC_STATUS_AB_RUNNING:
             text = s_text_ab_running;
-            text_length = (uint16_t) (sizeof(s_text_ab_running) - 1U);
+            text_length = (uint16_t) sizeof(s_text_ab_running);
             break;
         case TJC_STATUS_AB_PASSED:
             text = s_text_ab_passed;
-            text_length = (uint16_t) (sizeof(s_text_ab_passed) - 1U);
+            text_length = (uint16_t) sizeof(s_text_ab_passed);
             break;
         case TJC_STATUS_AB_FAILED:
             text = s_text_ab_failed;
-            text_length = (uint16_t) (sizeof(s_text_ab_failed) - 1U);
+            text_length = (uint16_t) sizeof(s_text_ab_failed);
             break;
         case TJC_STATUS_ABCD_PREPARING:
             text = s_text_abcd_preparing;
-            text_length = (uint16_t) (sizeof(s_text_abcd_preparing) - 1U);
+            text_length = (uint16_t) sizeof(s_text_abcd_preparing);
             break;
         case TJC_STATUS_ABCD_RUNNING:
             text = s_text_abcd_running;
-            text_length = (uint16_t) (sizeof(s_text_abcd_running) - 1U);
+            text_length = (uint16_t) sizeof(s_text_abcd_running);
             break;
         case TJC_STATUS_ABCD_PASSED:
             text = s_text_abcd_passed;
-            text_length = (uint16_t) (sizeof(s_text_abcd_passed) - 1U);
+            text_length = (uint16_t) sizeof(s_text_abcd_passed);
             break;
         case TJC_STATUS_ABCD_FAILED:
             text = s_text_abcd_failed;
-            text_length = (uint16_t) (sizeof(s_text_abcd_failed) - 1U);
+            text_length = (uint16_t) sizeof(s_text_abcd_failed);
             break;
         case TJC_STATUS_RUN_FAILED_IMU:
             text = s_text_run_failed_imu;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_imu) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_imu);
             break;
         case TJC_STATUS_RUN_FAILED_MAPPING:
             text = s_text_run_failed_mapping;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_mapping) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_mapping);
             break;
         case TJC_STATUS_RUN_FAILED_READY:
             text = s_text_run_failed_ready;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_ready) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_ready);
             break;
         case TJC_STATUS_RUN_FAILED_MOTION:
             text = s_text_run_failed_motion;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_motion) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_motion);
             break;
         case TJC_STATUS_RUN_FAILED_BALANCE:
             text = s_text_run_failed_balance;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_balance) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_balance);
             break;
         case TJC_STATUS_RUN_FAILED_VISION:
             text = s_text_run_failed_vision;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_vision) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_vision);
             break;
         case TJC_STATUS_RUN_FAILED_SENSOR:
             text = s_text_run_failed_sensor;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_sensor) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_sensor);
             break;
         case TJC_STATUS_RUN_FAILED_LINE:
             text = s_text_run_failed_line;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_line) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_line);
             break;
         case TJC_STATUS_RUN_FAILED_MOTOR:
             text = s_text_run_failed_motor;
-            text_length = (uint16_t) (sizeof(s_text_run_failed_motor) - 1U);
+            text_length = (uint16_t) sizeof(s_text_run_failed_motor);
+            break;
+        case TJC_STATUS_RUN_COMMAND_LOCKED:
+            text = s_text_run_command_locked;
+            text_length = (uint16_t) sizeof(s_text_run_command_locked);
+            break;
+        case TJC_STATUS_RUN_REJECT_STOP:
+            text = s_text_run_reject_stop;
+            text_length = (uint16_t) sizeof(s_text_run_reject_stop);
+            break;
+        case TJC_STATUS_RUN_REJECT_CALIBRATING:
+            text = s_text_run_reject_calibrating;
+            text_length = (uint16_t) sizeof(s_text_run_reject_calibrating);
+            break;
+        case TJC_STATUS_RUN_REJECT_CALIBRATION:
+            text = s_text_run_reject_calibration;
+            text_length = (uint16_t) sizeof(s_text_run_reject_calibration);
+            break;
+        case TJC_STATUS_RUN_REJECT_BUSY:
+            text = s_text_run_reject_busy;
+            text_length = (uint16_t) sizeof(s_text_run_reject_busy);
+            break;
+        case TJC_STATUS_RUN_REJECT_BALANCE:
+            text = s_text_run_reject_balance;
+            text_length = (uint16_t) sizeof(s_text_run_reject_balance);
             break;
         default:
             break;
@@ -464,6 +614,77 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
     if (text != 0) {
         Protocol_Tjc_SendTextFrame(text, text_length);
     }
+}
+
+void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
+                                       uint8_t run_result,
+                                       uint32_t elapsed_ms,
+                                       float maximum_abs_error_mm)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+    uint32_t elapsed_x10;
+    uint32_t maximum_error_x10;
+    const uint8_t *mode_text;
+    uint16_t mode_text_length;
+    const uint8_t *result_text;
+    uint16_t result_text_length;
+
+    if (run_mode == (uint8_t) DYNAMIC_RUN_MODE_AB) {
+        mode_text = s_text_result_ab;
+        mode_text_length = (uint16_t) sizeof(s_text_result_ab);
+    } else if (run_mode == (uint8_t) DYNAMIC_RUN_MODE_ABCD) {
+        mode_text = s_text_result_abcd;
+        mode_text_length = (uint16_t) sizeof(s_text_result_abcd);
+    } else {
+        return;
+    }
+
+    if (run_result == (uint8_t) DYNAMIC_RUN_RESULT_PASSED) {
+        result_text = s_text_result_passed;
+        result_text_length = (uint16_t) sizeof(s_text_result_passed);
+    } else if (run_result ==
+               (uint8_t) DYNAMIC_RUN_RESULT_PASSED_OVERRANGE) {
+        result_text = s_text_result_overrange;
+        result_text_length = (uint16_t) sizeof(s_text_result_overrange);
+    } else if (run_result == (uint8_t) DYNAMIC_RUN_RESULT_TIMEOUT) {
+        result_text = s_text_result_timeout;
+        result_text_length = (uint16_t) sizeof(s_text_result_timeout);
+    } else {
+        return;
+    }
+
+    elapsed_x10 = (elapsed_ms + 50U) / 100U;
+    if (maximum_abs_error_mm < 0.0f) {
+        maximum_abs_error_mm = 0.0f;
+    }
+    if (maximum_abs_error_mm > 999.9f) {
+        maximum_abs_error_mm = 999.9f;
+    }
+    maximum_error_x10 = (uint32_t) (maximum_abs_error_mm * 10.0f + 0.5f);
+
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_tjc_text_prefix,
+        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, mode_text, mode_text_length);
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, result_text, result_text_length);
+    frame[length++] = (uint8_t) ' ';
+    length = Protocol_Tjc_AppendUnsignedX10(frame, length, elapsed_x10);
+    frame[length++] = (uint8_t) 's';
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_text_result_max_error,
+        (uint16_t) sizeof(s_text_result_max_error));
+    length = Protocol_Tjc_AppendUnsignedX10(
+        frame, length, maximum_error_x10);
+    frame[length++] = (uint8_t) 'm';
+    frame[length++] = (uint8_t) 'm';
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
 }
 
 void Protocol_Tjc_SetBallLimitWarning(uint8_t active)
@@ -593,6 +814,18 @@ void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
     g_tjc_status_text_count++;
 }
 
+static uint8_t Protocol_Tjc_IsModeCommand(uint8_t command)
+{
+    return (uint8_t) (
+        (command == TJC_COMMAND_BASIC_LINE) ||
+        (command == TJC_COMMAND_BALL_ENABLE) ||
+        (command == TJC_COMMAND_BALL_DISABLE) ||
+        (command == TJC_COMMAND_PIPE_CALIBRATE) ||
+        (command == TJC_COMMAND_BALL_SHUTTLE) ||
+        (command == TJC_COMMAND_AB) ||
+        (command == TJC_COMMAND_ABCD));
+}
+
 static void Protocol_Tjc_ProcessCommand(uint8_t command)
 {
     uint8_t current_mode;
@@ -620,6 +853,19 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
         Protocol_Tjc_SendResult(accepted ? TJC_RESULT_STOPPED :
                                 TJC_RESULT_ENTER_FAILED,
                                 App_GetCurrentMode(), command);
+    } else if ((App_IsDynamicRunCommandLocked() != 0U) &&
+               (Protocol_Tjc_IsModeCommand(command) != 0U)) {
+        g_tjc_valid_command_count++;
+        if (command == TJC_COMMAND_BALL_DISABLE) {
+            accepted = App_SetBallBalanceEnabled(0U);
+            Protocol_Tjc_SendResult(accepted ? TJC_RESULT_STOPPED :
+                                    TJC_RESULT_ENTER_FAILED,
+                                    App_GetCurrentMode(), command);
+        } else {
+            Protocol_Tjc_SendResult(TJC_RESULT_ENTER_FAILED,
+                                    App_GetCurrentMode(), command);
+            Protocol_Tjc_SendStatusText(TJC_STATUS_RUN_COMMAND_LOCKED);
+        }
     } else if (command == TJC_COMMAND_BASIC_LINE) {
         g_tjc_valid_command_count++;
         if (command == current_mode) {

@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "dynamic_run_task.h"
+
 extern volatile uint8_t g_app_init_step;
 
 #define APP_MODE_STOP       0x00U /* 停车模式编号。 */
@@ -11,19 +13,16 @@ extern volatile uint8_t g_app_init_step;
 #define APP_MODE_ABCD       0x07U /* 第五项：ABCD 整圈中心稳定通过。 */
 
 typedef enum {
-    APP_DYNAMIC_FAILURE_NONE = 0,
-    APP_DYNAMIC_FAILURE_IMU,
-    APP_DYNAMIC_FAILURE_MAPPING,
-    APP_DYNAMIC_FAILURE_PREPARE_TIMEOUT,
-    APP_DYNAMIC_FAILURE_MOTION_START,
-    APP_DYNAMIC_FAILURE_BALANCE_DISABLED,
-    APP_DYNAMIC_FAILURE_VISION,
-    APP_DYNAMIC_FAILURE_LINE_SENSOR,
-    APP_DYNAMIC_FAILURE_LINE_LOST,
-    APP_DYNAMIC_FAILURE_MOTOR
-} AppDynamicRunFailure;
+    APP_DYNAMIC_START_REJECT_NONE = 0,
+    APP_DYNAMIC_START_REJECT_NOT_STOPPED,
+    APP_DYNAMIC_START_REJECT_CALIBRATING,
+    APP_DYNAMIC_START_REJECT_NOT_CALIBRATED,
+    APP_DYNAMIC_START_REJECT_OTHER_TASK,
+    APP_DYNAMIC_START_REJECT_BALANCE_ENABLE
+} AppDynamicStartRejectReason;
 
 extern volatile uint8_t g_app_dynamic_run_failure;
+extern volatile uint8_t g_app_dynamic_start_reject;
 
 void App_Init(void);
 void App_Loop(void);
@@ -34,6 +33,7 @@ uint8_t App_StartSmoothAbRun(void);
 uint8_t App_StartSmoothLapRun(void);
 uint8_t App_StartAbRun(void);
 uint8_t App_StartAbcdRun(void);
+uint8_t App_IsDynamicRunCommandLocked(void);
 uint8_t App_SetBallBalanceEnabled(uint8_t enabled);
 uint8_t App_GetBallBalanceEnabled(void);
 uint8_t App_StartBallShuttle(void);

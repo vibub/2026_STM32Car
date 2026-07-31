@@ -1155,6 +1155,9 @@
                 <file>
                     <name>$PROJ_DIR$\..\App\Src\balance_debug_log.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\App\Src\dynamic_run_task.c</name>
+                </file>
             </group>
             <group>
                 <name>Bsp</name>
