@@ -87,6 +87,8 @@ volatile float g_app_ball_stop_distance_mm;
 volatile float g_app_ball_kp = BALL_BALANCE_DEFAULT_KP_DEG_PER_MM;
 volatile float g_app_ball_ki = BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S;
 volatile float g_app_ball_kd = BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S;
+volatile float g_app_ball_pipe_kp = BALL_BALANCE_DEFAULT_PIPE_KP;
+volatile float g_app_ball_pipe_kd_s = BALL_BALANCE_DEFAULT_PIPE_KD_S;
 volatile float g_app_ball_desired_pipe_pitch_deg;
 volatile float g_app_ball_command_pipe_pitch_deg;
 volatile float g_app_ball_pipe_command_rate_dps;
@@ -104,6 +106,10 @@ volatile float g_app_ball_desired_model_pitch_deg;
 volatile float g_app_ball_servo_feedforward_deg;
 volatile float g_app_ball_desired_angle_deg;
 volatile float g_app_ball_command_angle_deg;
+volatile uint32_t g_app_ball_feedforward_pwm_us;
+volatile uint32_t g_app_ball_desired_pwm_us;
+volatile uint32_t g_app_ball_command_pwm_us;
+volatile uint32_t g_app_ball_actual_pwm_us;
 volatile uint8_t g_app_ball_endpoint_hold_enabled;
 volatile uint8_t g_app_ball_shuttle_state;
 volatile uint8_t g_app_ball_shuttle_failure;
@@ -260,12 +266,19 @@ static void App_ApplyBallPidGains(void)
     float kp;
     float ki;
     float kd;
+    float pipe_kp;
+    float pipe_kd_s;
 
-    /* Sequence volatile reads explicitly for IAR and Live Watch updates. */
+    /* 显式顺序读取volatile变量，便于IAR Live Watch在线调整两级控制增益。 */
     kp = g_app_ball_kp;
     ki = g_app_ball_ki;
     kd = g_app_ball_kd;
+    pipe_kp = g_app_ball_pipe_kp;
+    pipe_kd_s = g_app_ball_pipe_kd_s;
     BallBalanceControl_SetPidGains(&s_ball_balance_control, kp, ki, kd);
+    BallBalanceControl_SetPipeGains(&s_ball_balance_control,
+                                    pipe_kp,
+                                    pipe_kd_s);
 }
 
 static void App_UpdateLapStopDebug(void)
@@ -370,6 +383,13 @@ static void App_UpdateBallBalanceDebug(void)
         s_ball_balance_output.servo_feedforward_deg;
     g_app_ball_desired_angle_deg = s_ball_balance_output.desired_angle_deg;
     g_app_ball_command_angle_deg = s_ball_balance_output.command_angle_deg;
+    g_app_ball_feedforward_pwm_us = ServoDriver_PipePitchToPulseUs(
+        s_ball_balance_output.servo_feedforward_deg);
+    g_app_ball_desired_pwm_us = ServoDriver_PipePitchToPulseUs(
+        s_ball_balance_output.desired_angle_deg);
+    g_app_ball_command_pwm_us = ServoDriver_PipePitchToPulseUs(
+        s_ball_balance_output.command_angle_deg);
+    g_app_ball_actual_pwm_us = ServoDriver_GetPulseUs();
     g_app_ball_endpoint_hold_enabled =
         s_ball_balance_output.endpoint_hold_enabled;
 }
@@ -448,7 +468,8 @@ static void App_BalanceDebugLogTask(uint32_t now_ms)
     input.imu_accel_y_g = s_balance_log_imu_accel_y_g;
     input.imu_accel_z_g = s_balance_log_imu_accel_z_g;
     input.imu_gyro_x_dps = s_balance_log_imu_gyro_x_dps;
-    input.actual_servo_angle_deg = ServoDriver_GetAngle();
+    input.actual_servo_pipe_pitch_deg =
+        ServoDriver_GetPipePitchDeg();
     input.servo_pulse_us = ServoDriver_GetPulseUs();
     BalanceDebugLog_Update(&input,
                            &s_ball_balance_output,
@@ -576,7 +597,8 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
     }
     if ((s_pipe_attitude_output.servo_override_active != 0U) &&
         (App_GetHostCalibrationEnabled() == 0U)) {
-        ServoDriver_SetAngle(s_pipe_attitude_output.servo_override_deg);
+        ServoDriver_SetPipePitchDeg(
+            s_pipe_attitude_output.servo_override_deg);
     }
     App_UpdatePipeAttitudeDebug();
 }
@@ -737,7 +759,8 @@ static void App_BallBalanceTask(uint32_t now_ms)
     App_DynamicRunTask(now_ms);
     if ((s_pipe_attitude_output.servo_override_active == 0U) &&
         (App_GetHostCalibrationEnabled() == 0U)) {
-        ServoDriver_SetAngle(s_ball_balance_output.command_angle_deg);
+        ServoDriver_SetPipePitchDeg(
+            s_ball_balance_output.command_angle_deg);
     }
     App_BalanceDebugLogTask(now_ms);
 
@@ -1286,7 +1309,7 @@ void App_Init(void)
     HostLinkUart_Init();
     HostCalibrationProtocol_Init();
 #endif
-    ServoDriver_Init(BallBalanceControl_GetNeutralAngleDeg());
+    ServoDriver_InitPulseUs(SERVO_DRIVER_CENTER_PULSE_US);
     TjcUart_Init();
     Protocol_Tjc_Init();
     OledDisplay_Init();
@@ -1598,7 +1621,7 @@ uint8_t App_StartPipeCalibration(void)
     return PipeAttitudeControl_StartCalibration(
         &s_pipe_attitude_control,
         Board_TimeMs(),
-        ServoDriver_GetAngle());
+        ServoDriver_GetPipePitchDeg());
 }
 
 uint8_t App_GetPipeCalibrationActive(void)
@@ -1658,7 +1681,7 @@ uint8_t App_GetPipeAttitudeValid(void)
 
 float App_GetPipeRawAccelPitchDeg(void)
 {
-    /* 原始加速度俯仰角：不受九点标定门控，标定模式下供上位机直接使用。 */
+    /* 原始加速度俯仰角不受单点水平标定门控，供USART1上位机直接使用。 */
     return s_pipe_attitude_output.raw_accel_pitch_deg;
 }
 

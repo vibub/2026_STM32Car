@@ -28,7 +28,7 @@ static void TestCaptureTimingAndFields(void)
     input.imu_accel_y_g = 0.25f;
     input.imu_accel_z_g = 0.96f;
     input.imu_gyro_x_dps = -3.5f;
-    input.actual_servo_angle_deg = 121.2f;
+    input.actual_servo_pipe_pitch_deg = 121.2f;
     input.servo_pulse_us = 1398U;
 
     balance.enable_requested = 1U;

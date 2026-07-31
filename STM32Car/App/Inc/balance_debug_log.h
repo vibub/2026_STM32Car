@@ -8,7 +8,7 @@
 #include "pipe_attitude_control.h"
 
 #define BALANCE_DEBUG_LOG_MAGIC          0x424C4F47UL /* 日志文件标识“BLOG”。 */
-#define BALANCE_DEBUG_LOG_FORMAT_VERSION          1UL /* 二进制结构版本号。 */
+#define BALANCE_DEBUG_LOG_FORMAT_VERSION          2UL /* 线性PWM与相对水管角日志结构版本。 */
 #define BALANCE_DEBUG_LOG_PERIOD_MS               20U /* 同步采样周期，单位为毫秒。 */
 #define BALANCE_DEBUG_LOG_CAPACITY               500U /* 20 ms 周期下保存10秒。 */
 
@@ -55,7 +55,7 @@ typedef struct {
     float imu_accel_y_g;
     float imu_accel_z_g;
     float imu_gyro_x_dps;
-    float actual_servo_angle_deg;
+    float actual_servo_pipe_pitch_deg;
     uint32_t servo_pulse_us;
 } BalanceDebugLogInput;
 
@@ -93,10 +93,10 @@ typedef struct {
     float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
     float desired_model_pitch_deg;
-    float servo_feedforward_deg;
-    float desired_angle_deg;
-    float command_angle_deg;
-    float actual_servo_angle_deg;
+    float actuator_feedforward_pipe_pitch_deg;
+    float desired_actuator_pipe_pitch_deg;
+    float command_actuator_pipe_pitch_deg;
+    float actual_servo_pipe_pitch_deg;
     float raw_accel_pitch_deg;
     float accel_pitch_deg;
     float raw_pitch_deg;

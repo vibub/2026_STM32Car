@@ -43,16 +43,18 @@ from protocol import (
     RESP_OK,
     RESP_PONG,
     RESP_SAMPLE_OK,
+    PWM_CENTER_US,
+    PWM_MAX_US,
+    PWM_MIN_US,
     parse_sample,
 )
 import table as tbl
 
 APP_TITLE = "摆杆角度标定上位机"
-PWM_MIN_US = 500
-PWM_MAX_US = 2500
+SERVO_MAX_ANGLE_DEG = 148.5
 STREAM_PERIOD_S = 0.1
 ROLLING_WINDOW_S = 15.0
-DEFAULT_GRID_TEXT = "0, ±0.5, ±1, ±1.5, ±2, ±2.5, ±3, ±5, ±8, ±10"
+DEFAULT_GRID_TEXT = "0, ±0.5, ±1, ±1.5, ±2, ±2.5, ±3, ±4, ±5"
 
 
 def parse_angle_list(text):
@@ -351,7 +353,7 @@ class BaseTab:
         row = ttk.Frame(left)
         row.pack(fill="x", padx=6, pady=(8, 2))
         ttk.Label(row, text="PWM(us):").pack(side="left")
-        self.pwm_var = tk.StringVar(value="1500")
+        self.pwm_var = tk.StringVar(value=str(PWM_CENTER_US))
         ttk.Spinbox(
             row,
             textvariable=self.pwm_var,
@@ -479,7 +481,7 @@ class BaseTab:
         self.record_buffer = []
         self.record_start_host = 0.0
         self.last_record = None
-        self._last_sent_pwm = 1500
+        self._last_sent_pwm = PWM_CENTER_US
 
         self.figure = Figure(figsize=(6, 3.2), dpi=100)
         self.ax = self.figure.add_subplot(111)
@@ -670,14 +672,17 @@ class BaseTab:
             self._last_sent_pwm = pwm
 
     def send_servo_angle(self):
-        """直接按舵机电气角(0~270°)换算 PWM 发送，用于找零位/上下限。"""
+        """按舵机电气角换算PWM，并限制在500～1600 us实测安全范围。"""
         try:
             angle = float(self.servo_angle_var.get())
         except ValueError:
             self.app.log("舵机角输入无效。", error=True)
             return
-        if angle < 0.0 or angle > 270.0:
-            self.app.log("舵机角范围应为 0~270°。", error=True)
+        if angle < 0.0 or angle > SERVO_MAX_ANGLE_DEG:
+            self.app.log(
+                f"舵机角范围应为0～{SERVO_MAX_ANGLE_DEG:.1f}°。",
+                error=True,
+            )
             return
         pwm = clamp_pwm(500.0 + angle / 270.0 * 2000.0)
         self.pwm_var.set(str(pwm))
@@ -687,7 +692,7 @@ class BaseTab:
         try:
             current = int(float(self.pwm_var.get()))
         except ValueError:
-            current = 1500
+            current = PWM_CENTER_US
         self.pwm_var.set(str(clamp_pwm(current + delta)))
         self.send_pwm()
 
@@ -802,10 +807,10 @@ class CalibrationTab:
         row = ttk.Frame(params)
         row.pack(fill="x", padx=6, pady=2)
         ttk.Label(row, text="起点PWM:").pack(side="left")
-        self.start_var = tk.StringVar(value="1200")
+        self.start_var = tk.StringVar(value=str(PWM_MIN_US))
         ttk.Spinbox(row, textvariable=self.start_var, from_=PWM_MIN_US, to=PWM_MAX_US, width=7).pack(side="left", padx=2)
         ttk.Label(row, text="终点PWM:").pack(side="left")
-        self.end_var = tk.StringVar(value="1800")
+        self.end_var = tk.StringVar(value=str(PWM_MAX_US))
         ttk.Spinbox(row, textvariable=self.end_var, from_=PWM_MIN_US, to=PWM_MAX_US, width=7).pack(side="left", padx=2)
         ttk.Label(row, text="点数:").pack(side="left")
         self.num_points_var = tk.StringVar(value="21")

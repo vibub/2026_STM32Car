@@ -2,7 +2,7 @@
 """
 摆杆角度标定 —— 串口协议的机器可读常量与解析函数。
 
-协议权威定义见 PROTOCOL.md（v1.0）；本文件只存放两端共用的常量，
+协议权威定义见 PROTOCOL.md（v1.1）；本文件只存放两端共用的常量，
 改动协议时必须先改 PROTOCOL.md 再同步本文件。
 """
 
@@ -24,7 +24,8 @@ RESP_VIN = "VIN"
 RESP_STREAM = "S"
 
 PWM_MIN_US = 500
-PWM_MAX_US = 2500
+PWM_CENTER_US = 1050
+PWM_MAX_US = 1600
 
 
 def parse_imu(line):

@@ -153,10 +153,14 @@ static void BalanceDebugLog_Capture(
     sample->feedforward_model_pitch_deg =
         balance_output->feedforward_model_pitch_deg;
     sample->desired_model_pitch_deg = balance_output->desired_model_pitch_deg;
-    sample->servo_feedforward_deg = balance_output->servo_feedforward_deg;
-    sample->desired_angle_deg = balance_output->desired_angle_deg;
-    sample->command_angle_deg = balance_output->command_angle_deg;
-    sample->actual_servo_angle_deg = input->actual_servo_angle_deg;
+    sample->actuator_feedforward_pipe_pitch_deg =
+        balance_output->servo_feedforward_deg;
+    sample->desired_actuator_pipe_pitch_deg =
+        balance_output->desired_angle_deg;
+    sample->command_actuator_pipe_pitch_deg =
+        balance_output->command_angle_deg;
+    sample->actual_servo_pipe_pitch_deg =
+        input->actual_servo_pipe_pitch_deg;
     sample->raw_accel_pitch_deg = attitude_output->raw_accel_pitch_deg;
     sample->accel_pitch_deg = attitude_output->accel_pitch_deg;
     sample->raw_pitch_deg = attitude_output->raw_pitch_deg;

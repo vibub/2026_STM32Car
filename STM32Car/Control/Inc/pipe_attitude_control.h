@@ -79,8 +79,8 @@ typedef struct {
     float model_offset_deg;
     float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
     float calibration_target_pitch_deg;
-    float servo_target_deg;
-    float servo_override_deg;
+    float servo_target_deg;   /* 单点标定期间的目标相对水管角。 */
+    float servo_override_deg; /* 单点标定期间的当前相对水管角。 */
 } PipeAttitudeControl;
 
 typedef struct {
@@ -96,8 +96,8 @@ typedef struct {
     PipeCalibrationEvent calibration_event;
     uint8_t calibration_point_index;
     uint16_t calibration_sample_count;
-    float servo_override_deg;
-    float servo_target_deg;
+    float servo_override_deg; /* 兼容字段：当前标定接管的相对水管角。 */
+    float servo_target_deg;   /* 兼容字段：标定目标相对水管角。 */
     float calibration_target_pitch_deg;
     float gyro_x_bias_dps;
     float accel_pitch_zero_deg;
@@ -119,7 +119,7 @@ typedef struct {
 void PipeAttitudeControl_Init(PipeAttitudeControl *control);
 uint8_t PipeAttitudeControl_StartCalibration(PipeAttitudeControl *control,
                                              uint32_t now_ms,
-                                             float current_servo_angle_deg);
+                                             float current_pipe_pitch_deg);
 void PipeAttitudeControl_AbortCalibration(PipeAttitudeControl *control,
                                           uint32_t now_ms);
 uint8_t PipeAttitudeControl_IsCalibrationActive(

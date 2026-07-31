@@ -8,6 +8,8 @@
 #define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.012f
 #define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.000f
 #define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.006f
+#define BALL_BALANCE_DEFAULT_PIPE_KP              0.60f /* IMU姿态角误差比例修正。 */
+#define BALL_BALANCE_DEFAULT_PIPE_KD_S            0.050f /* IMU姿态角速度阻尼，单位为秒。 */
 
 typedef struct {
     uint8_t valid;
@@ -77,6 +79,8 @@ typedef struct {
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
     float position_kd_deg_per_mm_s;
+    float pipe_kp;
+    float pipe_kd_s;
     float last_measurement_dt_s;
     float filtered_position_mm;
     float predicted_position_mm;
@@ -110,9 +114,9 @@ typedef struct {
     float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
     float desired_model_pitch_deg;
-    float servo_feedforward_deg;
-    float desired_angle_deg;
-    float command_angle_deg;
+    float servo_feedforward_deg; /* 兼容字段：线性前馈相对水管角。 */
+    float desired_angle_deg;     /* 兼容字段：姿态修正后的目标相对水管角。 */
+    float command_angle_deg;     /* 兼容字段：限速后的执行器相对水管角。 */
 } BallBalanceControl;
 
 typedef struct {
@@ -141,6 +145,8 @@ typedef struct {
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
     float position_kd_deg_per_mm_s;
+    float pipe_kp;
+    float pipe_kd_s;
     float filtered_position_mm;
     float predicted_position_mm;
     float predicted_accel_mm_s2;
@@ -172,9 +178,9 @@ typedef struct {
     float maximum_pipe_pitch_deg;
     float feedforward_model_pitch_deg;
     float desired_model_pitch_deg;
-    float servo_feedforward_deg;
-    float desired_angle_deg;
-    float command_angle_deg;
+    float servo_feedforward_deg; /* 兼容字段：线性前馈相对水管角。 */
+    float desired_angle_deg;     /* 兼容字段：姿态修正后的目标相对水管角。 */
+    float command_angle_deg;     /* 兼容字段：限速后的执行器相对水管角。 */
 } BallBalanceOutput;
 
 void BallBalanceControl_Init(BallBalanceControl *control);
@@ -198,6 +204,9 @@ void BallBalanceControl_SetPidGains(BallBalanceControl *control,
                                     float kp_deg_per_mm,
                                     float ki_deg_per_mm_s,
                                     float kd_deg_per_mm_s);
+void BallBalanceControl_SetPipeGains(BallBalanceControl *control,
+                                     float pipe_kp,
+                                     float pipe_kd_s);
 void BallBalanceControl_SetPipeCalibration(
     BallBalanceControl *control,
     uint8_t valid,

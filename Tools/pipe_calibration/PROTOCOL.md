@@ -1,4 +1,4 @@
-# 摆杆角度标定 —— 上位机 ↔ STM32 串口协议 v1.0
+# 摆杆角度标定 —— 上位机 ↔ STM32 串口协议 v1.1
 
 > 本文档是上位机与嵌入式端的**唯一协议依据**。上位机实现见同目录 `protocol.py` /
 > `links.py`；嵌入式端按本文档实现 `PCLink`（标定串口）模块。协议冻结后如要改动，
@@ -27,7 +27,7 @@
 ## 2. 符号约定（全工程统一，含 K230、STM32、上位机）
 
 - 水管俯仰角 `pitch > 0`：**右端升高**，单位度。
-- 舵机 PWM：`500 ~ 2500 us` 合法区间，`1500 us` 为名义中位。
+- 舵机 PWM：实测安全区间为 `500～1600 us`，`1050 us` 对应水管水平位置。
 - `ts_ms`：设备上电后的毫秒计数（`HAL_GetTick()` 风格）。
 - 标定模式中设备必须**保持小车电机停止**；标定串口收到任何命令都不应触发行驶。
 - **标定模式开关**：设备上电默认关闭标定模式。上位机连接后先发 `CAL 1` 进入
@@ -50,7 +50,7 @@
 
 请求：`PING\r\n`　应答：`PONG <version>\r\n`
 
-示例：`PING` → `PONG pclink-1.0`
+示例：`PING` → `PONG pclink-1.1`
 
 用途：连接探测、固件版本确认。上位机连接后先发 3 次 PING 确认链路。
 
@@ -58,19 +58,17 @@
 
 请求：`SERVO <pwm_us>\r\n`　应答：`OK\r\n` 或 `ERR range\r\n`
 
-示例：`SERVO 1500` → `OK`
+示例：`SERVO 1050` → `OK`
 
-说明：设置舵机 PWM 目标值。越界（<500 或 >2500）返回 `ERR range` 且**不改变当前值**。
-固件内部经 `ServoDriver_SetAngle` 输出：500~2500us 对应 0~270°，
-而 `ServoDriver` 的允许窗口为 0~180°，因此**有效 PWM 范围为 500~2000us**，
-超出部分会被软件钳位（可用"基础区"实测确认实际限位）。
-标定场景允许直接跳变，无需斜坡。
+说明：直接设置舵机PWM目标值。越界（<500或>1600）返回`ERR range`且
+**不改变当前值**。固件调用`ServoDriver_SetPulseUs`直接输出，并在驱动层再次执行
+500～1600 us安全限幅。标定场景允许直接跳变，无需斜坡。
 
 ### 3.3 PWM
 
 请求：`PWM\r\n`　应答：`PWM <pwm_us>\r\n`
 
-示例：`PWM` → `PWM 1500`
+示例：`PWM` → `PWM 1050`
 
 说明：查询当前舵机 PWM 目标值（最后一次成功 SERVO 的值）。
 
@@ -145,7 +143,7 @@ S <ts_ms> <pitch_deg> <rate_deg_s>\r\n
    不依赖 printf 的 %f 支持；
 4. `SAMPLE` 阻塞循环 `count` 次读 `App_GetPipePitchDeg()`，`HAL_Delay(dt_ms)` 间隔；
 5. `STREAM` 在 `HostCalibrationProtocol_Task` 中按 100 ms 节拍推送 `S ` 行；
-6. `SERVO` 复用 `ServoDriver`：`angle = (pwm-500)/2000*270`，软限幅 0~180°；
+6. `SERVO`调用`ServoDriver_SetPulseUs`直接输出，协议层和驱动层均限制为500～1600 us；
 7. 标定模式下水管俯仰角来自
    `App_GetPipeRawAccelPitchDeg()/App_GetPipeRawPitchRateDps()`：
    原始加速度俯仰角（`atan2(accel_y, accel_z)`，LSM6DSV16X / I2C2 / 60Hz）
@@ -155,12 +153,10 @@ S <ts_ms> <pitch_deg> <rate_deg_s>\r\n
 
 ## 6. 上位机联调检查清单
 
-1. `PING` 三连成功，版本正确；
-2. `SERVO 1500 / 1000 / 2000` 依次执行，舵机方向与俯仰角符号一致
-   （`SERVO 2000` 时应观察到右端升高、pitch 为正）；
-3. `IMU` 连续读值稳定，静止时标准差小；
-4. `SAMPLE 100 20` 与连续 `IMU` 读值的均值一致；
-5. `STREAM 1` 后 10 Hz 稳定推送，10 秒内丢行率 < 1%；
-6. 越界命令（`SERVO 9999`）返回 `ERR range` 且不改变舵机位置；
-7. 与既有数据交叉验证：水平点应在 `SERVO 1350` 附近（balance 分支
-   `pipe_calibration_50.csv` 实测水平 PWM ≈ 1350 us，舵机角 ≈ 115°）。
+1. `PING`三连成功并返回`pclink-1.1`；
+2. `SERVO 500 / 1050 / 1600`依次执行，1050 us时水管水平；
+3. PWM从1050增加到1600时水管右端升高、原始IMU角度减小；
+4. `IMU`连续读值稳定，静止时标准差小；
+5. `SAMPLE 100 20`与连续`IMU`读值的均值一致；
+6. `STREAM 1`后10 Hz稳定推送，10秒内丢行率<1%；
+7. 越界命令（如`SERVO 1601`）返回`ERR range`且不改变舵机位置。

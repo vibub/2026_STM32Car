@@ -10,7 +10,7 @@
 #define TJC_COMMAND_BASIC_LINE     0x01U /* TJC 基础八路红外巡线命令编号。 */
 #define TJC_COMMAND_BALL_ENABLE    0x02U /* TJC 中心钢球平衡启用命令编号。 */
 #define TJC_COMMAND_BALL_DISABLE   0x03U /* TJC 钢球平衡禁用命令编号。 */
-#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管 IMU 和连杆模型九点标定命令编号。 */
+#define TJC_COMMAND_PIPE_CALIBRATE 0x04U /* TJC 水管IMU单点水平标定命令编号。 */
 #define TJC_COMMAND_BALL_SHUTTLE   0x05U /* TJC 第三题 O 到正负 5 cm 往返命令编号。 */
 #define TJC_COMMAND_AB             0x06U /* TJC 第四项 AB 中心稳定通过命令。 */
 #define TJC_COMMAND_ABCD           0x07U /* TJC 第五项 ABCD 整圈中心稳定通过命令。 */

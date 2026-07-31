@@ -4,7 +4,7 @@
 /* LSM6DSV16X 已通过 I2C2 接入，使用 PB10/PB11。 */
 #define APP_USE_IMU                         1U  /* IMU 功能开关，1 表示启用初始化和轮询。 */
 #ifndef APP_ENABLE_BALANCE_LOG
-#define APP_ENABLE_BALANCE_LOG              0U  /* 钢球平衡诊断日志开关，比赛固件可设为0释放约98 KiB RAM。 */
+#define APP_ENABLE_BALANCE_LOG              0U  /* 默认关闭诊断日志；需要采集时设为1，占用约98 KiB RAM。 */
 #endif
 
 /* 上位机标定链路：USART1（PB6/PB7，115200 8N1）。

@@ -8,16 +8,15 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define HOST_PROTOCOL_LINE_BUFFER_SIZE  80U   /* 单行命令最大长度。 */
 #define HOST_PROTOCOL_REPLY_BUFFER_SIZE 96U   /* 应答行缓冲大小。 */
 #define HOST_PROTOCOL_NUMBER_BUFFER_SIZE 16U  /* 单个浮点数字符串缓冲大小。 */
-#define HOST_PROTOCOL_VERSION           "pclink-1.0"
-#define HOST_PROTOCOL_PWM_MIN_US        500U
-#define HOST_PROTOCOL_PWM_MAX_US        2500U
-#define HOST_PROTOCOL_SERVO_SPAN_DEG    270.0f
-#define HOST_PROTOCOL_PULSE_SPAN_US     2000.0f
+#define HOST_PROTOCOL_VERSION           "pclink-1.1"
+#define HOST_PROTOCOL_PWM_MIN_US        SERVO_DRIVER_MIN_PULSE_US /* 上位机允许的安全最小PWM。 */
+#define HOST_PROTOCOL_PWM_MAX_US        SERVO_DRIVER_MAX_PULSE_US /* 上位机允许的安全最大PWM。 */
 #define HOST_PROTOCOL_SAMPLE_COUNT_MAX  200U
 #define HOST_PROTOCOL_SAMPLE_DT_MIN_MS  10U
 #define HOST_PROTOCOL_SAMPLE_DT_MAX_MS  100U
@@ -346,7 +345,6 @@ static void HostCalib_ProcessLine(const char *line)
     char number_text[HOST_PROTOCOL_NUMBER_BUFFER_SIZE];
     int32_t parsed;
     uint8_t enabled;
-    float angle;
     float pitch;
     float rate;
     uint32_t ts;
@@ -411,9 +409,7 @@ static void HostCalib_ProcessLine(const char *line)
             return;
         }
         s_protocol.last_servo_pwm_us = (uint16_t) parsed;
-        angle = ((float) parsed - (float) HOST_PROTOCOL_PWM_MIN_US) /
-                HOST_PROTOCOL_PULSE_SPAN_US * HOST_PROTOCOL_SERVO_SPAN_DEG;
-        ServoDriver_SetAngle(angle);
+        ServoDriver_SetPulseUs((uint32_t) parsed);
         HostCalib_SendLine("OK");
         g_host_calibration_valid_command_count++;
         return;
@@ -510,7 +506,7 @@ static void HostCalib_FeedByte(uint8_t byte)
 void HostCalibrationProtocol_Init(void)
 {
     memset(&s_protocol, 0, sizeof(s_protocol));
-    s_protocol.last_servo_pwm_us = 1500U;
+    s_protocol.last_servo_pwm_us = SERVO_DRIVER_CENTER_PULSE_US;
     s_protocol.last_stream_ms = Board_TimeMs();
     s_protocol.last_rx_overflow = HostLinkUart_GetOverflowCount();
     s_protocol.last_rx_error = HostLinkUart_GetErrorCount();

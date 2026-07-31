@@ -141,15 +141,10 @@ class CalibTable:
         inv = sorted(zip(self.mean, self.pwms))
         ang = [a for a, _ in inv]
         pwm = [p for _, p in inv]
-        up_map = dict(zip(self.pwms, self.up))
-        down_map = dict(zip(self.pwms, self.down))
-
-        def pick(mapping, key, fallback):
-            value = mapping.get(key)
-            return fallback if value is None else value
-
-        up_arr = [int(round(pick(up_map, p, p))) for p in pwm]
-        down_arr = [int(round(pick(down_map, p, p))) for p in pwm]
+        # 在统一的平均角度网格上分别反插值升序和降序PWM，
+        # 不能把up/down角度值误写入uint16_t PWM数组。
+        up_arr = [self.angle_to_pwm(a, "up") for a in ang]
+        down_arr = [self.angle_to_pwm(a, "down") for a in ang]
 
         def fmt(vals, width=8):
             return ", ".join(f"{v:>{width}}" for v in vals)

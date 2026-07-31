@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 LOG_MAGIC = 0x424C4F47
-LOG_FORMAT_VERSION = 1
+LOG_FORMAT_VERSION = 2
 HEADER_FORMAT = "<8I"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 INTEGER_FORMAT = "IIiIIIII"
@@ -39,10 +39,10 @@ FLOAT_NAMES = [
     "maximum_pipe_pitch_deg",
     "feedforward_model_pitch_deg",
     "desired_model_pitch_deg",
-    "servo_feedforward_deg",
-    "desired_angle_deg",
-    "command_angle_deg",
-    "actual_servo_angle_deg",
+    "actuator_feedforward_pipe_pitch_deg",
+    "desired_actuator_pipe_pitch_deg",
+    "command_actuator_pipe_pitch_deg",
+    "actual_servo_pipe_pitch_deg",
     "raw_accel_pitch_deg",
     "accel_pitch_deg",
     "raw_pitch_deg",
