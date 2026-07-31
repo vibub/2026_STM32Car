@@ -20,6 +20,7 @@ class VisionPipeline:
         hmirror=False,
         vflip=False,
         display_mode="lcd",
+        ide_quality=60,
         to_ide=True,
     ):
         # 传统视觉使用低分辨率 RGB565，保证红线检测可以稳定高频运行。
@@ -44,6 +45,8 @@ class VisionPipeline:
             raise ValueError("display_mode must be 'lcd' or 'ide'")
         # ide 模式使用 Display.VIRT，不初始化任何物理 LCD 接口。
         self.display_mode = display_mode
+        # 降低 IDE 帧缓冲 JPEG 质量可明显减少 USB 传输与编码开销。
+        self.ide_quality = max(1, min(100, int(ide_quality)))
         # IDE 虚拟显示必须启用帧缓冲输出；LCD 模式则允许关闭 IDE 镜像。
         self.to_ide = True if display_mode == "ide" else bool(to_ide)
 
@@ -126,12 +129,21 @@ class VisionPipeline:
             else Display.ST7701
         )
         print("S20.4: 初始化Display，模式={}".format(self.display_mode))
-        Display.init(
-            display_type,
-            width=self.display_size[0],
-            height=self.display_size[1],
-            to_ide=self.to_ide
-        )
+        if self.display_mode == "ide":
+            Display.init(
+                display_type,
+                width=self.display_size[0],
+                height=self.display_size[1],
+                to_ide=True,
+                quality=self.ide_quality,
+            )
+        else:
+            Display.init(
+                display_type,
+                width=self.display_size[0],
+                height=self.display_size[1],
+                to_ide=self.to_ide,
+            )
         self._display_initialized = True
 
         # Display 必须先初始化，再把摄像头预览通道绑定到底层视频层。

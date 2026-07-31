@@ -40,8 +40,9 @@ except ImportError:
 
 
 CV_SIZE = (640, 360)              # 红色刻度与图传通道分辨率。
-DISPLAY_SIZE = (800, 480)          # IDE 虚拟帧缓冲与 OSD 分辨率。
+DISPLAY_SIZE = (640, 360)          # IDE 调试使用较低分辨率，减少虚拟显示开销。
 DISPLAY_MODE = "ide"              # 暂不连接 LCD，仅输出到 CanMV IDE。
+IDE_FRAME_QUALITY = 50             # IDE 虚拟帧缓冲 JPEG 质量。
 AI_SIZE = (320, 180)               # AI 通道直接输出 16:9 小图，减少搬运和 AI2D 缩放开销。
 # 钢球只会出现在管道附近；CV 坐标系为 640x360。
 # 根据现场画面，管道和刻度主要位于 y=118..256，YOLO 只裁剪这条横向带做识别。
@@ -346,6 +347,7 @@ def run():
             ai_size=AI_SIZE,
             display_size=DISPLAY_SIZE,
             display_mode=DISPLAY_MODE,
+            ide_quality=IDE_FRAME_QUALITY,
             to_ide=True,
         )
         pipeline.create()
@@ -482,6 +484,8 @@ def run():
                     inference_window_frames * 1000.0
                     / float(inference_elapsed_ms)
                 )
+                # IDE画面刷新可能低于控制循环帧率，串口值用于区分显示卡顿和推理卡顿。
+                print("BALL LOOP FPS: {:.1f}".format(inference_fps))
                 inference_window_frames = 0
                 inference_window_start_ms = now_ms
 
