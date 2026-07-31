@@ -60,8 +60,8 @@ STEEL_BALL_ANCHORS = [
 ]
 STEEL_BALL_CLASSICAL_FALLBACK = False
 
-K230_UART_TX_IO = 44                # K230 UART2 TX 使用的物理 IO。
-K230_UART_RX_IO = 45                # K230 UART2 RX 使用的物理 IO。
+K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
+K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
 OSD_INTERVAL_MS = 80                # OSD refresh at up to 12.5 Hz.
 CALIBRATION_INTERVAL_MS = 80        # Red marker calibration at up to 12.5 Hz.
@@ -358,10 +358,10 @@ def _draw_overlay(
 
 def _create_uart():
     fpioa = FPIOA()
-    fpioa.set_function(K230_UART_TX_IO, FPIOA.UART2_TXD)
-    fpioa.set_function(K230_UART_RX_IO, FPIOA.UART2_RXD)
+    fpioa.set_function(K230_UART_TX_IO, FPIOA.UART1_TXD)
+    fpioa.set_function(K230_UART_RX_IO, FPIOA.UART1_RXD)
     return UART(
-        UART.UART2,
+        UART.UART1,
         baudrate=115200,
         bits=UART.EIGHTBITS,
         parity=UART.PARITY_NONE,

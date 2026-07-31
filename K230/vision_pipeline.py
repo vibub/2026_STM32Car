@@ -17,8 +17,8 @@ class VisionPipeline:
         cv_size=(320, 240),
         ai_size=(640, 360),
         display_size=(800, 480),
-        hmirror=True,
-        vflip=True,
+        hmirror=False,
+        vflip=False,
         to_ide=True,
     ):
         # 传统视觉使用低分辨率 RGB565，保证红线检测可以稳定高频运行。
