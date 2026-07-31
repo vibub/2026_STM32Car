@@ -12,6 +12,11 @@ static volatile uint32_t s_rx_byte_count;
 static volatile uint32_t s_overflow_count;
 static volatile uint32_t s_error_count;
 
+volatile uint32_t g_k230_uart_rx_irq_count;
+volatile uint8_t g_k230_uart_last_rx_byte;
+volatile uint32_t g_k230_uart_last_rx_tick_ms;
+volatile uint32_t g_k230_uart_error_irq_count;
+
 void K230Uart_Init(void)
 {
     s_rx_head = 0U;
@@ -19,6 +24,10 @@ void K230Uart_Init(void)
     s_rx_byte_count = 0U;
     s_overflow_count = 0U;
     s_error_count = 0U;
+    g_k230_uart_rx_irq_count = 0U;
+    g_k230_uart_last_rx_byte = 0U;
+    g_k230_uart_last_rx_tick_ms = 0U;
+    g_k230_uart_error_irq_count = 0U;
     if (HAL_UART_Receive_IT(&huart4, &s_rx_byte, 1U) != HAL_OK) {
         Error_Handler();
     }
@@ -66,6 +75,10 @@ void K230Uart_HandleRxComplete(UART_HandleTypeDef *huart)
         return;
     }
 
+    g_k230_uart_rx_irq_count++;
+    g_k230_uart_last_rx_byte = s_rx_byte;
+    g_k230_uart_last_rx_tick_ms = HAL_GetTick();
+
     next_head = (uint16_t) ((s_rx_head + 1U) & K230_UART_RX_BUFFER_MASK);
     if (next_head == s_rx_tail) {
         s_overflow_count++;
@@ -86,6 +99,7 @@ void K230Uart_HandleError(UART_HandleTypeDef *huart)
         return;
     }
 
+    g_k230_uart_error_irq_count++;
     s_error_count++;
     __HAL_UART_CLEAR_OREFLAG(huart);
     if (HAL_UART_Receive_IT(&huart4, &s_rx_byte, 1U) != HAL_OK) {

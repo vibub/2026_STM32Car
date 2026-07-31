@@ -5,6 +5,10 @@
 
 #include "linkage_kinematics.h"
 
+#define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.012f /* balance 分支实机调试使用的默认位置 Kp。 */
+#define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.000f /* 普通中心平衡默认关闭位置积分。 */
+#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.015f /* balance 分支实机调试使用的默认速度阻尼。 */
+
 typedef struct {
     uint8_t valid;
     int32_t position_d10_mm;
@@ -32,6 +36,7 @@ typedef struct {
     uint8_t attitude_ready;
     uint8_t attitude_stable_ready;
     uint8_t imu_fault;
+    uint8_t integral_active;
     uint8_t feedforward_cache_valid;
     uint8_t desired_cache_valid;
     uint8_t endpoint_hold_enabled;
@@ -43,7 +48,13 @@ typedef struct {
     uint32_t last_attitude_timestamp_ms;
     uint32_t attitude_stable_since_ms;
     float target_mm;
+    float position_kp_deg_per_mm;
+    float position_ki_deg_per_mm_s;
+    float position_kd_deg_per_mm_s;
+    float last_measurement_dt_s;
     float filtered_position_mm;
+    float predicted_position_mm;
+    float predicted_accel_mm_s2;
     float velocity_mm_s;
     float integral_mm_s;
     float error_mm;
@@ -80,10 +91,17 @@ typedef struct {
     uint8_t imu_fault;
     uint8_t mapping_valid;
     uint8_t mapping_fault;
+    uint8_t integral_active;
     uint8_t endpoint_hold_enabled;
     float target_mm;
+    float position_kp_deg_per_mm;
+    float position_ki_deg_per_mm_s;
+    float position_kd_deg_per_mm_s;
     float filtered_position_mm;
+    float predicted_position_mm;
+    float predicted_accel_mm_s2;
     float velocity_mm_s;
+    float integral_mm_s;
     float error_mm;
     float p_term_deg;
     float i_term_deg;
@@ -117,6 +135,10 @@ void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
 void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
                                                uint8_t enabled);
+void BallBalanceControl_SetPidGains(BallBalanceControl *control,
+                                    float kp_deg_per_mm,
+                                    float ki_deg_per_mm_s,
+                                    float kd_deg_per_mm_s);
 void BallBalanceControl_SetPipeCalibration(
     BallBalanceControl *control,
     uint8_t valid,
