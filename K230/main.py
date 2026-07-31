@@ -61,15 +61,15 @@ STEEL_BALL_CLASSICAL_FALLBACK = False    # 默认不启用传统颜色检测回�
 K230_UART_TX_IO = 3                # K230 UART1 TX 使用的物理 IO。
 K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 40               # 钢球位置 UART 上报周期。
-OSD_INTERVAL_MS = 200               # OSD 最多以 5 Hz 刷新。
+OSD_INTERVAL_MS = 40                # 检测框以 25 Hz 刷新，与 UART 上报周期一致。
 CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
 CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
-OSD_TEXT_ENABLE = True             # Hide large debug text in performance mode.
+OSD_TEXT_ENABLE = True            # 性能调试时关闭大字体状态文本。
 
 # K230 creates a Wi-Fi AP and serves MJPEG video for PC/phone browser.
-VIDEO_AP_ENABLE = True
+VIDEO_AP_ENABLE = False
 VIDEO_AP_SSID = "kk22330"
 VIDEO_AP_KEY = "czhhqgyyb"
 VIDEO_AP_IP = "192.168.4.1"
@@ -376,9 +376,19 @@ def run():
         inference_fps = 0.0
         yolo_parse_reported = False
         video_ap_started = False
+        perf_window_start_ms = now_ms
+        perf_frames = 0
+        perf_cv_us = 0
+        perf_ai_capture_us = 0
+        perf_yolo_us = 0
+        perf_post_us = 0
+        perf_uart_us = 0
+        perf_osd_us = 0
+        perf_loop_us = 0
 
         while True:
             os.exitpoint()
+            loop_start_us = time.ticks_us()
             now_ms = time.ticks_ms()
             if (
                 VIDEO_AP_ENABLE and
@@ -425,15 +435,33 @@ def run():
 
                 # 红色标定与 6 FPS 图传共用 CV 帧，不再为每次 YOLO 重复取帧。
                 if calibration_due or video_frame_due:
+                    stage_start_us = time.ticks_us()
                     frame = pipeline.capture_vision_frame()
                     if calibration_due:
                         detector.update_calibration(frame)
                         last_calibration_ms = now_ms
                     if video_frame_due:
                         video_streamer.tick(frame, now_ms)
+                    perf_cv_us += time.ticks_diff(
+                        time.ticks_us(),
+                        stage_start_us,
+                    )
 
+                stage_start_us = time.ticks_us()
                 ai_frame, ai_array = pipeline.capture_ai_frame()
+                perf_ai_capture_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+
+                stage_start_us = time.ticks_us()
                 yolo_result = yolo.run(ai_array)
+                perf_yolo_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
+
+                stage_start_us = time.ticks_us()
                 previous_ai_x = None
                 if detector.previous_center_x is not None:
                     previous_ai_x = (
@@ -464,6 +492,10 @@ def run():
                     fallback_result = detector.detect(frame)
                     if fallback_result.valid:
                         result = fallback_result
+                perf_post_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
                 frame = None
             else:
                 frame = pipeline.capture_vision_frame()
@@ -490,11 +522,17 @@ def run():
                 inference_window_start_ms = now_ms
 
             if time.ticks_diff(now_ms, last_send_ms) >= SEND_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
                 uart.write(format_ball_message(result, sequence))
                 sequence = (sequence + 1) & 0xFFFF
                 last_send_ms = now_ms
+                perf_uart_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
             if time.ticks_diff(now_ms, last_osd_ms) >= OSD_INTERVAL_MS:
+                stage_start_us = time.ticks_us()
                 _draw_overlay(
                     pipeline,
                     detector,
@@ -504,6 +542,10 @@ def run():
                     yolo_result,
                 )
                 last_osd_ms = now_ms
+                perf_osd_us += time.ticks_diff(
+                    time.ticks_us(),
+                    stage_start_us,
+                )
 
             ai_frame = None
             ai_array = None
@@ -512,6 +554,40 @@ def run():
             frame_count += 1
             if frame_count % GC_INTERVAL_FRAMES == 0:
                 gc.collect()
+
+            perf_loop_us += time.ticks_diff(
+                time.ticks_us(),
+                loop_start_us,
+            )
+            perf_frames += 1
+            perf_now_ms = time.ticks_ms()
+            if (
+                perf_frames > 0
+                and time.ticks_diff(perf_now_ms, perf_window_start_ms)
+                >= INFERENCE_FPS_WINDOW_MS
+            ):
+                divisor = float(perf_frames) * 1000.0
+                print(
+                    "PERF ms/frame loop={:.1f} cv={:.1f} ai={:.1f} "
+                    "yolo={:.1f} post={:.1f} uart={:.1f} osd={:.1f}".format(
+                        perf_loop_us / divisor,
+                        perf_cv_us / divisor,
+                        perf_ai_capture_us / divisor,
+                        perf_yolo_us / divisor,
+                        perf_post_us / divisor,
+                        perf_uart_us / divisor,
+                        perf_osd_us / divisor,
+                    )
+                )
+                perf_window_start_ms = perf_now_ms
+                perf_frames = 0
+                perf_cv_us = 0
+                perf_ai_capture_us = 0
+                perf_yolo_us = 0
+                perf_post_us = 0
+                perf_uart_us = 0
+                perf_osd_us = 0
+                perf_loop_us = 0
 
     except KeyboardInterrupt:
         print("用户停止钢球位置识别")
