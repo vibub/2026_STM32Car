@@ -7,7 +7,8 @@
 #define BALL_BALANCE_MAX_PIPE_PITCH_DEG          5.5495f  /* 1600 us对应的实测最大相对水管角。 */
 #define BALL_BALANCE_PIPE_KP_MAX                  2.00f   /* IAR在线调整姿态Kp的安全上限。 */
 #define BALL_BALANCE_PIPE_KD_MAX_S                0.30f   /* IAR在线调整姿态Kd的安全上限。 */
-#define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       7.0f  /* 实测俯仰超过该角度时暂停姿态闭环。 */
+#define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       8.5f  /* 实测俯仰超过该角度才暂停姿态闭环；实测范围±5.55°，起步变速惯性摆动可达7°左右，故留出余量。 */
+#define BALL_BALANCE_IMU_FAULT_DEBOUNCE_MS        150U /* IMU姿态持续不安全达到该时长才判故障，容忍单帧抖动与瞬时过冲。 */
 #define BALL_BALANCE_KP_MAX_DEG_PER_MM              0.200f /* Debug 可调 Kp 安全上限。 */
 #define BALL_BALANCE_KI_MAX_DEG_PER_MM_S            0.100f /* Debug 可调 Ki 安全上限。 */
 #define BALL_BALANCE_KD_MAX_DEG_PER_MM_S            0.200f /* Debug 可调 Kd 安全上限。 */
@@ -1012,6 +1013,26 @@ static uint8_t BallBalanceControl_AttitudeIsFresh(
                        BALL_BALANCE_ATTITUDE_TIMEOUT_MS));
 }
 
+static uint8_t BallBalanceControl_AttitudeUnsafeDebounce(
+    BallBalanceControl *control,
+    uint8_t attitude_safe,
+    uint32_t now_ms)
+{
+    /* 姿态瞬时超限或短暂不新鲜时先让内环自行纠正，持续超过
+     * BALL_BALANCE_IMU_FAULT_DEBOUNCE_MS 才认定 IMU 故障，避免起步
+     * 与变速造成的惯性摆动被误判为传感器故障。 */
+    if (attitude_safe == 0U) {
+        if (control->attitude_unsafe_since_ms == 0U) {
+            control->attitude_unsafe_since_ms = now_ms;
+        }
+        return (uint8_t) ((uint32_t) (now_ms -
+                                      control->attitude_unsafe_since_ms) >=
+                          BALL_BALANCE_IMU_FAULT_DEBOUNCE_MS);
+    }
+    control->attitude_unsafe_since_ms = 0U;
+    return 0U;
+}
+
 static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
                                                  uint32_t now_ms)
 {
@@ -1033,9 +1054,14 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
                     BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG));
     if (control->manual_pipe_mode_enabled != 0U) {
         if (attitude_safe == 0U) {
-            control->enabled = 0U;
-            control->imu_fault = 1U;
             control->attitude_stable_ready = 0U;
+            if (BallBalanceControl_AttitudeUnsafeDebounce(control,
+                                                          attitude_safe,
+                                                          now_ms) != 0U) {
+                control->enabled = 0U;
+                control->imu_fault = 1U;
+                control->attitude_stable_ready = 0U;
+            }
             return;
         }
         if (control->enabled == 0U) {
@@ -1048,7 +1074,9 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         return;
     }
     if (control->enabled != 0U) {
-        if (attitude_safe == 0U) {
+        if (BallBalanceControl_AttitudeUnsafeDebounce(control,
+                                                      attitude_safe,
+                                                      now_ms) != 0U) {
             control->enabled = 0U;
             control->imu_fault = 1U;
             control->attitude_stable_ready = 0U;

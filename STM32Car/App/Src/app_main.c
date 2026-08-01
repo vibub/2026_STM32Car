@@ -278,7 +278,9 @@ static const DynamicRunTaskConfig s_dynamic_run_config = {
     APP_BALL_LIMIT_WARNING_MM,            /* 红圈和超差统计的误差门槛。 */
     APP_BALL_LIMIT_CLEAR_MM,              /* 红圈警告的回差清除门槛。 */
     APP_BALL_LIMIT_CLEAR_SAMPLES,         /* 清除红圈需要连续满足的样本数。 */
-    APP_BALL_OVERRANGE_CONFIRM_SAMPLES    /* 锁存超差结果需要连续越界的样本数。 */
+    APP_BALL_OVERRANGE_CONFIRM_SAMPLES,   /* 锁存超差结果需要连续越界的样本数。 */
+    APP_DYNAMIC_IMU_FAULT_DEBOUNCE_MS,    /* IMU 故障或姿态无效持续时长才判失败。 */
+    APP_DYNAMIC_VISION_FAULT_DEBOUNCE_MS  /* 视觉持续失联时长才判失败。 */
 };
 
 static float App_Abs(float value)

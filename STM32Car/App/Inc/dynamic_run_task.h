@@ -52,6 +52,8 @@ typedef struct {
     float warning_clear_mm;               /* 清除红圈所需回到的误差绝对值。 */
     uint8_t warning_clear_samples;        /* 清除红圈需要连续满足的视觉样本数。 */
     uint8_t overrange_confirm_samples;    /* 锁存超差结果需要连续越界的样本数。 */
+    uint32_t imu_fault_debounce_ms;       /* IMU 故障或姿态无效持续达到该时长才判失败，容忍起步与变速瞬态。 */
+    uint32_t vision_fault_debounce_ms;    /* 视觉失联持续达到该时长才判失败，容忍 K230 偶发丢帧。 */
 } DynamicRunTaskConfig;
 
 typedef struct {
@@ -96,6 +98,10 @@ typedef struct {
     uint8_t overrange_latched;
     uint8_t overlimit_time_active;
     uint8_t update_time_ready;
+    uint8_t imu_unsafe_active;        /* IMU/姿态不安全连续状态，用于故障去抖。 */
+    uint32_t imu_unsafe_since_ms;     /* IMU/姿态不安全连续起始时刻。 */
+    uint8_t vision_unsafe_active;     /* 视觉失联连续状态，用于故障去抖。 */
+    uint32_t vision_unsafe_since_ms;  /* 视觉失联连续起始时刻。 */
     uint32_t prepare_started_ms;
     uint32_t ready_started_ms;
     uint32_t last_ready_sample_ms;

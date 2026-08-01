@@ -39,6 +39,8 @@
 #define APP_BALL_LIMIT_CLEAR_MM              8.0f /* 误差回到 0.8 cm 内后允许清除红圈。 */
 #define APP_BALL_LIMIT_CLEAR_SAMPLES           3U /* 清除红圈需要连续满足的有效视觉样本数。 */
 #define APP_BALL_OVERRANGE_CONFIRM_SAMPLES     2U /* 锁存超差结果需要连续越界的有效样本数。 */
+#define APP_DYNAMIC_IMU_FAULT_DEBOUNCE_MS   300U  /* 第四、五题 IMU/姿态持续不健康才判失败，容忍起步变速瞬态。 */
+#define APP_DYNAMIC_VISION_FAULT_DEBOUNCE_MS 500U /* 第四、五题视觉持续失联才判失败，容忍 K230 偶发丢帧。 */
 #define APP_IR_LINE_LOST_RECOVERY_MS      200U  /* 丢线后按最近方向温和恢复的持续时间。 */
 #define APP_IR_LINE_LOST_STOP_MS          500U  /* 持续丢线达到该时间后停车。 */
 
