@@ -81,6 +81,9 @@ uint8_t App_SetBallShuttleConfig(float phase_1_angle_deg,
                                  uint32_t phase_2_time_ms,
                                  float phase_3_angle_deg,
                                  uint32_t phase_3_time_ms);
+uint8_t App_SaveBallShuttleTimes(uint32_t phase_1_time_ms,
+                                 uint32_t phase_2_time_ms,
+                                 uint32_t phase_3_time_ms);
 void App_GetBallShuttleConfig(float *phase_1_angle_deg,
                               uint32_t *phase_1_time_ms,
                               float *phase_2_angle_deg,

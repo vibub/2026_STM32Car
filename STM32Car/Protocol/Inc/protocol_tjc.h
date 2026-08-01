@@ -17,6 +17,9 @@
 #define TJC_COMMAND_QUERY          0x0EU /* TJC 当前底盘模式查询命令编号。 */
 #define TJC_RESPONSE_HEADER        0xA5U /* STM32 返回帧的帧头字节。 */
 
+#define TJC_COMMAND_SHUTTLE_SAVE   0x10U /* Save three open-loop phase durations. */
+#define TJC_COMMAND_SHUTTLE_QUERY  0x11U /* Query the three saved phase durations. */
+
 typedef enum {
     TJC_RESULT_STATE = 0x10U,
     TJC_RESULT_ACCEPTED_BRAKING = 0x11U,

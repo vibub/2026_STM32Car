@@ -24,6 +24,10 @@
 #include "tjc_uart.h"
 #include "wheel_speed_pid.h"
 
+#include "stm32h7xx_hal.h"
+
+#include <string.h>
+
 #define APP_BALL_POSITION_KP_MAX          0.200f /* 上位机允许的位置Kp安全上限。 */
 #define APP_BALL_POSITION_KI_MAX          0.100f /* 上位机允许的位置Ki安全上限。 */
 #define APP_BALL_POSITION_KD_MAX          0.200f /* 上位机允许的位置Kd安全上限。 */
@@ -242,6 +246,205 @@ static void App_DynamicRunFail(uint32_t now_ms,
 #define APP_BALL_SHUTTLE_SAMPLE_MAX_AGE_MS   200U /* 第三题启动允许的K230最新样本最大年龄。 */
 #define APP_BALL_SHUTTLE_MIN_QUALITY          50U /* 第三题启动单帧所需的最低识别质量。 */
 #define APP_BALL_SHUTTLE_PIPE_SAFETY_DEG     7.0f /* 启动手动管角模式允许的最大当前俯仰。 */
+
+#define APP_SHUTTLE_NVM_ADDRESS       0x080E0000UL
+#define APP_SHUTTLE_NVM_END_ADDRESS   0x08100000UL
+#define APP_SHUTTLE_NVM_RECORD_SIZE   32U
+#define APP_SHUTTLE_NVM_MAGIC         0x53485554UL
+#define APP_SHUTTLE_NVM_VERSION       1UL
+#define APP_SHUTTLE_NVM_VALID_MARKER  0xA55A3CC3UL
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t sequence;
+    uint32_t duration_ms[BALL_SHUTTLE_PHASE_COUNT];
+    uint32_t crc32;
+    uint32_t valid_marker;
+} AppShuttleNvmRecord;
+
+static uint32_t App_ShuttleNvmCrc32(const AppShuttleNvmRecord *record)
+{
+    const uint8_t *bytes = (const uint8_t *) record;
+    uint32_t crc = 0xFFFFFFFFUL;
+    uint32_t byte_index;
+    uint8_t bit_index;
+
+    for (byte_index = 0U; byte_index < 24U; byte_index++) {
+        crc ^= bytes[byte_index];
+        for (bit_index = 0U; bit_index < 8U; bit_index++) {
+            crc = ((crc & 1U) != 0U) ?
+                  ((crc >> 1U) ^ 0xEDB88320UL) : (crc >> 1U);
+        }
+    }
+    return ~crc;
+}
+
+static uint8_t App_ShuttleTimesAreValid(const uint32_t *duration_ms)
+{
+    uint32_t total_ms = 0U;
+    uint8_t index;
+
+    if (duration_ms == 0) {
+        return 0U;
+    }
+    for (index = 0U; index < BALL_SHUTTLE_PHASE_COUNT; index++) {
+        if ((duration_ms[index] < BALL_SHUTTLE_MIN_PHASE_TIME_MS) ||
+            (duration_ms[index] > BALL_SHUTTLE_MAX_PHASE_TIME_MS)) {
+            return 0U;
+        }
+        total_ms += duration_ms[index];
+    }
+    return (uint8_t) (total_ms <= BALL_SHUTTLE_MAX_TOTAL_TIME_MS);
+}
+
+static uint8_t App_ShuttleNvmRecordIsValid(
+    const AppShuttleNvmRecord *record)
+{
+    return (uint8_t) ((record != 0) &&
+                      (record->magic == APP_SHUTTLE_NVM_MAGIC) &&
+                      (record->version == APP_SHUTTLE_NVM_VERSION) &&
+                      (record->valid_marker ==
+                       APP_SHUTTLE_NVM_VALID_MARKER) &&
+                      (App_ShuttleTimesAreValid(record->duration_ms) != 0U) &&
+                      (record->crc32 == App_ShuttleNvmCrc32(record)));
+}
+
+static uint8_t App_ShuttleNvmSlotIsErased(uint32_t address)
+{
+    const uint32_t *words = (const uint32_t *) address;
+    uint8_t index;
+
+    for (index = 0U; index < 8U; index++) {
+        if (words[index] != 0xFFFFFFFFUL) {
+            return 0U;
+        }
+    }
+    return 1U;
+}
+
+static uint8_t App_ShuttleNvmFindLatest(AppShuttleNvmRecord *latest,
+                                        uint32_t *next_address)
+{
+    uint32_t address;
+    uint8_t found = 0U;
+
+    if (next_address != 0) {
+        *next_address = APP_SHUTTLE_NVM_END_ADDRESS;
+    }
+    for (address = APP_SHUTTLE_NVM_ADDRESS;
+         address < APP_SHUTTLE_NVM_END_ADDRESS;
+         address += APP_SHUTTLE_NVM_RECORD_SIZE) {
+        const AppShuttleNvmRecord *candidate =
+            (const AppShuttleNvmRecord *) address;
+
+        if (App_ShuttleNvmSlotIsErased(address) != 0U) {
+            if ((next_address != 0) &&
+                (*next_address == APP_SHUTTLE_NVM_END_ADDRESS)) {
+                *next_address = address;
+            }
+            continue;
+        }
+        if ((App_ShuttleNvmRecordIsValid(candidate) != 0U) &&
+            ((found == 0U) ||
+             ((int32_t) (candidate->sequence - latest->sequence) > 0))) {
+            if (latest != 0) {
+                *latest = *candidate;
+            }
+            found = 1U;
+        }
+    }
+    return found;
+}
+
+static uint8_t App_ShuttleNvmEraseSector(void)
+{
+    FLASH_EraseInitTypeDef erase;
+    uint32_t sector_error = 0U;
+    HAL_StatusTypeDef status;
+
+    erase.TypeErase = FLASH_TYPEERASE_SECTORS;
+    erase.Banks = FLASH_BANK_1;
+    erase.Sector = FLASH_SECTOR_7;
+    erase.NbSectors = 1U;
+    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+    status = HAL_FLASHEx_Erase(&erase, &sector_error);
+    return (uint8_t) ((status == HAL_OK) &&
+                      (sector_error == 0xFFFFFFFFUL));
+}
+
+static uint8_t App_ShuttleNvmSave(const uint32_t *duration_ms)
+{
+    AppShuttleNvmRecord latest;
+    AppShuttleNvmRecord record;
+    uint32_t address;
+    uint8_t found;
+    uint8_t index;
+    HAL_StatusTypeDef status;
+
+    if (App_ShuttleTimesAreValid(duration_ms) == 0U) {
+        return 0U;
+    }
+    found = App_ShuttleNvmFindLatest(&latest, &address);
+    if ((found != 0U) &&
+        (memcmp(latest.duration_ms, duration_ms,
+                sizeof(latest.duration_ms)) == 0)) {
+        return 1U;
+    }
+
+    memset(&record, 0xFF, sizeof(record));
+    record.magic = APP_SHUTTLE_NVM_MAGIC;
+    record.version = APP_SHUTTLE_NVM_VERSION;
+    record.sequence = (found != 0U) ? (latest.sequence + 1U) : 1U;
+    for (index = 0U; index < BALL_SHUTTLE_PHASE_COUNT; index++) {
+        record.duration_ms[index] = duration_ms[index];
+    }
+    record.crc32 = App_ShuttleNvmCrc32(&record);
+    record.valid_marker = APP_SHUTTLE_NVM_VALID_MARKER;
+
+    if (HAL_FLASH_Unlock() != HAL_OK) {
+        return 0U;
+    }
+    if (address == APP_SHUTTLE_NVM_END_ADDRESS) {
+        if (App_ShuttleNvmEraseSector() == 0U) {
+            (void) HAL_FLASH_Lock();
+            return 0U;
+        }
+        address = APP_SHUTTLE_NVM_ADDRESS;
+    }
+    status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD,
+                               address,
+                               (uint32_t) &record);
+    (void) HAL_FLASH_Lock();
+    if (status != HAL_OK) {
+        return 0U;
+    }
+
+    __DSB();
+    SCB_InvalidateDCache_by_Addr((uint32_t *) address,
+                                APP_SHUTTLE_NVM_RECORD_SIZE);
+    __DSB();
+    __ISB();
+    return (uint8_t) ((App_ShuttleNvmRecordIsValid(
+                           (const AppShuttleNvmRecord *) address) != 0U) &&
+                      (memcmp(((const AppShuttleNvmRecord *) address)->duration_ms,
+                              duration_ms,
+                              sizeof(record.duration_ms)) == 0));
+}
+
+static void App_ShuttleNvmLoad(void)
+{
+    AppShuttleNvmRecord latest;
+    BallShuttleConfig config;
+
+    if (App_ShuttleNvmFindLatest(&latest, 0) == 0U) {
+        return;
+    }
+    BallShuttleControl_GetConfig(&s_ball_shuttle_control, &config);
+    memcpy(config.duration_ms, latest.duration_ms,
+           sizeof(config.duration_ms));
+    (void) BallShuttleControl_SetConfig(&s_ball_shuttle_control, &config);
+}
 
 static const ChassisMotionConfig s_default_motion_config = {
     APP_BASE_SPEED_CM_S,       /* 第四至六项共用的平滑巡航目标速度。 */
@@ -1282,6 +1485,7 @@ void App_Init(void)
     BalanceDebugLog_Init();
     App_ApplyBallPidGains();
     BallShuttleControl_Init(&s_ball_shuttle_control);
+    App_ShuttleNvmLoad();
     BallPositionProtocol_Init();
     WheelSpeedPid_Init(&s_left_speed_pid);
     WheelSpeedPid_Init(&s_right_speed_pid);
@@ -1736,6 +1940,41 @@ uint8_t App_SetBallShuttleConfig(float phase_1_angle_deg,
     config.duration_ms[2] = phase_3_time_ms;
     if (BallShuttleControl_SetConfig(
             &s_ball_shuttle_control, &config) == 0U) {
+        return 0U;
+    }
+    App_UpdateBallShuttleDebug();
+    return 1U;
+}
+
+uint8_t App_SaveBallShuttleTimes(uint32_t phase_1_time_ms,
+                                 uint32_t phase_2_time_ms,
+                                 uint32_t phase_3_time_ms)
+{
+    BallShuttleConfig previous;
+    BallShuttleConfig updated;
+
+    if ((s_current_mode != APP_MODE_STOP) ||
+        (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
+        (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
+        (DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
+        (PipeAttitudeControl_IsCalibrationActive(
+             &s_pipe_attitude_control) != 0U)) {
+        return 0U;
+    }
+
+    BallShuttleControl_GetConfig(&s_ball_shuttle_control, &previous);
+    updated = previous;
+    updated.duration_ms[0] = phase_1_time_ms;
+    updated.duration_ms[1] = phase_2_time_ms;
+    updated.duration_ms[2] = phase_3_time_ms;
+    if (BallShuttleControl_SetConfig(
+            &s_ball_shuttle_control, &updated) == 0U) {
+        return 0U;
+    }
+    if (App_ShuttleNvmSave(updated.duration_ms) == 0U) {
+        (void) BallShuttleControl_SetConfig(
+            &s_ball_shuttle_control, &previous);
+        App_UpdateBallShuttleDebug();
         return 0U;
     }
     App_UpdateBallShuttleDebug();
