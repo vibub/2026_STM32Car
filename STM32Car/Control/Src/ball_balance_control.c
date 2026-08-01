@@ -73,14 +73,14 @@
 #define BALL_BALANCE_BALL_ACCEL_SIGN_PER_PITCH    (-1.0f) /* 统一物理约定：正杆角使 K230 位置向负向加速。 */
 #define BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2     100.0f
 #define BALL_BALANCE_CACHE_EPSILON_DEG              0.0001f /* 状态切换允许的浮点角度误差。 */
-#define BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG       0.058405f /* atan(a/g) 的小角度近似，输入为 cm/s^2。 */
-#define BALL_BALANCE_TRANSPORT_IMU_BLEND              0.35f /* IMU 实测扰动对命令前馈的低频修正比例。 */
+#define BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG       0.122f   /* 实测 1/g_eff（g_eff≈8.2 cm/s2/°），输入为 cm/s^2。 */
+#define BALL_BALANCE_TRANSPORT_IMU_BLEND              0.0f /* 匀速直线段砍掉 IMU 混合，前馈只用规划值。 */
 #define BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG           2.00f /* 防止振动或侧向冲击污染纵向补偿。 */
-#define BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG            1.20f /* 起步和停车前馈的最大杆角。 */
+#define BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG            3.00f /* 起步和停车前馈的最大杆角（配合 0.122 系数）。 */
 #define BALL_BALANCE_TRANSPORT_WALL_ACCEL_LIMIT_CM_S2  30.0f /* 管壁等效轴向加速度的实车调参保护。 */
 #define BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG        0.50f /* 弯道管壁补偿不得占满水管角度余量。 */
 #define BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM          0.012f /* 行驶中小幅位置修正增益。 */
-#define BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S        0.003f /* 行驶中钢珠速度阻尼。 */
+#define BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S        0.000f /* 低帧率下速度阻尼不可靠，匀速段砍掉。 */
 #define BALL_BALANCE_TRANSPORT_TRANSIENT_DEADBAND_MM    2.0f /* 起步/停车时保留较灵敏的位置修正。 */
 #define BALL_BALANCE_TRANSPORT_CRUISE_DEADBAND_MM       5.0f /* 匀速段不追逐中心附近的视觉与车体小扰动。 */
 #define BALL_BALANCE_TRANSPORT_CRUISE_ACCEL_LIMIT_CM_S2 1.0f /* 与底盘匀速判定的加速度容差一致。 */
