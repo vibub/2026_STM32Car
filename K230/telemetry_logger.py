@@ -162,13 +162,17 @@ class TelemetryRunLogger:
 
     def _next_path(self):
         self._ensure_log_dir()
+        run_mode = "abcd"
+        if self.records:
+            mode_value = int(self.records[0].get("run_mode", 2))
+            run_mode = "ab" if mode_value == 1 else "abcd"
         for index in range(1, 10000):
-            path = "%s/abcd_%04d.csv" % (self.log_dir, index)
+            path = "%s/%s_%04d.csv" % (self.log_dir, run_mode, index)
             try:
                 os.stat(path)
             except OSError:
                 return path
-        return "%s/abcd_latest.csv" % self.log_dir
+        return "%s/%s_latest.csv" % (self.log_dir, run_mode)
 
     def save_csv(self):
         if not self.records:

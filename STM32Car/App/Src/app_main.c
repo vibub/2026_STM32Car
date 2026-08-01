@@ -1603,7 +1603,8 @@ static void App_K230TelemetryTask(uint32_t now_ms)
 
     App_FillK230Telemetry(now_ms, &telemetry);
     if (s_k230_telemetry_session_active == 0U) {
-        if ((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+        if (((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) ||
+             (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD)) &&
             (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
             (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_START,
                                     &telemetry) != 0U)) {
@@ -1613,7 +1614,8 @@ static void App_K230TelemetryTask(uint32_t now_ms)
         return;
     }
 
-    if ((s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_ABCD) ||
+    if (((s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_AB) &&
+         (s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_ABCD)) ||
         (s_dynamic_run_task.state != DYNAMIC_RUN_STATE_RUNNING)) {
         if (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_END,
                                    &telemetry) != 0U) {
