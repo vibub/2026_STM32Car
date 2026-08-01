@@ -1740,6 +1740,30 @@ static void test_ball_balance_transport_mode(void)
     assert(output.transport_feedback_pitch_deg <= 0.45f);
     assert(output.desired_pipe_pitch_deg > 0.0f);
     assert(output.integral_active == 0U);
+
+    /* 匀速时扩大中心死区，避免小位置抖动反复驱动水管；速度阻尼不在此清零。 */
+    measurement.position_d10_mm = 40;
+    for (index = 0U; index < 8U; index++) {
+        measurement.sequence++;
+        now_ms += 100U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(
+            &control, now_ms, &measurement, &attitude, &output);
+    }
+    assert_float_near_tolerance(
+        output.transport_position_deadband_mm, 5.0f, 0.001f);
+    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
+
+    /* 同样的 4 mm 偏差在起步/停车阶段仍超过 2 mm 死区并产生位置修正。 */
+    BallBalanceControl_SetTransportInputs(&control, 8.0f, 0.0f, 1U);
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert_float_near_tolerance(
+        output.transport_position_deadband_mm, 2.0f, 0.001f);
+    assert(output.p_term_deg > 0.0f);
 }
 
 int main(void)

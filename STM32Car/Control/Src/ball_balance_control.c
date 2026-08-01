@@ -81,7 +81,9 @@
 #define BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG        0.50f /* 弯道管壁补偿不得占满水管角度余量。 */
 #define BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM          0.012f /* 行驶中小幅位置修正增益。 */
 #define BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S        0.003f /* 行驶中钢珠速度阻尼。 */
-#define BALL_BALANCE_TRANSPORT_DEADBAND_MM              2.0f /* 中心附近不追逐视觉抖动。 */
+#define BALL_BALANCE_TRANSPORT_TRANSIENT_DEADBAND_MM    2.0f /* 起步/停车时保留较灵敏的位置修正。 */
+#define BALL_BALANCE_TRANSPORT_CRUISE_DEADBAND_MM       5.0f /* 匀速段不追逐中心附近的视觉与车体小扰动。 */
+#define BALL_BALANCE_TRANSPORT_CRUISE_ACCEL_LIMIT_CM_S2 1.0f /* 与底盘匀速判定的加速度容差一致。 */
 #define BALL_BALANCE_TRANSPORT_P_LIMIT_DEG             0.38f /* 弯道位置修正保持小幅。 */
 #define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
@@ -549,6 +551,7 @@ static void BallBalanceControl_ApplyTransportCommand(
     float expected_disturbance_deg;
     float effective_disturbance_deg;
     float feedback_error_mm;
+    float position_deadband_mm;
 
     expected_disturbance_deg = BallBalanceControl_Limit(
         control->transport_command_accel_cm_s2 *
@@ -579,14 +582,20 @@ static void BallBalanceControl_ApplyTransportCommand(
         -BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG,
         BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG);
 
+    position_deadband_mm = BALL_BALANCE_TRANSPORT_TRANSIENT_DEADBAND_MM;
+    if (BallBalanceControl_Abs(control->transport_command_accel_cm_s2) <=
+        BALL_BALANCE_TRANSPORT_CRUISE_ACCEL_LIMIT_CM_S2) {
+        position_deadband_mm = BALL_BALANCE_TRANSPORT_CRUISE_DEADBAND_MM;
+    }
+    control->transport_position_deadband_mm = position_deadband_mm;
     feedback_error_mm = control->error_mm;
     if (BallBalanceControl_Abs(feedback_error_mm) <=
-        BALL_BALANCE_TRANSPORT_DEADBAND_MM) {
+        position_deadband_mm) {
         feedback_error_mm = 0.0f;
     } else if (feedback_error_mm > 0.0f) {
-        feedback_error_mm -= BALL_BALANCE_TRANSPORT_DEADBAND_MM;
+        feedback_error_mm -= position_deadband_mm;
     } else {
-        feedback_error_mm += BALL_BALANCE_TRANSPORT_DEADBAND_MM;
+        feedback_error_mm += position_deadband_mm;
     }
     control->p_term_deg = BallBalanceControl_Limit(
         BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM * feedback_error_mm,
@@ -1260,6 +1269,8 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->brake_term_deg = control->brake_term_deg;
     output->transport_command_accel_cm_s2 =
         control->transport_command_accel_cm_s2;
+    output->transport_position_deadband_mm =
+        control->transport_position_deadband_mm;
     output->transport_imu_disturbance_deg =
         control->transport_imu_disturbance_deg;
     output->transport_wall_accel_cm_s2 =

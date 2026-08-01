@@ -101,6 +101,7 @@ typedef struct {
     float d_term_deg;
     float brake_term_deg;
     float transport_command_accel_cm_s2;
+    float transport_position_deadband_mm;
     float transport_imu_disturbance_deg;
     float transport_wall_accel_cm_s2;
     float transport_wall_feedforward_pitch_deg;
@@ -169,6 +170,7 @@ typedef struct {
     float d_term_deg;
     float brake_term_deg;
     float transport_command_accel_cm_s2;
+    float transport_position_deadband_mm;
     float transport_imu_disturbance_deg;
     float transport_wall_accel_cm_s2;
     float transport_wall_feedforward_pitch_deg;

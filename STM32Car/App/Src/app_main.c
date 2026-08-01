@@ -81,6 +81,7 @@ volatile float g_app_ball_d_term_deg;
 volatile float g_app_ball_brake_term_deg;
 volatile uint8_t g_app_ball_transport_mode_enabled;
 volatile float g_app_ball_transport_command_accel_cm_s2;
+volatile float g_app_ball_transport_position_deadband_mm;
 volatile float g_app_ball_transport_imu_disturbance_deg;
 volatile float g_app_ball_transport_feedforward_pitch_deg;
 volatile float g_app_ball_transport_feedback_pitch_deg;
@@ -628,6 +629,8 @@ static void App_UpdateBallBalanceDebug(void)
         s_ball_balance_output.transport_mode_enabled;
     g_app_ball_transport_command_accel_cm_s2 =
         s_ball_balance_output.transport_command_accel_cm_s2;
+    g_app_ball_transport_position_deadband_mm =
+        s_ball_balance_output.transport_position_deadband_mm;
     g_app_ball_transport_imu_disturbance_deg =
         s_ball_balance_output.transport_imu_disturbance_deg;
     g_app_ball_transport_feedforward_pitch_deg =
