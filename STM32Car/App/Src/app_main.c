@@ -120,7 +120,6 @@ volatile uint32_t g_app_ball_command_pwm_us;
 volatile uint32_t g_app_ball_actual_pwm_us;
 volatile uint8_t g_app_ball_endpoint_hold_enabled;
 volatile uint8_t g_app_ball_shuttle_state;
-volatile uint8_t g_app_ball_shuttle_failure;
 volatile uint8_t g_app_ball_shuttle_start_reject;
 volatile uint32_t g_app_ball_shuttle_elapsed_ms;
 volatile float g_app_ball_shuttle_target_pipe_pitch_deg;
@@ -241,7 +240,6 @@ static void App_DynamicRunFail(uint32_t now_ms,
 #define APP_BALL_SHUTTLE_CENTER_LIMIT_D10_MM  50  /* 第三题启动时最新单帧必须位于O点正负5毫米。 */
 #define APP_BALL_SHUTTLE_SAMPLE_MAX_AGE_MS   200U /* 第三题启动允许的K230最新样本最大年龄。 */
 #define APP_BALL_SHUTTLE_MIN_QUALITY          50U /* 第三题启动单帧所需的最低识别质量。 */
-#define APP_BALL_SHUTTLE_PIPE_SAFETY_DEG     7.0f /* 启动手动管角模式允许的最大当前俯仰。 */
 
 static const ChassisMotionConfig s_default_motion_config = {
     APP_BASE_SPEED_CM_S,       /* 第四至六项共用的平滑巡航目标速度。 */
@@ -443,7 +441,6 @@ static void App_UpdateBallShuttleDebug(void)
     uint8_t index;
 
     g_app_ball_shuttle_state = (uint8_t) s_ball_shuttle_control.state;
-    g_app_ball_shuttle_failure = (uint8_t) s_ball_shuttle_control.failure;
     g_app_ball_shuttle_elapsed_ms = s_ball_shuttle_control.elapsed_ms;
     g_app_ball_shuttle_target_pipe_pitch_deg =
         s_ball_shuttle_control.target_pipe_pitch_deg;
@@ -668,19 +665,10 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
 
 static void App_BallShuttleTask(uint32_t now_ms)
 {
-    BallShuttleMeasurement measurement;
     BallShuttleEvent event;
     float target_pipe_pitch_deg;
 
-    measurement.pipe_control_enabled = s_ball_balance_output.enabled;
-    measurement.manual_pipe_mode_enabled =
-        s_ball_balance_output.manual_pipe_mode_enabled;
-    measurement.attitude_valid = s_ball_balance_output.attitude_valid;
-    measurement.imu_fault = s_ball_balance_output.imu_fault;
-    measurement.mapping_fault = s_ball_balance_output.mapping_fault;
-    event = BallShuttleControl_Update(&s_ball_shuttle_control,
-                                      now_ms,
-                                      &measurement);
+    event = BallShuttleControl_Update(&s_ball_shuttle_control, now_ms);
 
     switch (event) {
         case BALL_SHUTTLE_EVENT_PHASE_2:
@@ -705,16 +693,6 @@ static void App_BallShuttleTask(uint32_t now_ms)
             BallBalanceControl_SetManualPipeMode(
                 &s_ball_balance_control, 1U, 0.0f);
             App_QueueTjcStatus(TJC_STATUS_SHUTTLE_SUCCESS);
-            break;
-
-        case BALL_SHUTTLE_EVENT_FAILED:
-            BallBalanceControl_SetManualPipeMode(
-                &s_ball_balance_control, 0U, 0.0f);
-            BallBalanceControl_SetEnabled(&s_ball_balance_control,
-                                          0U,
-                                          now_ms);
-            s_ball_balance_output.command_angle_deg = 0.0f;
-            App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
             break;
 
         default:
@@ -1655,20 +1633,6 @@ uint8_t App_StartBallShuttle(void)
         (App_GetHostCalibrationEnabled() != 0U)) {
         g_app_ball_shuttle_start_reject =
             (uint8_t) APP_SHUTTLE_START_REJECT_BUSY;
-        return 0U;
-    }
-    if (PipeAttitudeControl_IsCalibrationValid(
-            &s_pipe_attitude_control) == 0U) {
-        g_app_ball_shuttle_start_reject =
-            (uint8_t) APP_SHUTTLE_START_REJECT_CALIBRATION;
-        return 0U;
-    }
-    if ((s_pipe_attitude_output.attitude_valid == 0U) ||
-        (App_Abs(s_pipe_attitude_output.pitch_deg) >
-         APP_BALL_SHUTTLE_PIPE_SAFETY_DEG)) {
-        g_app_ball_shuttle_start_reject =
-            (uint8_t) APP_SHUTTLE_START_REJECT_ATTITUDE;
-        App_QueueTjcStatus(TJC_STATUS_SHUTTLE_FAILED);
         return 0U;
     }
     if (App_BallShuttleCenterFrameReady(now_ms) == 0U) {

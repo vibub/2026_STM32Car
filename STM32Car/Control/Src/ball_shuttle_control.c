@@ -44,31 +44,10 @@ static uint8_t BallShuttleControl_ConfigIsValid(
 static void BallShuttleControl_ResetRuntime(BallShuttleControl *control)
 {
     control->state = BALL_SHUTTLE_STATE_IDLE;
-    control->failure = BALL_SHUTTLE_FAILURE_NONE;
     control->started_ms = 0U;
     control->phase_started_ms = 0U;
     control->elapsed_ms = 0U;
     control->target_pipe_pitch_deg = 0.0f;
-}
-
-static uint8_t BallShuttleControl_MeasurementIsHealthy(
-    const BallShuttleMeasurement *measurement)
-{
-    return (uint8_t) ((measurement != 0) &&
-                      (measurement->pipe_control_enabled != 0U) &&
-                      (measurement->manual_pipe_mode_enabled != 0U) &&
-                      (measurement->attitude_valid != 0U) &&
-                      (measurement->imu_fault == 0U) &&
-                      (measurement->mapping_fault == 0U));
-}
-
-static BallShuttleEvent BallShuttleControl_Fail(
-    BallShuttleControl *control)
-{
-    control->state = BALL_SHUTTLE_STATE_FAILED;
-    control->failure = BALL_SHUTTLE_FAILURE_PIPE_CONTROL;
-    control->target_pipe_pitch_deg = 0.0f;
-    return BALL_SHUTTLE_EVENT_FAILED;
 }
 
 void BallShuttleControl_Init(BallShuttleControl *control)
@@ -128,7 +107,6 @@ uint8_t BallShuttleControl_Start(BallShuttleControl *control,
     }
 
     control->state = BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE;
-    control->failure = BALL_SHUTTLE_FAILURE_NONE;
     control->started_ms = now_ms;
     control->phase_started_ms = now_ms;
     control->elapsed_ms = 0U;
@@ -148,7 +126,6 @@ void BallShuttleControl_HoldLevel(BallShuttleControl *control,
         control->elapsed_ms = (uint32_t) (now_ms - control->started_ms);
     }
     control->state = BALL_SHUTTLE_STATE_HOLDING_LEVEL;
-    control->failure = BALL_SHUTTLE_FAILURE_NONE;
     control->phase_started_ms = now_ms;
     control->target_pipe_pitch_deg = 0.0f;
 }
@@ -162,22 +139,16 @@ void BallShuttleControl_Stop(BallShuttleControl *control)
     BallShuttleControl_ResetRuntime(control);
 }
 
-BallShuttleEvent BallShuttleControl_Update(
-    BallShuttleControl *control,
-    uint32_t now_ms,
-    const BallShuttleMeasurement *measurement)
+BallShuttleEvent BallShuttleControl_Update(BallShuttleControl *control,
+                                           uint32_t now_ms)
 {
     uint32_t phase_elapsed_ms;
 
     if (control == 0) {
         return BALL_SHUTTLE_EVENT_NONE;
     }
-    if ((control->state == BALL_SHUTTLE_STATE_IDLE) ||
-        (control->state == BALL_SHUTTLE_STATE_FAILED)) {
+    if (control->state == BALL_SHUTTLE_STATE_IDLE) {
         return BALL_SHUTTLE_EVENT_NONE;
-    }
-    if (BallShuttleControl_MeasurementIsHealthy(measurement) == 0U) {
-        return BallShuttleControl_Fail(control);
     }
 
     control->elapsed_ms = (uint32_t) (now_ms - control->started_ms);
@@ -217,7 +188,7 @@ BallShuttleEvent BallShuttleControl_Update(
             break;
 
         default:
-            return BallShuttleControl_Fail(control);
+            break;
     }
 
     return BALL_SHUTTLE_EVENT_NONE;
