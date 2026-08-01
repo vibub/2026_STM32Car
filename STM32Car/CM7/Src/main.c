@@ -4,41 +4,66 @@
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim8;
+I2C_HandleTypeDef hi2c2;
 I2C_HandleTypeDef hi2c4;
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart4;
 
 const char * volatile g_error_file;
 volatile uint32_t g_error_line;
+volatile uint8_t g_boot_step;
 
 static void MPU_Config(void);
 static void CPU_CACHE_Enable(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM4_Init(void);
 static void MX_TIM8_Init(void);
 static void MX_I2C4_Init(void);
+static void MX_I2C2_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_UART4_Init(void);
 
 int main(void)
 {
+    g_boot_step = 1U;
     MPU_Config();
     CPU_CACHE_Enable();
     HAL_Init();
+    g_boot_step = 2U;
     SystemClock_Config();
+    g_boot_step = 3U;
 
     MX_GPIO_Init();
+    g_boot_step = 4U;
     MX_TIM1_Init();
+    g_boot_step = 5U;
     MX_TIM2_Init();
+    g_boot_step = 6U;
+    MX_TIM4_Init();
+    g_boot_step = 7U;
     MX_TIM8_Init();
+    g_boot_step = 8U;
     MX_I2C4_Init();
+    g_boot_step = 9U;
+    MX_I2C2_Init();
+    g_boot_step = 10U;
+    MX_USART1_UART_Init();
+    g_boot_step = 11U;
     MX_USART2_UART_Init();
+    g_boot_step = 12U;
     MX_UART4_Init();
+    g_boot_step = 13U;
     App_Init();
+    g_boot_step = 14U;
 
     while (1) {
+        g_boot_step = 15U;
         App_Loop();
     }
 }
@@ -89,9 +114,16 @@ static void MX_GPIO_Init(void)
     __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOF_CLK_ENABLE();
 
-    HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN,
+    /*
+     * Keep the motor bridge inputs low from the first GPIO setup.  TIM2 later
+     * changes PA0/PA2 to alternate function, but its PWM channels are not
+     * started until MotorDriver_Set() receives a non-zero command.
+     */
+    HAL_GPIO_WritePin(GPIOA, MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN |
+                      MOTOR_RIGHT_PWM_PIN | MOTOR_LEFT_PWM_PIN,
                       GPIO_PIN_RESET);
-    gpio.Pin = MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN;
+    gpio.Pin = MOTOR_RIGHT_DIR_PIN | MOTOR_LEFT_DIR_PIN |
+               MOTOR_RIGHT_PWM_PIN | MOTOR_LEFT_PWM_PIN;
     gpio.Mode = GPIO_MODE_OUTPUT_PP;
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_LOW;
@@ -119,6 +151,30 @@ static void MX_I2C4_Init(void)
     hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
     if (HAL_I2C_Init(&hi2c4) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_I2C2_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_I2C2;
+    clock.I2c123ClockSelection = RCC_I2C2CLKSOURCE_HSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    hi2c2.Instance = IMU_I2C_INSTANCE;
+    hi2c2.Init.Timing = 0x10D19CE4U;
+    hi2c2.Init.OwnAddress1 = 0U;
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c2.Init.OwnAddress2 = 0U;
+    hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
         Error_Handler();
     }
 }
@@ -183,6 +239,38 @@ static void MX_TIM2_Init(void)
     }
 }
 
+static void MX_TIM4_Init(void)
+{
+    TIM_OC_InitTypeDef channel = {0};
+    TIM_MasterConfigTypeDef master = {0};
+
+    /* APB1 定时器时钟为 64 MHz，分频后以 1 us 为一个计数。 */
+    htim4.Instance = SERVO_PWM_INSTANCE;
+    htim4.Init.Prescaler = 63U;
+    htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim4.Init.Period = 19999U;
+    htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+    if (HAL_TIM_PWM_Init(&htim4) != HAL_OK) {
+        Error_Handler();
+    }
+
+    master.MasterOutputTrigger = TIM_TRGO_RESET;
+    master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+    if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &master) != HAL_OK) {
+        Error_Handler();
+    }
+
+    channel.OCMode = TIM_OCMODE_PWM1;
+    channel.Pulse = 0U;
+    channel.OCPolarity = TIM_OCPOLARITY_HIGH;
+    channel.OCFastMode = TIM_OCFAST_DISABLE;
+    if (HAL_TIM_PWM_ConfigChannel(&htim4, &channel,
+                                  SERVO_PWM_CHANNEL) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
 static void MX_TIM8_Init(void)
 {
     TIM_Encoder_InitTypeDef encoder = {0};
@@ -213,6 +301,35 @@ static void MX_TIM8_Init(void)
     master.MasterOutputTrigger2 = TIM_TRGO2_RESET;
     master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
     if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &master) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+static void MX_USART1_UART_Init(void)
+{
+    RCC_PeriphCLKInitTypeDef clock = {0};
+
+    clock.PeriphClockSelection = RCC_PERIPHCLK_USART1;          /* 选择 USART1 外设时钟配置。 */
+    clock.Usart16ClockSelection = RCC_USART16CLKSOURCE_HSI;    /* 使用 64 MHz HSI 作为 USART1 时钟源。 */
+    if (HAL_RCCEx_PeriphCLKConfig(&clock) != HAL_OK) {
+        Error_Handler();
+    }
+
+    huart1.Instance = HOST_DEBUG_UART_INSTANCE;                 /* 上位机调试串口使用 USART1。 */
+    huart1.Init.BaudRate = 115200U;                             /* 波特率 115200 bit/s。 */
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;                /* 8 位数据位。 */
+    huart1.Init.StopBits = UART_STOPBITS_1;                     /* 1 位停止位。 */
+    huart1.Init.Parity = UART_PARITY_NONE;                      /* 不使用奇偶校验。 */
+    huart1.Init.Mode = UART_MODE_TX_RX;                         /* 同时启用发送和接收。 */
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;                /* 不使用硬件流控。 */
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;            /* 使用 16 倍过采样。 */
+    huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;   /* 禁用单采样模式。 */
+    huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;           /* USART1 输入时钟不分频。 */
+    huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT; /* 不启用高级 UART 功能。 */
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+        Error_Handler();
+    }
+    if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK) {
         Error_Handler();
     }
 }

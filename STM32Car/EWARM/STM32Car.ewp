@@ -1152,6 +1152,12 @@
                 <file>
                     <name>$PROJ_DIR$\..\App\Src\app_main.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\App\Src\balance_debug_log.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\App\Src\dynamic_run_task.c</name>
+                </file>
             </group>
             <group>
                 <name>Bsp</name>
@@ -1171,10 +1177,16 @@
                     <name>$PROJ_DIR$\..\Bsp\Src\k230_uart.c</name>
                 </file>
                 <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\host_link_uart.c</name>
+                </file>
+                <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\tjc_uart.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\motor_driver.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Bsp\Src\servo_driver.c</name>
                 </file>
                 <file>
                     <name>$PROJ_DIR$\..\Bsp\Src\oled_display.c</name>
@@ -1191,11 +1203,35 @@
                 <file>
                     <name>$PROJ_DIR$\..\Control\Src\lap_stop_detector.c</name>
                 </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\chassis_motion_profile.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\chassis_accel_estimator.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\linkage_kinematics.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\ball_balance_control.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\ball_shuttle_control.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Control\Src\pipe_attitude_control.c</name>
+                </file>
             </group>
             <group>
                 <name>Protocol</name>
                 <file>
                     <name>$PROJ_DIR$\..\Protocol\Src\protocol_tjc.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Protocol\Src\ball_position_protocol.c</name>
+                </file>
+                <file>
+                    <name>$PROJ_DIR$\..\Protocol\Src\host_calibration_protocol.c</name>
                 </file>
             </group>
         </group>

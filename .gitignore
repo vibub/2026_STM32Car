@@ -13,12 +13,16 @@ STM32Car/EWARM/STM32Car/.clang-format
 
 # 主机测试输出
 STM32Car/tests/*.exe
+__pycache__/
 
 # 编辑器、索引与系统文件
+.claude/
 .codegraph/
 .vscode/
+.vs/
 .idea/
 docs/superpowers
 .DS_Store
 Thumbs.db
 CLAUDE.md
+AGENTS.md

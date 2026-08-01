@@ -1,8 +1,8 @@
 # K230 红色标记与钢珠位置识别联调
 
-运行 `ball_camera.py`。程序同时使用 640×360 传统视觉通道识别红色标记，以及 640×360 AI 通道运行钢球 YOLO；两通道坐标一致。导轨沿画面水平方向放置。
+运行 `main.py`。程序使用 640×360 传统视觉通道低频识别红色标记，同时使用 320×180 AI 通道采集画面，并由 AI2D 缩放到 320×320 后运行钢球 AnchorBaseDet；检测框会转换到 640×360 标定坐标系。Display/OSD 合成画面通过 WBC 硬件 H.264 编码，以 RTSP 图传输出。导轨沿画面水平方向放置。
 
-`ball_camera.py`、`ball_position.py` 和 `vision_pipeline.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/steel_ball_yolo11n_det_320.kmodel`；也兼容原工程的 `/sdcard/yolo11n_det_320.kmodel`。入口会显式把 `/sdcard` 加入模块搜索路径。
+`main.py`、`ball_position.py`、`vision_pipeline.py` 和 `wifi_ap_rtsp.py` 应放在 SD 卡根目录。钢球模型放到 `/sdcard/models/ball_AnchorBaseDet_320.kmodel`，并确保 `/sdcard/libs/PlatTasks.py` 可用。运行时使用 `DetectionApp` 的 `AnchorBaseDet` 后处理，并使用模型部署配置中的九组锚框。入口会显式把 `/sdcard` 加入模块搜索路径。
 
 ## 红色位置标记
 
@@ -29,6 +29,7 @@ LCD/IDE 叠加层中：
 - `MARK 5/5`：五组全部有效。
 - 绿色框：识别到的圆环或钢珠。
 - `BALL POS +xx.x mm`：钢球相对 0 标记的位置；识别无效时显示 `BALL POS --.- mm`。
+- `BALL FPS x.x`：每秒实际完成的钢球 AnchorBaseDet 识别次数，包含摄像头采集、图传和 OSD 对实时性的影响。
 
 少于两组、上下红线无法配对或红线间距明显不合理时，位置结果立即无效，不沿用旧值。
 
@@ -38,16 +39,17 @@ LCD/IDE 叠加层中：
 2. 将 x 坐标接近、上下间距合理的两个 blob 配成一组刻度列。
 3. 按 x 排序；三组以上选择最靠近画面中心的一列作为 0，相邻列间隔为 50 mm；只有两组时按“中心标记可见”或“中心标记被遮挡”两种情况估算。
 4. 根据目标所在高度对每组上下红线的 x 坐标插值，补偿轻微透视和相机歪斜。
-5. 钢球模式由 YOLO 输出 `[x, y, width, height]` 框；取框中心并限制在上下红线之间，再在相邻刻度间分段插值位置。
+5. 钢球模式由 `DetectionApp` 输出 `[x1, y1, x2, y2]` 框，程序将其转换为 `[x, y, width, height]`；取框中心并限制在上下红线之间，再在相邻刻度间分段插值位置。
 6. 圆环模式仍使用金色 LAB 连通域，方便没有钢球时联调标定和屏幕显示。
 
-## 钢球 YOLO 与圆环模式
+## 钢球 AnchorBaseDet 与圆环模式
 
-默认配置使用现成钢球 YOLO：
+默认配置使用 320×320 AnchorBaseDet 钢球模型：
 
 ```python
 TARGET_PROFILE = "STEEL_BALL"
-STEEL_BALL_CONFIDENCE_THRESHOLD = 0.60
+STEEL_BALL_MODEL_INPUT_SIZE = [320, 320]
+STEEL_BALL_CONFIDENCE_THRESHOLD = 0.40
 ```
 
 没有钢球、需要用金色圆环联调时改为：
@@ -63,13 +65,25 @@ RING_DIAMETER_MM = 18.0
 
 - 红线漏检：用 CanMV IDE 阈值编辑器重新标定 `ball_position.py` 的 `SCALE_THRESHOLDS`，只保留红色记号笔。
 - 红线粘连：缩小每条线宽，擦除附近其他红色污迹，或减小 `SCALE_MERGE_MARGIN`。
-- YOLO 漏检钢球：先确认模型路径，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.60 逐步降至 0.50；误检时提高阈值。
+- AnchorBaseDet 漏检钢球：先确认模型路径、`/sdcard/libs/PlatTasks.py` 和 `STEEL_BALL_ANCHORS`，再把 `STEEL_BALL_CONFIDENCE_THRESHOLD` 从 0.40 逐步降至 0.30；误检时提高阈值。
 - 金色圆环漏检：调整 `RING_TARGET_THRESHOLDS`；圆环被分成多块时把 `TARGET_MERGE_MARGIN` 从 5 增大到 6～8。
 - 位置整体偏移：调整相机，使 0 标记位于画面中心附近；相机和导轨固定后锁定曝光、白平衡与焦距。
 
+## H.264 RTSP 图传
+
+K230 创建热点 `kk22330`，电脑连接后使用 VLC 打开：
+
+```text
+rtsp://192.168.4.1:8554/test
+```
+
+图传默认使用 800×480、15 FPS、2048 kbit/s H.264。WBC 和 VEncoder 在后台线程处理显示合成帧，主循环不再执行软件 JPEG 压缩，也不再为图传额外采集 CV 帧。浏览器不能直接播放该 RTSP 地址。
+
+RTSP 和 CanMV IDE 虚拟帧缓冲都依赖唯一的 VO WBC 通道，不能同时开启。RTSP 模式下 `DISPLAY_MODE` 必须为 `"rtsp"`，画面请通过 VLC 查看；需要恢复 IDE 帧缓冲时，应关闭 `VIDEO_AP_ENABLE` 并把 `DISPLAY_MODE` 改回 `"ide"`。
+
 ## UART
 
-UART2 使用 IO44 TX、IO45 RX，115200-8N1。每 40 ms 发送：
+UART1 使用 IO3 TX、IO4 RX，115200-8N1。每 40 ms 发送：
 
 ```text
 B,valid,position_d10_mm,quality,sequence\r\n
