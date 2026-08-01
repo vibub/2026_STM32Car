@@ -56,7 +56,6 @@
 #define BALL_BALANCE_ATTITUDE_STABLE_MS         150U    /* 启用前只确认短时间稳定，避免点击后反应迟钝。 */
 #define BALL_BALANCE_ENABLE_PITCH_LIMIT_DEG       0.60f
 #define BALL_BALANCE_ENABLE_RATE_LIMIT_DPS        1.00f
-#define BALL_BALANCE_TARGET_LIMIT_MM            100.0f  /* 可设置钢球目标位置的绝对上限。 */
 #define BALL_BALANCE_POSITION_LIMIT_MM          130.0f  /* 合法钢球测量位置的绝对上限。 */
 #define BALL_BALANCE_PIPE_PROFILE_MAX_RATE_DPS    12.0f
 #define BALL_BALANCE_PIPE_PROFILE_ACCEL_DPS2      60.0f
@@ -88,7 +87,8 @@
 #define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM        7.0f /* 预测位置接近题目边界前提前强回收。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到中心死区且降速后才退出。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到目标且降速后才退出。 */
+#define BALL_BALANCE_POSITION_COMPARE_EPSILON_MM      0.001f /* 浮点位置边界比较容差，单位为毫米。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 10.0f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM   0.020f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S 0.016f
@@ -272,12 +272,53 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
     control->pipe_command_rate_dps = 0.0f;
 }
 
+static void BallBalanceControl_ResetControlStatePreserveVision(
+    BallBalanceControl *control)
+{
+    /* 第六题启用时保留最新位置和速度观测，只清除上一任务的执行状态。 */
+    control->timed_out = 0U;
+    control->integral_active = 0U;
+    control->braking_active = 0U;
+    control->transport_recovery_active = 0U;
+    control->zero_hold_freeze_active = 0U;
+    control->turnaround_freeze_active = 0U;
+    control->outward_motion_seen = 0U;
+    control->previous_error_ready = 0U;
+    control->zero_crossed = 0U;
+    control->pipe_settled = 0U;
+    control->pipe_settle_timer_ready = 0U;
+    control->stationary_sample_count = 0U;
+    control->moving_sample_count = 0U;
+    control->moving_direction = 0;
+    control->kick_attempt_count = 0U;
+    control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
+    control->spike_reject_active = 0U;
+    control->last_spike_reject_ms = 0U;
+    control->pipe_settle_since_ms = 0U;
+    control->phase_started_ms = 0U;
+    control->kick_stage_started_ms = 0U;
+    control->turnaround_freeze_started_ms = 0U;
+    control->last_measurement_dt_s = 0.0f;
+    control->integral_mm_s = 0.0f;
+    control->error_mm = 0.0f;
+    control->previous_error_mm = 0.0f;
+    control->p_term_deg = 0.0f;
+    control->i_term_deg = 0.0f;
+    control->d_term_deg = 0.0f;
+    control->brake_term_deg = 0.0f;
+    control->phase_pitch_deg = 0.0f;
+    control->stop_distance_mm = 0.0f;
+    control->desired_pipe_pitch_deg = 0.0f;
+    control->pipe_command_rate_dps = 0.0f;
+}
+
 static void BallBalanceControl_InvalidateMapping(BallBalanceControl *control)
 {
     control->mapping_valid = 0U;
     control->mapping_fault = 1U;
     control->enabled_requested = 0U;
     control->enabled = 0U;
+    control->preserve_vision_on_enable = 0U;
     control->attitude_stable_ready = 0U;
     control->feedforward_cache_valid = 0U;
     control->desired_cache_valid = 0U;
@@ -605,7 +646,8 @@ static void BallBalanceControl_ApplyTransportCommand(
     predicted_error_mm = control->predicted_position_mm - control->target_mm;
     if (control->transport_recovery_active != 0U) {
         if ((BallBalanceControl_Abs(control->error_mm) <=
-             BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM) &&
+             (BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM +
+              BALL_BALANCE_POSITION_COMPARE_EPSILON_MM)) &&
             (BallBalanceControl_Abs(control->velocity_mm_s) <=
              BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S)) {
             control->transport_recovery_active = 0U;
@@ -1142,6 +1184,7 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         if (control->enabled == 0U) {
             control->enabled = 1U;
             control->enabled_since_ms = now_ms;
+            control->preserve_vision_on_enable = 0U;
             BallBalanceControl_ClearVisionState(control, 1U);
         }
         control->imu_fault = 0U;
@@ -1192,7 +1235,14 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         control->enabled = 1U;
         control->imu_fault = 0U;
         control->enabled_since_ms = now_ms;
-        BallBalanceControl_ClearVisionState(control, 1U);
+        if ((control->preserve_vision_on_enable != 0U) &&
+            (control->tracking_valid != 0U) &&
+            (control->filter_ready != 0U)) {
+            BallBalanceControl_ResetControlStatePreserveVision(control);
+        } else {
+            BallBalanceControl_ClearVisionState(control, 1U);
+        }
+        control->preserve_vision_on_enable = 0U;
         /* The enable gate has already held the same strict stillness
          * condition longer than the trajectory settle gate. */
         control->pipe_settled = 1U;
@@ -1383,11 +1433,14 @@ void BallBalanceControl_Init(BallBalanceControl *control)
     BallBalanceControl_FillFixedMapping(control);
 }
 
-void BallBalanceControl_SetEnabled(BallBalanceControl *control,
-                                   uint8_t enabled,
-                                   uint32_t now_ms)
+static void BallBalanceControl_SetEnabledInternal(
+    BallBalanceControl *control,
+    uint8_t enabled,
+    uint32_t now_ms,
+    uint8_t preserve_vision)
 {
     uint8_t normalized_enabled;
+    uint8_t preserve_active;
 
     if (control == 0) {
         return;
@@ -1399,6 +1452,11 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
         (control->mapping_valid == 0U)) {
         return;
     }
+    preserve_active = (uint8_t) (
+        (normalized_enabled != 0U) &&
+        (preserve_vision != 0U) &&
+        (control->tracking_valid != 0U) &&
+        (control->filter_ready != 0U));
     if (normalized_enabled == 0U) {
         control->endpoint_hold_enabled = 0U;
         control->transport_mode_enabled = 0U;
@@ -1415,8 +1473,16 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
         control->integral_mm_s = 0.0f;
         control->i_term_deg = 0.0f;
         control->integral_active = 0U;
+        control->preserve_vision_on_enable = 0U;
     }
     if (control->enabled_requested == normalized_enabled) {
+        if ((normalized_enabled != 0U) && (control->enabled == 0U)) {
+            control->preserve_vision_on_enable = preserve_active;
+        } else if ((normalized_enabled != 0U) &&
+                   (preserve_active != 0U)) {
+            /* 已处于停车平衡时，第六题仍需清除旧控制状态并保留观测。 */
+            BallBalanceControl_ResetControlStatePreserveVision(control);
+        }
         return;
     }
 
@@ -1427,7 +1493,27 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     control->enabled_since_ms = now_ms;
     control->last_task_ms = now_ms;
     control->task_time_ready = 1U;
-    BallBalanceControl_ClearVisionState(control, 1U);
+    control->preserve_vision_on_enable = preserve_active;
+    if (preserve_active != 0U) {
+        BallBalanceControl_ResetControlStatePreserveVision(control);
+    } else {
+        BallBalanceControl_ClearVisionState(control, 1U);
+    }
+}
+
+void BallBalanceControl_SetEnabled(BallBalanceControl *control,
+                                   uint8_t enabled,
+                                   uint32_t now_ms)
+{
+    BallBalanceControl_SetEnabledInternal(control, enabled, now_ms, 0U);
+}
+
+void BallBalanceControl_SetEnabledPreserveVision(
+    BallBalanceControl *control,
+    uint8_t enabled,
+    uint32_t now_ms)
+{
+    BallBalanceControl_SetEnabledInternal(control, enabled, now_ms, 1U);
 }
 
 uint8_t BallBalanceControl_IsEnabled(const BallBalanceControl *control)
@@ -1438,6 +1524,24 @@ uint8_t BallBalanceControl_IsEnabled(const BallBalanceControl *control)
 uint8_t BallBalanceControl_IsActive(const BallBalanceControl *control)
 {
     return (control != 0) ? control->enabled : 0U;
+}
+
+uint8_t BallBalanceControl_GetFreshObservedPosition(
+    const BallBalanceControl *control,
+    uint32_t now_ms,
+    uint32_t maximum_age_ms,
+    float *position_mm)
+{
+    if ((control == 0) || (position_mm == 0) ||
+        (control->tracking_valid == 0U) ||
+        (control->filter_ready == 0U) ||
+        (control->timed_out != 0U) ||
+        ((uint32_t) (now_ms - control->last_valid_ms) > maximum_age_ms)) {
+        return 0U;
+    }
+
+    *position_mm = control->filtered_position_mm;
+    return 1U;
 }
 
 void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
@@ -1726,6 +1830,13 @@ void BallBalanceControl_Update(BallBalanceControl *control,
     BallBalanceControl_UpdateEnableState(control, now_ms);
     BallBalanceControl_UpdatePipeSettled(control, now_ms);
 
+    if (control->manual_pipe_mode_enabled == 0U) {
+        /* 平衡关闭时也被动维护同一套位置滤波，供第六题捕获目标；
+         * 该分支不会进入轨迹控制，也不会产生舵机输出。 */
+        measurement_accepted = BallBalanceControl_AcceptMeasurement(
+            control, now_ms, measurement);
+    }
+
     if (control->enabled != 0U) {
         if (control->manual_pipe_mode_enabled != 0U) {
             control->tracking_valid = 0U;
@@ -1738,26 +1849,32 @@ void BallBalanceControl_Update(BallBalanceControl *control,
             control->desired_pipe_pitch_deg =
                 control->manual_pipe_target_deg;
             control->trajectory_phase = BALL_BALANCE_PHASE_MANUAL_PIPE;
-        } else {
-            measurement_accepted = BallBalanceControl_AcceptMeasurement(
-                control, now_ms, measurement);
-            if (control->tracking_valid != 0U) {
-                elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
-                if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
-                    BallBalanceControl_ClearVisionState(control, 0U);
-                    control->timed_out = 1U;
-                } else {
-                    BallBalanceControl_UpdatePrediction(control, now_ms);
-                    BallBalanceControl_UpdateTrajectory(
-                        control, now_ms, measurement_accepted);
-                }
-            } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
-                       BALL_BALANCE_IDLE_DATA_TIMEOUT_MS) {
+        } else if (control->tracking_valid != 0U) {
+            elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
+            if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
+                BallBalanceControl_ClearVisionState(control, 0U);
                 control->timed_out = 1U;
-                control->desired_pipe_pitch_deg = 0.0f;
+            } else {
+                BallBalanceControl_UpdatePrediction(control, now_ms);
+                BallBalanceControl_UpdateTrajectory(
+                    control, now_ms, measurement_accepted);
             }
+        } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
+                   BALL_BALANCE_IDLE_DATA_TIMEOUT_MS) {
+            control->timed_out = 1U;
+            control->desired_pipe_pitch_deg = 0.0f;
         }
     } else {
+        if ((control->manual_pipe_mode_enabled == 0U) &&
+            (control->tracking_valid != 0U)) {
+            elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
+            if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
+                BallBalanceControl_ClearVisionState(control, 0U);
+                control->timed_out = 1U;
+            } else {
+                BallBalanceControl_UpdatePrediction(control, now_ms);
+            }
+        }
         control->desired_pipe_pitch_deg = 0.0f;
         control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
     }

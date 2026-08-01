@@ -6,7 +6,8 @@
 typedef enum {
     DYNAMIC_RUN_MODE_NONE = 0,
     DYNAMIC_RUN_MODE_AB,
-    DYNAMIC_RUN_MODE_ABCD
+    DYNAMIC_RUN_MODE_ABCD,
+    DYNAMIC_RUN_MODE_ABCD_TARGET
 } DynamicRunMode;
 
 typedef enum {
@@ -41,8 +42,8 @@ typedef enum {
 } DynamicRunFailure;
 
 typedef struct {
-    uint32_t prepare_timeout_ms;          /* 等待中心稳定的最长时间，单位为毫秒。 */
-    uint32_t ready_hold_ms;               /* 中心条件需要连续保持的时间，单位为毫秒。 */
+    uint32_t prepare_timeout_ms;          /* 等待钢球目标稳定的最长时间，单位为毫秒。 */
+    uint32_t ready_hold_ms;               /* 目标条件需要连续保持的时间，单位为毫秒。 */
     uint32_t ready_sample_gap_ms;         /* 准备阶段相邻视觉样本允许的最大间隔。 */
     uint32_t ab_timeout_ms;               /* 第四题从起步到通过 B 的时间限制。 */
     uint32_t abcd_timeout_ms;             /* 第五题从起步到通过 A 的时间限制。 */
@@ -68,7 +69,7 @@ typedef struct {
     uint8_t evaluate_completion;          /* 本次是否在底盘采样后判断通过和超时。 */
     uint8_t route_passed;                 /* 本次是否检测到 B 点或返程 A 点。 */
     uint8_t motion_stopped;               /* 平滑速度规划是否已经柔和停稳。 */
-    float error_mm;                       /* 钢球相对中心目标的位置误差。 */
+    float error_mm;                       /* 钢球相对当前任务目标的位置误差。 */
     float velocity_mm_s;                  /* 钢球沿水管方向的估计速度。 */
     float travelled_distance_cm;          /* 本次任务的底盘累计行驶里程。 */
 } DynamicRunTaskInput;

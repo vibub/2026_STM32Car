@@ -14,6 +14,7 @@
 #define TJC_COMMAND_BALL_SHUTTLE   0x05U /* TJC 第三题 O 到正负 5 cm 往返命令编号。 */
 #define TJC_COMMAND_AB             0x06U /* TJC 第四项 AB 中心稳定通过命令。 */
 #define TJC_COMMAND_ABCD           0x07U /* TJC 第五项 ABCD 整圈中心稳定通过命令。 */
+#define TJC_COMMAND_ABCD_TARGET    0x08U /* TJC 第六项 ABCD 保持进入时钢球位置命令。 */
 #define TJC_COMMAND_QUERY          0x0EU /* TJC 当前底盘模式查询命令编号。 */
 #define TJC_RESPONSE_HEADER        0xA5U /* STM32 返回帧的帧头字节。 */
 
@@ -62,6 +63,10 @@ typedef enum {
     TJC_STATUS_ABCD_RUNNING,
     TJC_STATUS_ABCD_PASSED,
     TJC_STATUS_ABCD_FAILED,
+    TJC_STATUS_ABCD_TARGET_PREPARING,
+    TJC_STATUS_ABCD_TARGET_RUNNING,
+    TJC_STATUS_ABCD_TARGET_PASSED,
+    TJC_STATUS_ABCD_TARGET_FAILED,
     TJC_STATUS_RUN_FAILED_IMU,
     TJC_STATUS_RUN_FAILED_MAPPING,
     TJC_STATUS_RUN_FAILED_READY,
@@ -76,7 +81,9 @@ typedef enum {
     TJC_STATUS_RUN_REJECT_CALIBRATING,
     TJC_STATUS_RUN_REJECT_CALIBRATION,
     TJC_STATUS_RUN_REJECT_BUSY,
-    TJC_STATUS_RUN_REJECT_BALANCE
+    TJC_STATUS_RUN_REJECT_BALANCE,
+    TJC_STATUS_RUN_REJECT_VISION,
+    TJC_STATUS_RUN_REJECT_TARGET
 } Tjc_StatusText;
 
 extern volatile uint32_t g_tjc_rx_byte_count;
@@ -102,6 +109,7 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
                                        uint8_t run_result,
                                        uint32_t elapsed_ms,
                                        float maximum_abs_error_mm);
+void Protocol_Tjc_SendDynamicTarget(float target_mm);
 void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
                                        uint8_t point_count);
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
