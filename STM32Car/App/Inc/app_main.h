@@ -95,7 +95,11 @@ void App_GetBallShuttleConfig(float *phase_1_angle_deg,
 uint8_t App_ResetBallShuttleConfig(void);
 uint8_t App_GetBallShuttleState(void);
 uint8_t App_GetBallShuttleStartReject(void);
-uint8_t App_StartPipeCalibration(void);
+uint8_t App_StartPipeZeroAdjustment(void);
+uint8_t App_SetPipeZeroPwm(uint32_t pwm_us);
+uint8_t App_ConfirmPipeZeroAndStartCalibration(uint32_t pwm_us);
+uint8_t App_GetPipeZeroAdjustmentActive(void);
+uint16_t App_GetPipeZeroPwmUs(void);
 uint8_t App_GetPipeCalibrationActive(void);
 uint8_t App_GetPipeCalibrationValid(void);
 void App_SetBallBalanceTargetMm(float target_mm);

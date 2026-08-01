@@ -10,6 +10,7 @@ typedef enum {
     TJC_RX_WAIT_HEADER_1,
     TJC_RX_WAIT_COMMAND,
     TJC_RX_WAIT_CHECKSUM,
+    TJC_RX_WAIT_PIPE_ZERO_DATA,
     TJC_RX_WAIT_SHUTTLE_DATA,
     TJC_RX_WAIT_SHUTTLE_CRC_LOW,
     TJC_RX_WAIT_SHUTTLE_CRC_HIGH
@@ -18,15 +19,41 @@ typedef enum {
 #define TJC_STATUS_FRAME_BUFFER_SIZE 128U /* TJC 中文状态和动态结果命令的最大发送缓存。 */
 #define TJC_DYNAMIC_TARGET_LIMIT_X100 10000 /* TJC 显示目标位置的绝对上限，单位为0.01毫米。 */
 
+#define TJC_PIPE_ZERO_DATA_SIZE 4U /* prints n0.val,0发送的32位小端整数长度。 */
 #define TJC_SHUTTLE_DATA_SIZE 6U
 
 static const uint8_t s_tjc_text_prefix[] = "page0.t0.txt=\"";
+static const uint8_t s_tjc_calibration_text_prefix[] = "page2.t0.txt=\"";
 static const uint8_t s_tjc_text_suffix[] = {'\"', 0xFFU, 0xFFU, 0xFFU};
 
 /* 串口屏工程使用 UTF-8，固定中文显式写成 UTF-8 字节以避免编译器转码。 */
 static const uint8_t s_text_calibration_ready[] = {
     0xE6U, 0xA0U, 0x87U, 0xE5U, 0xAEU, 0x9AU,
     0xE5U, 0x87U, 0x86U, 0xE5U, 0xA4U, 0x87U
+};
+static const uint8_t s_text_calibration_zero_pwm[] = {
+    0xE9U, 0x9BU, 0xB6U, 0xE4U, 0xBDU, 0x8DU,
+    0x50U, 0x57U, 0x4DU, 0x20U
+};
+static const uint8_t s_text_calibration_zero_adjust[] = {
+    0x20U, 0x75U, 0x73U, 0xEFU, 0xBCU, 0x8CU,
+    0xE8U, 0xAFU, 0xB7U, 0xE4U, 0xBAU, 0xBAU,
+    0xE5U, 0xB7U, 0xA5U, 0xE8U, 0xB0U, 0x83U,
+    0xE5U, 0xB9U, 0xB3U, 0xE5U, 0x90U, 0x8EU,
+    0xE7U, 0xA1U, 0xAEU, 0xE8U, 0xAEU, 0xA4U
+};
+static const uint8_t s_text_calibration_zero_confirmed[] = {
+    0xE9U, 0x9BU, 0xB6U, 0xE4U, 0xBDU, 0x8DU,
+    0xE5U, 0xB7U, 0xB2U, 0xE7U, 0xA1U, 0xAEU,
+    0xE8U, 0xAEU, 0xA4U, 0xEFU, 0xBCU, 0x8CU,
+    0xE5U, 0xBCU, 0x80U, 0xE5U, 0xA7U, 0x8BU,
+    0xE6U, 0xA0U, 0x87U, 0xE5U, 0xAEU, 0x9AU
+};
+static const uint8_t s_text_calibration_zero_required[] = {
+    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0x85U, 0x88U,
+    0xE8U, 0xBFU, 0x9BU, 0xE5U, 0x85U, 0xA5U,
+    0xE9U, 0x9BU, 0xB6U, 0xE4U, 0xBDU, 0x8DU,
+    0xE8U, 0xB0U, 0x83U, 0xE8U, 0x8AU, 0x82U
 };
 static const uint8_t s_text_calibration_level[] = {
     0xE9U, 0x87U, 0x87U, 0xE9U, 0x9BU, 0x86U,
@@ -312,6 +339,7 @@ static const uint8_t s_text_result_max_error[] = {
 };
 
 static const uint8_t s_tjc_command_suffix[] = {0xFFU, 0xFFU, 0xFFU};
+static const uint8_t s_tjc_calibration_pwm_prefix[] = "page2.n0.val=";
 static const uint8_t s_tjc_shuttle_number_prefix[][14] = {
     "page3.n0.val=", "page3.n1.val=", "page3.n2.val="
 };
@@ -339,6 +367,8 @@ static const uint8_t s_tjc_refresh_page[] = "ref 0";
 
 static Tjc_RxState s_rx_state;
 static uint8_t s_rx_command;
+static uint8_t s_rx_pipe_zero_data[TJC_PIPE_ZERO_DATA_SIZE];
+static uint8_t s_rx_pipe_zero_index;
 static uint8_t s_rx_shuttle_data[TJC_SHUTTLE_DATA_SIZE];
 static uint8_t s_rx_shuttle_index;
 static uint8_t s_rx_shuttle_crc_low;
@@ -358,6 +388,7 @@ static void Protocol_Tjc_ResetRxParser(void)
 {
     s_rx_state = TJC_RX_WAIT_HEADER_0;
     s_rx_command = TJC_COMMAND_STOP;
+    s_rx_pipe_zero_index = 0U;
     s_rx_shuttle_index = 0U;
     s_rx_shuttle_crc_low = 0U;
 }
@@ -492,6 +523,25 @@ static void Protocol_Tjc_SendTextFrame(const uint8_t *text,
         frame,
         length,
         s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
+}
+
+static void Protocol_Tjc_SendCalibrationTextFrame(const uint8_t *text,
+                                                  uint16_t text_length)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_calibration_text_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_text_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(frame, length, text, text_length);
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_tjc_text_suffix,
         (uint16_t) sizeof(s_tjc_text_suffix));
     TjcUart_SendData(frame, length);
     g_tjc_status_text_count++;
@@ -829,7 +879,11 @@ void Protocol_Tjc_SendStatusText(Tjc_StatusText status)
     }
 
     if (text != 0) {
-        Protocol_Tjc_SendTextFrame(text, text_length);
+        if (status <= TJC_STATUS_CALIBRATION_ABORTED) {
+            Protocol_Tjc_SendCalibrationTextFrame(text, text_length);
+        } else {
+            Protocol_Tjc_SendTextFrame(text, text_length);
+        }
     }
 }
 
@@ -1027,8 +1081,8 @@ void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
-        s_tjc_text_prefix,
-        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+        s_tjc_calibration_text_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_text_prefix) - 1U));
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
@@ -1046,6 +1100,92 @@ void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
     g_tjc_status_text_count++;
 }
 
+void Protocol_Tjc_SendCalibrationZeroPwm(uint16_t pwm_us,
+                                        uint8_t confirmed)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint8_t value_command[24];
+    uint16_t value_length = 0U;
+    uint16_t length = 0U;
+
+    value_length = Protocol_Tjc_AppendBytes(
+        value_command,
+        value_length,
+        s_tjc_calibration_pwm_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_pwm_prefix) - 1U));
+    value_length = Protocol_Tjc_AppendUnsigned(
+        value_command, value_length, pwm_us);
+    Protocol_Tjc_SendAsciiCommand(value_command, value_length);
+
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_calibration_text_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_text_prefix) - 1U));
+    if (confirmed != 0U) {
+        length = Protocol_Tjc_AppendBytes(
+            frame,
+            length,
+            s_text_calibration_zero_confirmed,
+            (uint16_t) sizeof(s_text_calibration_zero_confirmed));
+    } else {
+        length = Protocol_Tjc_AppendBytes(
+            frame,
+            length,
+            s_text_calibration_zero_pwm,
+            (uint16_t) sizeof(s_text_calibration_zero_pwm));
+        length = Protocol_Tjc_AppendUnsigned(frame, length, pwm_us);
+        length = Protocol_Tjc_AppendBytes(
+            frame,
+            length,
+            s_text_calibration_zero_adjust,
+            (uint16_t) sizeof(s_text_calibration_zero_adjust));
+    }
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
+}
+
+static void Protocol_Tjc_ProcessPipeZeroFrame(void)
+{
+    uint32_t pwm_us;
+    uint8_t accepted;
+
+    pwm_us = (uint32_t) s_rx_pipe_zero_data[0] |
+             ((uint32_t) s_rx_pipe_zero_data[1] << 8U) |
+             ((uint32_t) s_rx_pipe_zero_data[2] << 16U) |
+             ((uint32_t) s_rx_pipe_zero_data[3] << 24U);
+    g_tjc_last_command = s_rx_command;
+    g_tjc_valid_command_count++;
+
+    if (App_GetHostCalibrationEnabled() != 0U) {
+        Protocol_Tjc_SendResult(TJC_RESULT_ENTER_FAILED,
+                                App_GetCurrentMode(), s_rx_command);
+        return;
+    }
+    if (s_rx_command == TJC_COMMAND_PIPE_ZERO_SET) {
+        accepted = App_SetPipeZeroPwm(pwm_us);
+    } else {
+        accepted = App_ConfirmPipeZeroAndStartCalibration(pwm_us);
+    }
+    Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
+                            TJC_RESULT_ENTER_FAILED,
+                            App_GetCurrentMode(), s_rx_command);
+    if (accepted != 0U) {
+        Protocol_Tjc_SendCalibrationZeroPwm(
+            App_GetPipeZeroPwmUs(),
+            (uint8_t) (s_rx_command == TJC_COMMAND_PIPE_ZERO_CONFIRM));
+    } else {
+        Protocol_Tjc_SendCalibrationTextFrame(
+            s_text_calibration_zero_required,
+            (uint16_t) sizeof(s_text_calibration_zero_required));
+    }
+}
+
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
                                          int16_t offset_x100)
 {
@@ -1055,8 +1195,8 @@ void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
-        s_tjc_text_prefix,
-        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+        s_tjc_calibration_text_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_text_prefix) - 1U));
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
@@ -1088,8 +1228,8 @@ void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
-        s_tjc_text_prefix,
-        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+        s_tjc_calibration_text_prefix,
+        (uint16_t) (sizeof(s_tjc_calibration_text_prefix) - 1U));
     length = Protocol_Tjc_AppendBytes(
         frame,
         length,
@@ -1125,6 +1265,8 @@ static uint8_t Protocol_Tjc_IsModeCommand(uint8_t command)
         (command == TJC_COMMAND_BALL_ENABLE) ||
         (command == TJC_COMMAND_BALL_DISABLE) ||
         (command == TJC_COMMAND_PIPE_CALIBRATE) ||
+        (command == TJC_COMMAND_PIPE_ZERO_SET) ||
+        (command == TJC_COMMAND_PIPE_ZERO_CONFIRM) ||
         (command == TJC_COMMAND_BALL_SHUTTLE) ||
         (command == TJC_COMMAND_AB) ||
         (command == TJC_COMMAND_ABCD) ||
@@ -1203,10 +1345,14 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
                                 App_GetCurrentMode(), command);
     } else if (command == TJC_COMMAND_PIPE_CALIBRATE) {
         g_tjc_valid_command_count++;
-        accepted = App_StartPipeCalibration();
+        accepted = App_StartPipeZeroAdjustment();
         Protocol_Tjc_SendResult(accepted ? TJC_RESULT_SWITCH_OK :
                                 TJC_RESULT_ENTER_FAILED,
                                 App_GetCurrentMode(), command);
+        if (accepted != 0U) {
+            Protocol_Tjc_SendCalibrationZeroPwm(
+                App_GetPipeZeroPwmUs(), 0U);
+        }
     } else if (command == TJC_COMMAND_BALL_SHUTTLE) {
         g_tjc_valid_command_count++;
         accepted = App_StartBallShuttle();
@@ -1290,7 +1436,11 @@ static void Protocol_Tjc_ConsumeByte(uint8_t byte)
                 s_rx_state = TJC_RX_WAIT_HEADER_1;
             } else {
                 s_rx_command = byte;
-                if (byte == TJC_COMMAND_SHUTTLE_SAVE) {
+                if ((byte == TJC_COMMAND_PIPE_ZERO_SET) ||
+                    (byte == TJC_COMMAND_PIPE_ZERO_CONFIRM)) {
+                    s_rx_pipe_zero_index = 0U;
+                    s_rx_state = TJC_RX_WAIT_PIPE_ZERO_DATA;
+                } else if (byte == TJC_COMMAND_SHUTTLE_SAVE) {
                     s_rx_shuttle_index = 0U;
                     s_rx_state = TJC_RX_WAIT_SHUTTLE_DATA;
                 } else {
@@ -1307,6 +1457,14 @@ static void Protocol_Tjc_ConsumeByte(uint8_t byte)
                 g_tjc_invalid_frame_count++;
                 s_rx_state = (byte == TJC_REQUEST_HEADER_0) ?
                              TJC_RX_WAIT_HEADER_1 : TJC_RX_WAIT_HEADER_0;
+            }
+            break;
+
+        case TJC_RX_WAIT_PIPE_ZERO_DATA:
+            s_rx_pipe_zero_data[s_rx_pipe_zero_index++] = byte;
+            if (s_rx_pipe_zero_index >= TJC_PIPE_ZERO_DATA_SIZE) {
+                Protocol_Tjc_ProcessPipeZeroFrame();
+                Protocol_Tjc_ResetRxParser();
             }
             break;
 

@@ -136,6 +136,8 @@ volatile uint32_t g_app_ball_shuttle_duration_ms[
 volatile uint8_t g_app_pipe_calibration_state;
 volatile uint8_t g_app_pipe_calibration_active;
 volatile uint8_t g_app_pipe_calibration_valid;
+volatile uint8_t g_app_pipe_zero_adjust_active;
+volatile uint32_t g_app_pipe_zero_pwm_us;
 volatile uint8_t g_app_pipe_attitude_valid;
 volatile uint8_t g_app_pipe_accel_trusted;
 volatile int8_t g_app_pipe_imu_pitch_sign;
@@ -220,6 +222,8 @@ static BallBalanceOutput s_ball_balance_output;
 static BallShuttleControl s_ball_shuttle_control;
 static PipeAttitudeControl s_pipe_attitude_control;
 static PipeAttitudeOutput s_pipe_attitude_output;
+static uint8_t s_pipe_zero_adjust_active;
+static uint32_t s_pipe_zero_pwm_us;
 static WheelSpeedPid s_left_speed_pid;
 static WheelSpeedPid s_right_speed_pid;
 static uint8_t s_current_mode;
@@ -524,6 +528,27 @@ static float App_Abs(float value)
     return (value < 0.0f) ? -value : value;
 }
 
+static uint8_t App_IsPipeCalibrationBusy(void)
+{
+    return (uint8_t) ((s_pipe_zero_adjust_active != 0U) ||
+                      (PipeAttitudeControl_IsCalibrationActive(
+                           &s_pipe_attitude_control) != 0U));
+}
+
+static void App_CancelPipeZeroAdjustment(void)
+{
+    if (s_pipe_zero_adjust_active == 0U) {
+        return;
+    }
+
+    /* 未确认的试调PWM不改变正式零位，退出时恢复已确认的零位。 */
+    s_pipe_zero_adjust_active = 0U;
+    s_pipe_zero_pwm_us = ServoDriver_GetCenterPulseUs();
+    ServoDriver_SetPulseUs(s_pipe_zero_pwm_us);
+    g_app_pipe_zero_adjust_active = 0U;
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
+}
+
 static void App_ApplyBallPidGains(void)
 {
     float kp;
@@ -720,10 +745,11 @@ static void App_UpdatePipeAttitudeDebug(void)
 
     g_app_pipe_calibration_state =
         (uint8_t) s_pipe_attitude_output.calibration_state;
-    g_app_pipe_calibration_active =
-        s_pipe_attitude_output.calibration_active;
+    g_app_pipe_calibration_active = App_IsPipeCalibrationBusy();
     g_app_pipe_calibration_valid =
         s_pipe_attitude_output.calibration_valid;
+    g_app_pipe_zero_adjust_active = s_pipe_zero_adjust_active;
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
     g_app_pipe_attitude_valid = s_pipe_attitude_output.attitude_valid;
     g_app_pipe_accel_trusted = s_pipe_attitude_output.accel_trusted;
     g_app_pipe_imu_pitch_sign = s_pipe_attitude_output.imu_pitch_sign;
@@ -1720,7 +1746,12 @@ void App_Init(void)
     HostLinkUart_Init();
     HostCalibrationProtocol_Init();
 #endif
+    (void) ServoDriver_SetCenterPulseUs(SERVO_DRIVER_CENTER_PULSE_US);
     ServoDriver_InitPulseUs(SERVO_DRIVER_CENTER_PULSE_US);
+    s_pipe_zero_adjust_active = 0U;
+    s_pipe_zero_pwm_us = ServoDriver_GetCenterPulseUs();
+    g_app_pipe_zero_adjust_active = 0U;
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
     TjcUart_Init();
     Protocol_Tjc_Init();
     OledDisplay_Init();
@@ -1839,6 +1870,7 @@ uint8_t App_RequestMode(uint8_t mode)
         s_tjc_dynamic_target_pending = 0U;
         App_SetBallLimitWarning(0U);
         App_SetBallBalanceEnabled(0U);
+        App_CancelPipeZeroAdjustment();
         App_EnterStopMode(Board_TimeMs());
         App_UpdateChassisMotionDebug();
         return 1U;
@@ -1846,8 +1878,7 @@ uint8_t App_RequestMode(uint8_t mode)
 
     if (mode == APP_MODE_BASIC_LINE) {
         if ((DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
-            (PipeAttitudeControl_IsCalibrationActive(
-                 &s_pipe_attitude_control) != 0U) ||
+            (App_IsPipeCalibrationBusy() != 0U) ||
             (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
             (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
             ((BallBalanceControl_IsEnabled(&s_ball_balance_control) != 0U) &&
@@ -1877,8 +1908,7 @@ uint8_t App_StartSmoothLineRun(float completion_distance_cm)
     if ((completion_distance_cm <= 0.0f) ||
         (s_current_mode != APP_MODE_STOP) ||
         (DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
-        (PipeAttitudeControl_IsCalibrationActive(
-             &s_pipe_attitude_control) != 0U) ||
+        (App_IsPipeCalibrationBusy() != 0U) ||
         (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
         (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
         (BallBalanceControl_IsActive(&s_ball_balance_control) == 0U) ||
@@ -1932,8 +1962,7 @@ static uint8_t App_StartDynamicRun(DynamicRunMode mode,
             APP_DYNAMIC_START_REJECT_NOT_STOPPED,
             TJC_STATUS_RUN_REJECT_STOP);
     }
-    if (PipeAttitudeControl_IsCalibrationActive(
-            &s_pipe_attitude_control) != 0U) {
+    if (App_IsPipeCalibrationBusy() != 0U) {
         return App_RejectDynamicStart(
             APP_DYNAMIC_START_REJECT_CALIBRATING,
             TJC_STATUS_RUN_REJECT_CALIBRATING);
@@ -2050,8 +2079,7 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
 
     if (enabled != 0U) {
         if ((s_current_mode != APP_MODE_STOP) ||
-            (PipeAttitudeControl_IsCalibrationActive(
-                 &s_pipe_attitude_control) != 0U) ||
+            (App_IsPipeCalibrationBusy() != 0U) ||
             (PipeAttitudeControl_IsCalibrationValid(
                  &s_pipe_attitude_control) == 0U)) {
             return 0U;
@@ -2072,6 +2100,7 @@ uint8_t App_SetBallBalanceEnabled(uint8_t enabled)
             PipeAttitudeControl_AbortCalibration(&s_pipe_attitude_control,
                                                   now_ms);
         }
+        App_CancelPipeZeroAdjustment();
         BallShuttleControl_Stop(&s_ball_shuttle_control);
         BallBalanceControl_SetManualPipeMode(
             &s_ball_balance_control, 0U, 0.0f);
@@ -2119,8 +2148,7 @@ uint8_t App_StartBallShuttle(void)
         return 0U;
     }
     if ((DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
-        (PipeAttitudeControl_IsCalibrationActive(
-             &s_pipe_attitude_control) != 0U) ||
+        (App_IsPipeCalibrationBusy() != 0U) ||
         (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
         (App_GetHostCalibrationEnabled() != 0U)) {
         g_app_ball_shuttle_start_reject =
@@ -2209,8 +2237,7 @@ uint8_t App_SaveBallShuttleTimes(uint32_t phase_1_time_ms,
         (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
         (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
         (DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
-        (PipeAttitudeControl_IsCalibrationActive(
-             &s_pipe_attitude_control) != 0U)) {
+        (App_IsPipeCalibrationBusy() != 0U)) {
         return 0U;
     }
 
@@ -2283,12 +2310,13 @@ uint8_t App_GetBallShuttleStartReject(void)
     return g_app_ball_shuttle_start_reject;
 }
 
-uint8_t App_StartPipeCalibration(void)
+static uint8_t App_PreparePipeCalibration(void)
 {
     if ((s_current_mode != APP_MODE_STOP) ||
         (DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
         (PipeAttitudeControl_IsCalibrationActive(
-             &s_pipe_attitude_control) != 0U)) {
+             &s_pipe_attitude_control) != 0U) ||
+        (App_GetHostCalibrationEnabled() != 0U)) {
         return 0U;
     }
 
@@ -2300,22 +2328,91 @@ uint8_t App_StartPipeCalibration(void)
     BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U,
                                  Board_TimeMs());
     App_UpdateBallShuttleDebug();
-    return PipeAttitudeControl_StartCalibration(
+    return 1U;
+}
+
+uint8_t App_StartPipeZeroAdjustment(void)
+{
+    if (s_pipe_zero_adjust_active != 0U) {
+        return 1U;
+    }
+    if (App_PreparePipeCalibration() == 0U) {
+        return 0U;
+    }
+
+    /* 进入新页面时先显示当前已确认零位，后续按钮只修改试调PWM。 */
+    s_pipe_zero_pwm_us = ServoDriver_GetCenterPulseUs();
+    ServoDriver_SetPulseUs(s_pipe_zero_pwm_us);
+    s_pipe_zero_adjust_active = 1U;
+    g_app_pipe_zero_adjust_active = 1U;
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
+    return 1U;
+}
+
+uint8_t App_SetPipeZeroPwm(uint32_t pwm_us)
+{
+    if ((s_pipe_zero_adjust_active == 0U) ||
+        (pwm_us < SERVO_DRIVER_MIN_PULSE_US) ||
+        (pwm_us > SERVO_DRIVER_MAX_PULSE_US)) {
+        return 0U;
+    }
+
+    s_pipe_zero_pwm_us = pwm_us;
+    ServoDriver_SetPulseUs(s_pipe_zero_pwm_us);
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
+    return 1U;
+}
+
+uint8_t App_ConfirmPipeZeroAndStartCalibration(uint32_t pwm_us)
+{
+    uint32_t previous_center_us;
+    uint8_t accepted;
+
+    if (App_SetPipeZeroPwm(pwm_us) == 0U) {
+        return 0U;
+    }
+
+    previous_center_us = ServoDriver_GetCenterPulseUs();
+    if (ServoDriver_SetCenterPulseUs(s_pipe_zero_pwm_us) == 0U) {
+        return 0U;
+    }
+    accepted = PipeAttitudeControl_StartCalibration(
         &s_pipe_attitude_control,
         Board_TimeMs(),
         ServoDriver_GetPipePitchDeg());
+    if (accepted == 0U) {
+        (void) ServoDriver_SetCenterPulseUs(previous_center_us);
+        ServoDriver_SetPulseUs(s_pipe_zero_pwm_us);
+        return 0U;
+    }
+
+    /* 确认后才提交新的零位基准，IMU采样从该PWM对应的人工水平位置开始。 */
+    s_pipe_zero_adjust_active = 0U;
+    g_app_pipe_zero_adjust_active = 0U;
+    g_app_pipe_zero_pwm_us = s_pipe_zero_pwm_us;
+    return 1U;
+}
+
+uint8_t App_GetPipeZeroAdjustmentActive(void)
+{
+    return s_pipe_zero_adjust_active;
+}
+
+uint16_t App_GetPipeZeroPwmUs(void)
+{
+    return (uint16_t) s_pipe_zero_pwm_us;
 }
 
 uint8_t App_GetPipeCalibrationActive(void)
 {
-    return PipeAttitudeControl_IsCalibrationActive(
-        &s_pipe_attitude_control);
+    return App_IsPipeCalibrationBusy();
 }
 
 uint8_t App_GetPipeCalibrationValid(void)
 {
-    return PipeAttitudeControl_IsCalibrationValid(
-        &s_pipe_attitude_control);
+    return (uint8_t) ((s_pipe_zero_adjust_active == 0U) &&
+                      (PipeAttitudeControl_IsCalibrationValid(
+                           &s_pipe_attitude_control) != 0U));
 }
 
 void App_SetBallBalanceTargetMm(float target_mm)

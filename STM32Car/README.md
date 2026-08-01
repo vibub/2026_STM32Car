@@ -108,11 +108,11 @@ App_StartAbcdTargetRun();
 当前水管已经调平并按刚性结构处理。上位机实测得到：
 
 ```text
-φ(°) = 0.01009 × (PWM − 1050)
-PWM(us) = 1050 + φ / 0.01009
+φ(°) = 0.01009 × (PWM − PWM0)
+PWM(us) = PWM0 + φ / 0.01009
 ```
 
-正式控制直接使用该线性关系：位置外环和IMU姿态内环输出最终相对水管角，BSP再换算为PWM并执行500～1600 μs双重限幅。对应范围约为−5.5495°～+5.5495°。
+`PWM0`上电默认使用编译期零位，执行TJC page2人工调平并确认后改为本次标定值，仅在RAM中保存。正式控制直接使用该线性关系：位置外环和IMU姿态内环输出最终相对水管角，BSP再换算为PWM并执行500～1600 μs双重限幅；零位改变后正负方向的实际可用角度由零位到两端安全脉宽的距离决定。
 
 旧的闭式连杆模型和九点曲线文件仍保留作为历史资料及离线对比，不再参与运行时控制。USART1上位机标定模式可直接发送500～1600 μs并读取原始IMU，用于复核机械方向、回差和线性误差。
 
@@ -138,12 +138,16 @@ checksum = 0x5A ^ 0xA5 ^ command
 | `0x01` | `5A A5 01 FE` | 基础八路红外巡线 |
 | `0x02` | `5A A5 02 FD` | 启用中心钢球位置闭环 |
 | `0x03` | `5A A5 03 FC` | 禁用钢球平衡并回中位；标定中收到时立即中断 |
-| `0x04` | `5A A5 04 FB` | 停车模式下回到1050 μs并执行IMU单点水平标定 |
+| `0x04` | `5A A5 04 FB` | 停车后进入 page2 零位PWM调节页，并将当前确认零位输出到 `page2.n0` |
 | `0x05` | `5A A5 05 FA` | 钢球放回中心（最新K230单帧±5 mm内）后启动第三题开环角序列，不自动启用平衡 |
 | `0x06` | `5A A5 06 F9` | AB：150 cm 中心稳定通过，过 B 后柔和停车 |
 | `0x07` | `5A A5 07 F8` | ABCD：26 cm/s 低加速度整圈，过 A 后柔和停车 |
 | `0x08` | `5A A5 08 F7` | 第六题：捕获进入时钢球目标，复用 ABCD 整圈流程并全程保持该目标 |
 | `0x0E` | `5A A5 0E F1` | 查询当前底盘模式 |
+| `0x12` | `5A A5 12 <n0.val的4字节小端值>` | 实时应用 page2.n0 中的零位PWM，仅在零位调节状态接受 |
+| `0x13` | `5A A5 13 <n0.val的4字节小端值>` | 确认 page2.n0 为新零位并开始IMU单点水平标定 |
+
+`0x12`、`0x13`是串口屏数值直传帧，不再追加异或校验字节。淘晶驰通过`prints n0.val,0`发送32位小端整数，固件仍会校验PWM必须位于500～1600 μs。
 
 固件通过 USART2 返回 5 字节结果帧：
 
@@ -151,13 +155,14 @@ checksum = 0x5A ^ 0xA5 ^ command
 A5 <result> <current_mode> <request> <xor>
 ```
 
-`0x04` 被接受后先返回上述结果帧，后续标定进度通过淘晶驰指令异步更新全局文本控件 `page0.t0`：
+`0x04` 被接受后先返回上述结果帧，并向 `page2.n0.val` 写入当前已确认零位PWM；后续零位调节和标定进度通过淘晶驰指令异步更新 `page2.t0`：
 
 ```text
-page0.t0.txt="<UTF-8 中文状态>" FF FF FF
+page2.n0.val=<PWM>
+page2.t0.txt="<UTF-8 中文状态>" FF FF FF
 ```
 
-标定状态包括准备、回到1050 μs、水平静置采样、成功和失败原因。固件平均约3秒IMU样本得到水平加速度角与gyro X偏置，并固定使用`imu_pitch_sign=-1`；成功后`scale=1.00`、`offset=0.00`仅作为兼容状态显示。每次上电必须先成功执行`0x04`，才允许在停车模式下发送`0x02`；`0x02`会先复核约150 ms的水平和静止状态，再进入平衡。
+page2的推荐按钮流程是：b1/b2/b3/b4先在屏上修改`n0.val`，随后发送`0x12 + prints n0.val,0`实时试调舵机；人工确认水管水平后，b5发送`0x13 + prints n0.val,0`，固件才提交新的零位基准并开始IMU单点水平标定；b0发送`0x00`退出并恢复原已确认零位。标定状态包括准备、水平静置采样、成功和失败原因，日志统一输出到`page2.t0.txt`。固件平均约3秒IMU样本得到水平加速度角与gyro X偏置，并固定使用`imu_pitch_sign=-1`；成功后`scale=1.00`、`offset=0.00`仅作为兼容状态显示。每次上电必须先成功执行`0x04`、调整并确认`0x13`，才允许在停车模式下发送`0x02`；`0x02`会先复核约150 ms的水平和静止状态，再进入平衡。
 
 推荐比赛启动顺序：
 
@@ -246,6 +251,28 @@ gcc -std=c11 -Wall -Wextra -Werror \
   Protocol/Src/ball_position_protocol.c \
   -lm -o tests/test_basic_control.exe
 ./tests/test_basic_control.exe
+```
+
+舵机动态零位PWM换算使用独立主机测试：
+
+```bash
+gcc -std=c11 -Wall -Wextra -Werror \
+  -Itests -IBsp/Inc \
+  tests/test_servo_driver.c \
+  Bsp/Src/servo_driver.c \
+  -lm -o tests/test_servo_driver.exe
+./tests/test_servo_driver.exe
+```
+
+TJC page2零位PWM数值直传使用协议主机测试：
+
+```bash
+gcc -std=c11 -Wall -Wextra -Werror \
+  -Itests -IApp/Inc -IBsp/Inc -IControl/Inc -IProtocol/Inc \
+  tests/test_tjc_protocol.c \
+  Protocol/Src/protocol_tjc.c \
+  -o tests/test_tjc_protocol.exe
+./tests/test_tjc_protocol.exe
 ```
 
 平滑行驶和底盘加速度估计使用独立主机测试：
