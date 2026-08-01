@@ -1093,8 +1093,10 @@ static void App_BallBalanceTask(uint32_t now_ms)
         s_ball_balance_output.transport_wall_feedforward_pitch_deg;
     App_BallShuttleTask(now_ms);
     App_DynamicRunTask(now_ms, 0U, 1U);
-    if ((s_pipe_attitude_output.servo_override_active == 0U) &&
+    if ((s_pipe_zero_adjust_active == 0U) &&
+        (s_pipe_attitude_output.servo_override_active == 0U) &&
         (App_GetHostCalibrationEnabled() == 0U)) {
+        /* page2人工调平期间由n0.val独占舵机，禁止失能平衡输出每轮写回默认零位。 */
         ServoDriver_SetPipePitchDeg(
             s_ball_balance_output.command_angle_deg);
     }
