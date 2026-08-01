@@ -1285,7 +1285,7 @@ static void App_SetBallLimitWarning(uint8_t active)
         return;
     }
     s_ball_limit_warning = normalized_active;
-    Protocol_Tjc_SetBallLimitWarning(normalized_active);
+    /* 超差状态仅保留在内部统计和调试变量中，不再驱动串口屏红圈。 */
     App_UpdateChassisMotionDebug();
 }
 

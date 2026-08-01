@@ -256,6 +256,30 @@ int main(void)
     Protocol_Tjc_Init();
 
     test_reset_tx();
+    Protocol_Tjc_SendDynamicRunResult(
+        (uint8_t) DYNAMIC_RUN_MODE_AB,
+        (uint8_t) DYNAMIC_RUN_RESULT_PASSED_OVERRANGE,
+        7500U,
+        12.5f);
+    assert(s_tx_length == 0U);
+
+    test_reset_tx();
+    Protocol_Tjc_SendDynamicRunResult(
+        (uint8_t) DYNAMIC_RUN_MODE_ABCD,
+        (uint8_t) DYNAMIC_RUN_RESULT_TIMEOUT,
+        30000U,
+        8.0f);
+    assert(s_tx_length == 0U);
+
+    test_reset_tx();
+    Protocol_Tjc_SendDynamicRunResult(
+        (uint8_t) DYNAMIC_RUN_MODE_AB,
+        (uint8_t) DYNAMIC_RUN_RESULT_PASSED,
+        6500U,
+        5.0f);
+    assert(test_tx_contains("page0.t0.txt=\"") != 0U);
+
+    test_reset_tx();
     test_feed(shuttle_query_frame,
               (uint16_t) sizeof(shuttle_query_frame));
     assert(test_tx_contains("page3.n0.val=300") != 0U);
@@ -292,6 +316,6 @@ int main(void)
     assert(s_zero_adjust_active == 0U);
     assert(test_tx_contains("page2.n0.val=1150") != 0U);
 
-    puts("TJC page2零位PWM与page3查询、烧录协议主机测试通过");
+    puts("TJC页面协议与未达标提示抑制主机测试通过");
     return 0;
 }

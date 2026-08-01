@@ -326,13 +326,6 @@ static const uint8_t s_text_result_abcd_target[] = {
 static const uint8_t s_text_result_passed[] = {
     0xE9U, 0x80U, 0x9AU, 0xE8U, 0xBFU, 0x87U
 };
-static const uint8_t s_text_result_overrange[] = {
-    0xE5U, 0xAEU, 0x8CU, 0xE6U, 0x88U, 0x90U, 0xE4U, 0xBDU, 0x86U,
-    0xE8U, 0xB6U, 0x85U, 0xE5U, 0xB7U, 0xAEU
-};
-static const uint8_t s_text_result_timeout[] = {
-    0xE8U, 0xB6U, 0x85U, 0xE6U, 0x97U, 0xB6U
-};
 static const uint8_t s_text_result_max_error[] = {
     0x20U, 0xE6U, 0x9CU, 0x80U, 0xE5U, 0xA4U, 0xA7U,
     0xE8U, 0xAFU, 0xAFU, 0xE5U, 0xB7U, 0xAEU
@@ -355,16 +348,6 @@ static const uint8_t s_text_shuttle_save_failed[] = {
     0xE7U, 0x83U, 0xA7U, 0xE5U, 0xBDU, 0x95U,
     0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
 };
-static const uint8_t s_tjc_warning_circle_100[] =
-    "cir 160,120,100,63488";
-static const uint8_t s_tjc_warning_circle_99[] =
-    "cir 160,120,99,63488";
-static const uint8_t s_tjc_warning_circle_98[] =
-    "cir 160,120,98,63488";
-static const uint8_t s_tjc_warning_circle_97[] =
-    "cir 160,120,97,63488";
-static const uint8_t s_tjc_refresh_page[] = "ref 0";
-
 static Tjc_RxState s_rx_state;
 static uint8_t s_rx_command;
 static uint8_t s_rx_pipe_zero_data[TJC_PIPE_ZERO_DATA_SIZE];
@@ -898,8 +881,11 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
     uint32_t maximum_error_x10;
     const uint8_t *mode_text;
     uint16_t mode_text_length;
-    const uint8_t *result_text;
-    uint16_t result_text_length;
+
+    /* 未通过、超差或超时结果只保留在内部状态，不再提示到串口屏。 */
+    if (run_result != (uint8_t) DYNAMIC_RUN_RESULT_PASSED) {
+        return;
+    }
 
     if (run_mode == (uint8_t) DYNAMIC_RUN_MODE_AB) {
         mode_text = s_text_result_ab;
@@ -910,20 +896,6 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
     } else if (run_mode == (uint8_t) DYNAMIC_RUN_MODE_ABCD_TARGET) {
         mode_text = s_text_result_abcd_target;
         mode_text_length = (uint16_t) sizeof(s_text_result_abcd_target);
-    } else {
-        return;
-    }
-
-    if (run_result == (uint8_t) DYNAMIC_RUN_RESULT_PASSED) {
-        result_text = s_text_result_passed;
-        result_text_length = (uint16_t) sizeof(s_text_result_passed);
-    } else if (run_result ==
-               (uint8_t) DYNAMIC_RUN_RESULT_PASSED_OVERRANGE) {
-        result_text = s_text_result_overrange;
-        result_text_length = (uint16_t) sizeof(s_text_result_overrange);
-    } else if (run_result == (uint8_t) DYNAMIC_RUN_RESULT_TIMEOUT) {
-        result_text = s_text_result_timeout;
-        result_text_length = (uint16_t) sizeof(s_text_result_timeout);
     } else {
         return;
     }
@@ -943,7 +915,8 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
     length = Protocol_Tjc_AppendBytes(
         frame, length, mode_text, mode_text_length);
     length = Protocol_Tjc_AppendBytes(
-        frame, length, result_text, result_text_length);
+        frame, length, s_text_result_passed,
+        (uint16_t) sizeof(s_text_result_passed));
     frame[length++] = (uint8_t) ' ';
     length = Protocol_Tjc_AppendUnsignedX10(frame, length, elapsed_x10);
     frame[length++] = (uint8_t) 's';
@@ -1043,28 +1016,6 @@ void Protocol_Tjc_SendShuttlePhase(uint8_t phase,
         (uint16_t) sizeof(s_tjc_text_suffix));
     TjcUart_SendData(frame, length);
     g_tjc_status_text_count++;
-}
-
-void Protocol_Tjc_SetBallLimitWarning(uint8_t active)
-{
-    if (active != 0U) {
-        Protocol_Tjc_SendAsciiCommand(
-            s_tjc_warning_circle_100,
-            (uint16_t) (sizeof(s_tjc_warning_circle_100) - 1U));
-        Protocol_Tjc_SendAsciiCommand(
-            s_tjc_warning_circle_99,
-            (uint16_t) (sizeof(s_tjc_warning_circle_99) - 1U));
-        Protocol_Tjc_SendAsciiCommand(
-            s_tjc_warning_circle_98,
-            (uint16_t) (sizeof(s_tjc_warning_circle_98) - 1U));
-        Protocol_Tjc_SendAsciiCommand(
-            s_tjc_warning_circle_97,
-            (uint16_t) (sizeof(s_tjc_warning_circle_97) - 1U));
-    } else {
-        Protocol_Tjc_SendAsciiCommand(
-            s_tjc_refresh_page,
-            (uint16_t) (sizeof(s_tjc_refresh_page) - 1U));
-    }
 }
 
 void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,

@@ -121,6 +121,4 @@ void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
 void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
                                               int16_t offset_x100,
                                               int16_t return_error_x100);
-void Protocol_Tjc_SetBallLimitWarning(uint8_t active);
-
 #endif /* PROTOCOL_TJC_H */
