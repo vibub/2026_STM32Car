@@ -6,7 +6,8 @@
 #define IR_LINE_KP                           3.00f  /* 巡线位置误差的比例增益。 */
 #define IR_LINE_KD                           1.80f  /* 巡线误差变化量的微分增益。 */
 #define IR_LINE_CORRECTION_LIMIT_CM_S       10.00f /* 左右轮差速修正量的绝对上限。 */
-#define IR_LINE_CORRECTION_SLEW_CM_S         0.80f /* 每20 ms允许的差速变化量，抑制单轮目标突变。 */
+#define IR_LINE_BASIC_CORRECTION_SLEW_CM_S   2.50f /* 基础巡线每20 ms差速变化量，优先及时纠偏。 */
+#define IR_LINE_SMOOTH_CORRECTION_SLEW_CM_S  0.80f /* 第四、第五题每20 ms差速变化量，减小钢球瞬态。 */
 #define IR_LINE_SPEED_RESPONSE_TIME_S         0.25f /* 路况速度目标转换为期望加速度的响应时间。 */
 #define IR_LINE_SPEED_ERROR_EPSILON_CM_S      0.01f /* 判定基础速度已到达目标的误差范围。 */
 #define IR_LINE_MEDIUM_ERROR                 1.00f  /* 进入中等偏差降速的误差门槛，单位为厘米。 */
@@ -182,6 +183,14 @@ void InfraredLineControl_Init(InfraredLineControl *control)
     }
 }
 
+void InfraredLineControl_SetSmoothResponse(InfraredLineControl *control,
+                                           uint8_t enabled)
+{
+    if (control != 0) {
+        control->smooth_response_enabled = (uint8_t) (enabled != 0U);
+    }
+}
+
 void InfraredLineControl_SetMotionLimits(InfraredLineControl *control,
                                          float maximum_accel_cm_s2,
                                          float maximum_decel_cm_s2,
@@ -220,6 +229,7 @@ void InfraredLineControl_Update(InfraredLineControl *control,
     float reported_error;
     float derivative = 0.0f;
     float target_correction;
+    float correction_slew_cm_s;
     float base_speed;
     float abs_error;
 
@@ -232,6 +242,10 @@ void InfraredLineControl_Update(InfraredLineControl *control,
     }
 
     base_speed = control->base_speed_cm_s;
+    correction_slew_cm_s =
+        (control->smooth_response_enabled != 0U) ?
+        IR_LINE_SMOOTH_CORRECTION_SLEW_CM_S :
+        IR_LINE_BASIC_CORRECTION_SLEW_CM_S;
     sensor_mask &= IR_LINE_SENSOR_MASK;
     output->sensor_mask = sensor_mask;
     active_count = InfraredLine_CalculateError(sensor_mask, &raw_error);
@@ -268,7 +282,7 @@ void InfraredLineControl_Update(InfraredLineControl *control,
         control->last_correction_cm_s = InfraredLine_LimitDelta(
             target_correction,
             control->last_correction_cm_s,
-            IR_LINE_CORRECTION_SLEW_CM_S);
+            correction_slew_cm_s);
 
         abs_error = InfraredLine_Abs(control->filtered_error);
         if (output->wide_line != 0U) {
@@ -320,14 +334,22 @@ void InfraredLineControl_Update(InfraredLineControl *control,
         control->last_correction_cm_s = InfraredLine_LimitDelta(
             target_correction,
             control->last_correction_cm_s,
-            IR_LINE_CORRECTION_SLEW_CM_S);
+            correction_slew_cm_s);
     }
 
-    base_speed = InfraredLine_ApplyBaseSpeedSlew(
-        control,
-        base_speed,
-        (uint8_t) ((output->line_lost != 0U) ||
-                   (force_wide_slowdown != 0U)));
+    if (control->smooth_response_enabled != 0U) {
+        /* 第四、第五题保留路况速度的加速度和jerk限制，减小钢球瞬态。 */
+        base_speed = InfraredLine_ApplyBaseSpeedSlew(
+            control,
+            base_speed,
+            (uint8_t) ((output->line_lost != 0U) ||
+                       (force_wide_slowdown != 0U)));
+    } else {
+        /* 基础巡线复用参考版本的即时路况降速，避免高速纠偏扩大摆动。 */
+        control->base_speed_ready = 1U;
+        control->applied_base_speed_cm_s = base_speed;
+        control->applied_base_accel_cm_s2 = 0.0f;
+    }
     output->command_valid = 1U;
     output->filtered_error = reported_error;
     output->correction_cm_s = InfraredLine_SetTargets(

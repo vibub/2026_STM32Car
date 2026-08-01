@@ -302,8 +302,20 @@ static void test_runtime_line_base_speed(void)
     InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
     average_target = 0.5f *
                      (output.left_target_cm_s + output.right_target_cm_s);
-    /* 大偏差降速先平滑建立减速度，不再从40 cm/s直接跳到缩放速度。 */
+    /* 基础巡线按参考稳定版本立即降到82%，避免高速转向扩大摆动。 */
+    assert_near(average_target, 32.8f, 0.01f);
+    assert_near(output.correction_cm_s, -2.5f, 0.001f);
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_SetSmoothResponse(&control, 1U);
+    InfraredLineControl_SetBaseSpeed(&control, 40.0f);
+    InfraredLineControl_Update(&control, 0U, 0x18U, 0U, &output);
+    InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
+    average_target = 0.5f *
+                     (output.left_target_cm_s + output.right_target_cm_s);
+    /* 第四、第五题仍平滑建立减速度和差速，减小钢球瞬态。 */
     assert_near(average_target, 39.96f, 0.01f);
+    assert_near(output.correction_cm_s, -0.8f, 0.001f);
 
     InfraredLineControl_Init(&control);
     InfraredLineControl_SetBaseSpeed(&control, 12.0f);
@@ -337,6 +349,7 @@ static void test_dynamic_line_speed_uses_task_motion_limits(void)
     uint16_t index;
 
     InfraredLineControl_Init(&control);
+    InfraredLineControl_SetSmoothResponse(&control, 1U);
     InfraredLineControl_SetMotionLimits(&control,
                                         8.0f,  /* 第五题最大加速度。 */
                                         8.0f,  /* 第五题最大减速度。 */

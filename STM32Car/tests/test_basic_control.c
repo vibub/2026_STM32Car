@@ -223,6 +223,23 @@ static void test_infrared_target_differential(void)
     assert_targets_in_range(&output);
 }
 
+static void test_infrared_correction_response(void)
+{
+    InfraredLineControl control;
+    InfraredLineOutput output;
+
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x18U, 0U, &output);
+
+    /* 参考已验证版本，偏到阵列边缘后每20 ms至少建立2.5 cm/s差速，
+     * 避免过慢的差速斜率产生转向相位滞后和大幅蛇形摆动。 */
+    InfraredLineControl_Update(&control, 20U, 0x01U, 0U, &output);
+    assert_float_near(output.correction_cm_s, -2.5f);
+    InfraredLineControl_Update(&control, 40U, 0x01U, 0U, &output);
+    assert_float_near(output.correction_cm_s, -5.0f);
+    assert_targets_in_range(&output);
+}
+
 static void test_infrared_loss_recovery(void)
 {
     InfraredLineControl control;
@@ -1787,6 +1804,7 @@ int main(void)
     test_infrared_eight_positions();
     test_infrared_forced_wide_slowdown();
     test_infrared_target_differential();
+    test_infrared_correction_response();
     test_infrared_loss_recovery();
     test_infrared_safe_loss_behavior();
     test_lap_stop_detector();

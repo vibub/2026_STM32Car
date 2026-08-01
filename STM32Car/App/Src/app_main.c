@@ -1127,7 +1127,8 @@ static uint8_t App_StartLineRunInternal(
     uint32_t now_ms,
     const ChassisMotionConfig *requested_config,
     uint8_t lap_stop_enabled,
-    uint8_t app_mode)
+    uint8_t app_mode,
+    uint8_t smooth_response_enabled)
 {
     ChassisMotionConfig motion_config;
     float initial_speed_cm_s = 0.0f;
@@ -1136,8 +1137,11 @@ static uint8_t App_StartLineRunInternal(
         return 0U;
     }
     motion_config = *requested_config;
-    if ((s_line_enabled != 0U) &&
-        (s_chassis_accel_output.valid != 0U)) {
+    if (smooth_response_enabled == 0U) {
+        /* 基础巡线按参考版本直接进入目标速度，不沿用第四、第五题速度轨迹。 */
+        initial_speed_cm_s = motion_config.target_speed_cm_s;
+    } else if ((s_line_enabled != 0U) &&
+               (s_chassis_accel_output.valid != 0U)) {
         initial_speed_cm_s = s_chassis_accel_output.filtered_speed_cm_s;
         if (initial_speed_cm_s < 0.0f) {
             initial_speed_cm_s = 0.0f;
@@ -1145,6 +1149,8 @@ static uint8_t App_StartLineRunInternal(
     }
 
     InfraredLineControl_Init(&s_line_control);
+    InfraredLineControl_SetSmoothResponse(&s_line_control,
+                                          smooth_response_enabled);
     /* 路况降速后的恢复过程沿用本任务的加速度和jerk限制，避免二次突然加速。 */
     InfraredLineControl_SetMotionLimits(
         &s_line_control,
@@ -1346,7 +1352,8 @@ static void App_DynamicRunTask(uint32_t now_ms,
         if (App_StartLineRunInternal(now_ms,
                                      motion_config,
                                      lap_stop_enabled,
-                                     app_mode) == 0U) {
+                                     app_mode,
+                                     1U /* 第四、第五题启用平滑响应。 */) == 0U) {
             App_DynamicRunFail(now_ms,
                                DYNAMIC_RUN_FAILURE_MOTION_START);
             return;
@@ -1797,7 +1804,8 @@ uint8_t App_RequestMode(uint8_t mode)
         return App_StartLineRunInternal(Board_TimeMs(),
                                         &s_default_motion_config,
                                         1U,
-                                        APP_MODE_BASIC_LINE);
+                                        APP_MODE_BASIC_LINE,
+                                        0U /* 基础巡线关闭平滑响应。 */);
     }
 
     return 0U;
@@ -1832,7 +1840,8 @@ uint8_t App_StartSmoothLineRun(float completion_distance_cm)
     return App_StartLineRunInternal(now_ms,
                                     &motion_config,
                                     0U,
-                                    APP_MODE_BASIC_LINE);
+                                    APP_MODE_BASIC_LINE,
+                                    1U /* 显式请求平滑巡线响应。 */);
 }
 
 uint8_t App_StartSmoothAbRun(void)
