@@ -48,6 +48,8 @@
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
 #define BALL_BALANCE_VISION_SPIKE_JUMP_MM         15.0f  /* K230 一帧位置跳变超过该值视为跳变，抑制假速度。 */
 #define BALL_BALANCE_SPIKE_STUCK_MS               400U   /* 跳变持续超过该时间仍偏离，判定为真实新位置并重采样。 */
+#define BALL_BALANCE_TRANSPORT_SPIKE_JUMP_MM      30.0f  /* AB/ABCD 行驶中允许相邻低帧率视觉样本产生更大真实位移。 */
+#define BALL_BALANCE_TRANSPORT_SPIKE_STUCK_MS     150U   /* 行驶时更快接受持续位移，避免长期使用旧位置盲控。 */
 #define BALL_BALANCE_IDLE_DATA_TIMEOUT_MS      1000U    /* 等待/破静摩擦时容忍 YOLO 短时漏检，避免杆反复回平重启。 */
 #define BALL_BALANCE_MOVING_DATA_TIMEOUT_MS     350U    /* 球已运动后仍快速退出盲控，避免失联时继续加速。 */
 #define BALL_BALANCE_ATTITUDE_TIMEOUT_MS        100U    /* IMU 姿态数据超时时间。 */
@@ -909,6 +911,8 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
     float previous_position;
     float raw_velocity;
     float alpha;
+    float spike_jump_limit_mm;
+    uint32_t spike_stuck_ms;
     uint8_t filter_was_ready;
     uint8_t accepted;
 
@@ -932,6 +936,12 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
 
     filter_was_ready = control->filter_ready;
     elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
+    spike_jump_limit_mm = (control->transport_mode_enabled != 0U) ?
+        BALL_BALANCE_TRANSPORT_SPIKE_JUMP_MM :
+        BALL_BALANCE_VISION_SPIKE_JUMP_MM;
+    spike_stuck_ms = (control->transport_mode_enabled != 0U) ?
+        BALL_BALANCE_TRANSPORT_SPIKE_STUCK_MS :
+        BALL_BALANCE_SPIKE_STUCK_MS;
     accepted = 1U;
     if ((filter_was_ready == 0U) ||
         (elapsed_ms > BallBalanceControl_DataTimeoutMs(control))) {
@@ -946,13 +956,15 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
             BALL_BALANCE_DT_MIN_S,
             BALL_BALANCE_MEASUREMENT_DT_MAX_S);
         previous_position = control->filtered_position_mm;
-        /* 跳变抑制：K230 一帧位置跳变超过阈值，视为检测错误。
+        /* 跳变抑制：停车平衡仍使用严格阈值；AB/ABCD 运输模式考虑 K230
+         * 只有约 5~6 FPS，允许球在相邻样本间产生更大的真实位移。
+         * 一帧位置跳变超过当前模式阈值时才视为检测错误。
          * 不更新滤波位置与速度，只让测量超时保护去接管，避免
          * 假速度触发 P/D 反打把钢球推向端部。
          * 但跳变持续超过 SPIKE_STUCK_MS 仍偏离，判定为真实位移
          * 或持续错检，直接重采样新位置，避免滤波值永久冻结。 */
         if (BallBalanceControl_Abs(position_mm - previous_position) <=
-            BALL_BALANCE_VISION_SPIKE_JUMP_MM) {
+            spike_jump_limit_mm) {
             control->spike_reject_active = 0U;
             control->last_spike_reject_ms = 0U;
             alpha = measurement_dt_s /
@@ -967,7 +979,7 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
                 (raw_velocity - control->velocity_mm_s);
         } else if ((control->spike_reject_active != 0U) &&
                    ((uint32_t) (now_ms - control->last_spike_reject_ms) >=
-                    BALL_BALANCE_SPIKE_STUCK_MS)) {
+                    spike_stuck_ms)) {
             /* 持续跳变：重采样为新位置，速度清零，避免卡死旧值。 */
             control->spike_reject_active = 0U;
             control->last_spike_reject_ms = 0U;
@@ -1427,6 +1439,10 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
     }
 
     control->transport_mode_enabled = normalized_enabled;
+    /* 模式切换时丢弃停车阶段尚未确认的跳变候选，避免旧的 400 ms
+     * 计时在刚起步时把第一帧真实位移错误地重采样为零速度。 */
+    control->spike_reject_active = 0U;
+    control->last_spike_reject_ms = 0U;
     if (normalized_enabled != 0U) {
         control->manual_pipe_mode_enabled = 0U;
         control->manual_pipe_target_deg = 0.0f;

@@ -261,7 +261,7 @@ static void test_timeout_requests_soft_stop(void)
     assert(task.failure == DYNAMIC_RUN_FAILURE_RUN_TIMEOUT);
 }
 
-static void test_braking_fault_preserves_frozen_time(void)
+static void test_ab_braking_preserves_frozen_result_after_ball_loss(void)
 {
     DynamicRunTask task;
     DynamicRunTaskConfig config = build_config();
@@ -288,15 +288,27 @@ static void test_braking_fault_preserves_frozen_time(void)
     assert(actions.hard_stop == 0U);
     assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
 
-    /* 持续超过 500 ms 去抖时长后判视觉故障并冻结成绩时间。 */
+    /* 已通过B后即使失联超过运行期去抖时长，也不能改写冻结的通过结果。 */
     input = build_ready_input(1500U);
     input.measurement_accepted = 0U;
+    input.balance_enabled = 0U;
     input.tracking_valid = 0U;
     input.timed_out = 1U;
+    input.attitude_valid = 0U;
+    input.imu_fault = 1U;
     DynamicRunTask_Update(&task, &input, &actions);
-    assert(actions.hard_stop != 0U);
-    assert(task.state == DYNAMIC_RUN_STATE_FAILED);
+    assert(actions.hard_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
+    assert(task.result == DYNAMIC_RUN_RESULT_PASSED);
+    assert(task.failure == DYNAMIC_RUN_FAILURE_NONE);
     assert(task.elapsed_ms == frozen_elapsed_ms);
+
+    input.now_ms = 1700U;
+    input.motion_stopped = 1U;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.enter_stop_mode != 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_COMPLETE);
+    assert(task.result == DYNAMIC_RUN_RESULT_PASSED);
 }
 
 static void test_running_vision_fault_debounced(void)
@@ -385,7 +397,7 @@ int main(void)
     test_single_overrange_sample_does_not_fail_result();
     test_pass_has_priority_at_time_limit();
     test_timeout_requests_soft_stop();
-    test_braking_fault_preserves_frozen_time();
+    test_ab_braking_preserves_frozen_result_after_ball_loss();
     test_running_vision_fault_debounced();
     test_abcd_braking_ignores_post_finish_ball_loss();
     puts("第四、五题动态任务状态机测试通过");

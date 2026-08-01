@@ -434,12 +434,9 @@ void DynamicRunTask_Update(DynamicRunTask *task,
     }
 
     if (task->state == DYNAMIC_RUN_STATE_BRAKING) {
-        /* ABCD 通过返程A点后计分已经结束，K230此时会把内存日志写入SD卡。
-         * 不再要求钢球视觉和姿态持续在线，只保留底盘柔停。 */
-        if ((task->mode != DYNAMIC_RUN_MODE_ABCD) &&
-            (DynamicRunTask_CheckDrivingFaults(task, input, actions) != 0U)) {
-                return;
-        }
+        /* AB 通过B、ABCD 通过返程A或任务超时后，成绩与故障结论都已经冻结。
+         * 柔停阶段不再用视觉/姿态状态改写最终结果；执行器自身的失联保护仍会
+         * 回水平，红外和电机硬故障则继续由 App 控制层直接安全停车。 */
         if ((input->evaluate_completion != 0U) &&
             (input->motion_stopped != 0U)) {
             task->state = DYNAMIC_RUN_STATE_COMPLETE;

@@ -1719,6 +1719,16 @@ static void test_ball_balance_transport_mode(void)
     BallBalanceControl_SetTransportWallAcceleration(
         &control, 0.0f, 0U);
     measurement.position_d10_mm = 300;
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    /* K230 约 5~6 FPS 时，行驶中相邻帧 30 mm 位移必须立即进入反馈，
+     * 不能沿用停车模式的 15 mm spike 门槛冻结 400 ms。 */
+    assert(output.measurement_accepted != 0U);
+    assert(control.spike_reject_active == 0U);
+    assert(output.filtered_position_mm > 0.0f);
     for (index = 0U; index < 8U; index++) {
         measurement.sequence++;
         now_ms += 100U;
