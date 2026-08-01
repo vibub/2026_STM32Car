@@ -1213,6 +1213,10 @@ static uint8_t App_StartLineRunInternal(
     InfraredLineControl_SetBaseSpeed(
         &s_line_control, s_motion_output.command_speed_cm_s);
     LapStopDetector_Init(&s_lap_stop_detector);
+    if (lap_stop_enabled != 0U) {
+        LapStopDetector_SetExpectedDistance(
+            &s_lap_stop_detector, APP_LAP_PASS_DISTANCE_CM);
+    }
     s_lap_stop_enabled = lap_stop_enabled;
     s_current_mode = app_mode;
     s_line_enabled = 1U;

@@ -3,8 +3,8 @@
 #include <math.h>
 #include <string.h>
 
-#define BALL_BALANCE_MIN_PIPE_PITCH_DEG       (-5.5495f) /* 500 us对应的实测最小相对水管角。 */
-#define BALL_BALANCE_MAX_PIPE_PITCH_DEG          5.5495f  /* 1600 us对应的实测最大相对水管角。 */
+#define BALL_BALANCE_MIN_PIPE_PITCH_DEG       (-4.7423f) /* 500 us相对970 us水平点的水管角。 */
+#define BALL_BALANCE_MAX_PIPE_PITCH_DEG          6.3567f  /* 1600 us相对970 us水平点的水管角。 */
 #define BALL_BALANCE_PIPE_KP_MAX                  2.00f   /* IAR在线调整姿态Kp的安全上限。 */
 #define BALL_BALANCE_PIPE_KD_MAX_S                0.30f   /* IAR在线调整姿态Kd的安全上限。 */
 #define BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG       8.5f  /* 实测俯仰超过该角度才暂停姿态闭环；实测范围±5.55°，起步变速惯性摆动可达7°左右，故留出余量。 */

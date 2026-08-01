@@ -49,6 +49,50 @@ static float InfraredLine_LimitDelta(float value, float previous, float delta)
     return value;
 }
 
+static uint8_t InfraredLine_FilterIsolatedOutlier(uint8_t mask)
+{
+    uint8_t filtered_mask = mask;
+    uint8_t index;
+    uint8_t sensor_bit;
+    uint8_t left_active;
+    uint8_t right_active;
+
+    for (index = 0U; index < 8U; index++) {
+        sensor_bit = (uint8_t) (1U << index);
+        if ((mask & sensor_bit) == 0U) {
+            continue;
+        }
+
+        left_active = (uint8_t) (
+            (index > 0U) &&
+            ((mask & (uint8_t) (1U << (index - 1U))) != 0U));
+        right_active = (uint8_t) (
+            (index < 7U) &&
+            ((mask & (uint8_t) (1U << (index + 1U))) != 0U));
+        if ((left_active != 0U) || (right_active != 0U)) {
+            continue;
+        }
+
+        /* A real track cannot produce one isolated active sensor separated
+         * from a contiguous group by exactly two inactive sensors.  Reject
+         * that isolated side reflection before calculating line position. */
+        if ((index <= 3U) &&
+            ((mask & (uint8_t) (1U << (index + 1U))) == 0U) &&
+            ((mask & (uint8_t) (1U << (index + 2U))) == 0U) &&
+            ((mask & (uint8_t) (1U << (index + 3U))) != 0U) &&
+            ((mask & (uint8_t) (1U << (index + 4U))) != 0U)) {
+            filtered_mask &= (uint8_t) ~sensor_bit;
+        } else if ((index >= 4U) &&
+                   ((mask & (uint8_t) (1U << (index - 1U))) == 0U) &&
+                   ((mask & (uint8_t) (1U << (index - 2U))) == 0U) &&
+                   ((mask & (uint8_t) (1U << (index - 3U))) != 0U) &&
+                   ((mask & (uint8_t) (1U << (index - 4U))) != 0U)) {
+            filtered_mask &= (uint8_t) ~sensor_bit;
+        }
+    }
+    return filtered_mask;
+}
+
 static float InfraredLine_ApplyBaseSpeedSlew(InfraredLineControl *control,
                                               float target_speed_cm_s,
                                               uint8_t urgent_slowdown)
@@ -247,6 +291,7 @@ void InfraredLineControl_Update(InfraredLineControl *control,
         IR_LINE_SMOOTH_CORRECTION_SLEW_CM_S :
         IR_LINE_BASIC_CORRECTION_SLEW_CM_S;
     sensor_mask &= IR_LINE_SENSOR_MASK;
+    sensor_mask = InfraredLine_FilterIsolatedOutlier(sensor_mask);
     output->sensor_mask = sensor_mask;
     active_count = InfraredLine_CalculateError(sensor_mask, &raw_error);
     output->active_count = active_count;

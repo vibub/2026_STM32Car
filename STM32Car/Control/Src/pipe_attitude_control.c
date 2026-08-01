@@ -5,8 +5,8 @@
 
 #define PIPE_ATTITUDE_RAD_TO_DEG                  57.2957795f /* 弧度转换为角度的比例。 */
 #define PIPE_ATTITUDE_FIXED_IMU_PITCH_SIGN              (-1) /* PWM增大时原始IMU角减小，归一化后定义为正角。 */
-#define PIPE_ATTITUDE_MIN_PIPE_PITCH_DEG          (-5.5495f) /* 500 us对应的实测相对水管角。 */
-#define PIPE_ATTITUDE_MAX_PIPE_PITCH_DEG            5.5495f  /* 1600 us对应的实测相对水管角。 */
+#define PIPE_ATTITUDE_MIN_PIPE_PITCH_DEG          (-4.7423f) /* 500 us相对970 us水平点的水管角。 */
+#define PIPE_ATTITUDE_MAX_PIPE_PITCH_DEG            6.3567f  /* 1600 us相对970 us水平点的水管角。 */
 #define PIPE_ATTITUDE_LEVEL_SETTLE_MS                 500U   /* 到达人工确认零位PWM后的静置时间。 */
 #define PIPE_ATTITUDE_LEVEL_SAMPLE_COUNT              180U   /* 水平零偏采样数量，约为3秒。 */
 #define PIPE_ATTITUDE_LEVEL_TIMEOUT_MS               5000U   /* 单点水平采样最长等待时间。 */

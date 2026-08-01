@@ -195,6 +195,46 @@ static void test_infrared_forced_wide_slowdown(void)
     assert_targets_in_range(&slowed_output);
 }
 
+static void test_infrared_isolated_outlier_filter(void)
+{
+    InfraredLineControl control;
+    InfraredLineOutput output;
+
+    /* bit0 is isolated from the center group by two inactive sensors. */
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x19U, 0U, &output);
+    assert(output.sensor_mask == 0x18U);
+    assert(output.active_count == 2U);
+    assert_float_near(output.raw_error, 0.0f);
+
+    /* The rule must be left/right symmetric. */
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x98U, 0U, &output);
+    assert(output.sensor_mask == 0x18U);
+    assert(output.active_count == 2U);
+    assert_float_near(output.raw_error, 0.0f);
+
+    /* It also applies when the valid group is at either array edge. */
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x13U, 0U, &output);
+    assert(output.sensor_mask == 0x03U);
+    assert_float_near(output.raw_error, -3.6f);
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0xC8U, 0U, &output);
+    assert(output.sensor_mask == 0xC0U);
+    assert_float_near(output.raw_error, 3.6f);
+
+    /* One-gap patterns and two isolated detections are not this fault. */
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x1AU, 0U, &output);
+    assert(output.sensor_mask == 0x1AU);
+    assert(output.active_count == 3U);
+    InfraredLineControl_Init(&control);
+    InfraredLineControl_Update(&control, 0U, 0x09U, 0U, &output);
+    assert(output.sensor_mask == 0x09U);
+    assert(output.active_count == 2U);
+}
+
 static void test_infrared_target_differential(void)
 {
     InfraredLineControl control;
@@ -307,6 +347,7 @@ static void test_lap_stop_detector(void)
     LapStopDetector detector;
 
     LapStopDetector_Init(&detector);
+    LapStopDetector_SetExpectedDistance(&detector, 614.2f);
 
     /* 上电位于 A 点横线时不得直接认为已经驶离起点。 */
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x0FU) == 0U);
@@ -322,16 +363,21 @@ static void test_lap_stop_detector(void)
     assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x01U) == 0U);
     assert(detector.left_start_line != 0U);
 
-    /* 未达到 400 cm 时，即使再次出现横线也不能触发返程完成。 */
-    assert(LapStopDetector_Update(&detector, 399.0f, 1U, 0xFFU) == 0U);
+    /* Reproduce 0010: a stuck/wide pattern at 522.9 cm is still far before
+     * the nominal 614.2 cm lap and must never stop the car. */
+    assert(LapStopDetector_Update(&detector, 522.9f, 1U, 0xFFU) == 0U);
     assert(detector.armed == 0U);
     assert(detector.full_black_count == 0U);
     assert(LapStopDetector_Update(&detector, -10.0f, 1U, 0xFFU) == 0U);
-    assert_float_near(detector.distance_cm, 399.0f);
+    assert_float_near(detector.distance_cm, 522.9f);
 
-    /* 达到里程门槛但只有 3 路黑线时，不得停车。 */
-    assert(LapStopDetector_Update(&detector, 1.0f, 1U, 0x07U) == 0U);
+    /* The normal A-line window starts 40 cm before the preset distance. */
+    assert(LapStopDetector_Update(&detector, 51.2f, 1U, 0xFFU) == 0U);
+    assert(detector.armed == 0U);
+    assert(LapStopDetector_Update(&detector, 0.1f, 1U, 0x07U) == 0U);
     assert(detector.armed != 0U);
+
+    /* 到达里程窗口但只有 3 路黑线时，不得停车。 */
     assert(detector.full_black_count == 0U);
 
     /* 4 路黑线开始连续确认，中间降到 3 路时计数清零。 */
@@ -351,10 +397,22 @@ static void test_lap_stop_detector(void)
     assert(detector.completed != 0U);
     assert(detector.full_black_count == 2U);
     assert(LapStopDetector_Update(&detector, 10.0f, 1U, 0x0FU) != 0U);
-    assert_float_near(detector.distance_cm, 400.0f);
+    assert_float_near(detector.distance_cm, 574.2f);
+
+    /* If A is missed completely, a large positive encoder deviation ends
+     * the run without depending on a valid infrared sample. */
+    LapStopDetector_Init(&detector);
+    LapStopDetector_SetExpectedDistance(&detector, 614.2f);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x03U) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.0f, 1U, 0x01U) == 0U);
+    assert(detector.left_start_line != 0U);
+    assert(LapStopDetector_Update(&detector, 694.1f, 0U, 0x00U) == 0U);
+    assert(LapStopDetector_Update(&detector, 0.2f, 0U, 0x00U) != 0U);
+    assert(detector.completed != 0U);
 
     LapStopDetector_Init(&detector);
     assert_float_near(detector.distance_cm, 0.0f);
+    assert_float_near(detector.expected_distance_cm, 0.0f);
     assert(detector.left_start_line == 0U);
     assert(detector.leave_clear_count == 0U);
     assert(detector.armed == 0U);
@@ -514,9 +572,9 @@ static void test_pipe_attitude_control(void)
     assert_float_near_tolerance(output.accel_pitch_zero_deg,
                                 raw_pitch_deg,
                                 0.01f);
-    assert_float_near_tolerance(output.negative_pitch_deg, -5.5495f, 0.001f);
+    assert_float_near_tolerance(output.negative_pitch_deg, -4.7423f, 0.001f);
     assert_float_near_tolerance(output.center_pitch_deg, 0.0f, 0.001f);
-    assert_float_near_tolerance(output.positive_pitch_deg, 5.5495f, 0.001f);
+    assert_float_near_tolerance(output.positive_pitch_deg, 6.3567f, 0.001f);
     assert_float_near_tolerance(output.model_scale, 1.0f, 0.001f);
     assert_float_near_tolerance(output.model_offset_deg, 0.0f, 0.001f);
 
@@ -620,8 +678,8 @@ static void test_ball_balance_control(void)
     assert(output.desired_model_pitch_deg > 0.0f);
     assert(output.desired_angle_deg > neutral_angle_deg);
     assert(output.command_angle_deg > neutral_angle_deg);
-    assert(output.command_angle_deg >= -5.5495f);
-    assert(output.command_angle_deg <= 5.5495f);
+    assert(output.command_angle_deg >= -4.7423f);
+    assert(output.command_angle_deg <= 6.3567f);
 
     /* 线性前馈之外，IMU姿态P/D应修正水管跟随误差并抑制角速度。 */
     attitude.pitch_deg = -0.5f;
@@ -789,9 +847,9 @@ static void test_flexible_pipe_mapping_limits(void)
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
-        output.minimum_pipe_pitch_deg, -5.5495f, 0.001f);
+        output.minimum_pipe_pitch_deg, -4.7423f, 0.001f);
     assert_float_near_tolerance(
-        output.maximum_pipe_pitch_deg, 5.5495f, 0.001f);
+        output.maximum_pipe_pitch_deg, 6.3567f, 0.001f);
 
     BallBalanceControl_SetEnabled(&control, 1U, now_ms);
     attitude.valid = 1U;
@@ -1545,7 +1603,7 @@ static void test_extended_downward_pipe_limit(void)
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
     assert(output.mapping_valid != 0U);
     assert_float_near_tolerance(
-        output.minimum_pipe_pitch_deg, -5.5495f, 0.001f);
+        output.minimum_pipe_pitch_deg, -4.7423f, 0.001f);
 
     BallBalanceControl_SetEnabled(&control, 1U, now_ms);
     attitude.valid = 1U;
@@ -1999,6 +2057,7 @@ int main(void)
 {
     test_infrared_eight_positions();
     test_infrared_forced_wide_slowdown();
+    test_infrared_isolated_outlier_filter();
     test_infrared_target_differential();
     test_infrared_correction_response();
     test_infrared_loss_recovery();
