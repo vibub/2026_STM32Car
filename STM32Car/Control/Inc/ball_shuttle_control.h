@@ -20,21 +20,14 @@ typedef enum {
     BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE,
     BALL_SHUTTLE_STATE_PHASE_2_POSITIVE,
     BALL_SHUTTLE_STATE_PHASE_3_NEGATIVE,
-    BALL_SHUTTLE_STATE_HOLDING_LEVEL,
-    BALL_SHUTTLE_STATE_FAILED
+    BALL_SHUTTLE_STATE_HOLDING_LEVEL
 } BallShuttleState;
-
-typedef enum {
-    BALL_SHUTTLE_FAILURE_NONE = 0,
-    BALL_SHUTTLE_FAILURE_PIPE_CONTROL
-} BallShuttleFailure;
 
 typedef enum {
     BALL_SHUTTLE_EVENT_NONE = 0,
     BALL_SHUTTLE_EVENT_PHASE_2,
     BALL_SHUTTLE_EVENT_PHASE_3,
-    BALL_SHUTTLE_EVENT_SUCCEEDED,
-    BALL_SHUTTLE_EVENT_FAILED
+    BALL_SHUTTLE_EVENT_SUCCEEDED
 } BallShuttleEvent;
 
 typedef struct {
@@ -43,16 +36,7 @@ typedef struct {
 } BallShuttleConfig;
 
 typedef struct {
-    uint8_t pipe_control_enabled;
-    uint8_t manual_pipe_mode_enabled;
-    uint8_t attitude_valid;
-    uint8_t imu_fault;
-    uint8_t mapping_fault;
-} BallShuttleMeasurement;
-
-typedef struct {
     BallShuttleState state;
-    BallShuttleFailure failure;
     BallShuttleConfig config;
     uint32_t started_ms;
     uint32_t phase_started_ms;
@@ -71,10 +55,8 @@ uint8_t BallShuttleControl_Start(BallShuttleControl *control,
 void BallShuttleControl_HoldLevel(BallShuttleControl *control,
                                   uint32_t now_ms);
 void BallShuttleControl_Stop(BallShuttleControl *control);
-BallShuttleEvent BallShuttleControl_Update(
-    BallShuttleControl *control,
-    uint32_t now_ms,
-    const BallShuttleMeasurement *measurement);
+BallShuttleEvent BallShuttleControl_Update(BallShuttleControl *control,
+                                           uint32_t now_ms);
 float BallShuttleControl_GetTargetPipePitchDeg(
     const BallShuttleControl *control);
 uint8_t BallShuttleControl_IsRunning(const BallShuttleControl *control);

@@ -2058,7 +2058,7 @@ class ShuttleTab:
         ttk.Label(
             self.frame,
             text="提示：启动前请确保标定模式(CAL)关闭、小车停车、钢球人工放回中心；"
-            "运行期间K230数据不参与控制，仅需IMU姿态有效。",
+            "角度输出为纯开环，无需水管标定与IMU，K230仅在启动时检查钢球是否在中心。",
             foreground="#616161",
         ).pack(anchor="w", padx=8, pady=4)
 

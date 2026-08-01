@@ -1052,8 +1052,26 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
     uint8_t attitude_safe;
     uint8_t attitude_stable;
 
-    if ((control->enabled_requested == 0U) ||
-        (control->mapping_valid == 0U)) {
+    if (control->enabled_requested == 0U) {
+        control->enabled = 0U;
+        control->attitude_stable_ready = 0U;
+        return;
+    }
+
+    if (control->manual_pipe_mode_enabled != 0U) {
+        /* 开环水管角模式：不依赖 IMU 姿态与标定映射，直接启用，
+         * 输出仅由限速斜坡和角度限幅决定。 */
+        if (control->enabled == 0U) {
+            control->enabled = 1U;
+            control->enabled_since_ms = now_ms;
+            BallBalanceControl_ClearVisionState(control, 1U);
+        }
+        control->imu_fault = 0U;
+        control->attitude_stable_ready = 1U;
+        return;
+    }
+
+    if (control->mapping_valid == 0U) {
         control->enabled = 0U;
         control->attitude_stable_ready = 0U;
         return;
@@ -1064,27 +1082,6 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         (uint8_t) ((attitude_fresh != 0U) &&
                    (BallBalanceControl_Abs(control->measured_pipe_pitch_deg) <=
                     BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG));
-    if (control->manual_pipe_mode_enabled != 0U) {
-        if (attitude_safe == 0U) {
-            control->attitude_stable_ready = 0U;
-            if (BallBalanceControl_AttitudeUnsafeDebounce(control,
-                                                          attitude_safe,
-                                                          now_ms) != 0U) {
-                control->enabled = 0U;
-                control->imu_fault = 1U;
-                control->attitude_stable_ready = 0U;
-            }
-            return;
-        }
-        if (control->enabled == 0U) {
-            control->enabled = 1U;
-            control->enabled_since_ms = now_ms;
-            BallBalanceControl_ClearVisionState(control, 1U);
-        }
-        control->imu_fault = 0U;
-        control->attitude_stable_ready = 1U;
-        return;
-    }
     if (control->enabled != 0U) {
         if (BallBalanceControl_AttitudeUnsafeDebounce(control,
                                                       attitude_safe,
@@ -1133,8 +1130,14 @@ static void BallBalanceControl_UpdateServoCommand(BallBalanceControl *control,
     float corrected_pipe_command = 0.0f;
     float maximum_delta;
 
-    if ((control->enabled != 0U) &&
-        (BallBalanceControl_AttitudeIsFresh(control, now_ms) != 0U)) {
+    if (control->manual_pipe_mode_enabled != 0U) {
+        /* 开环水管角模式：目标角直接前馈到舵机，不叠加 IMU 姿态修正。 */
+        control->pipe_pitch_error_deg = 0.0f;
+        control->pipe_p_term_deg = 0.0f;
+        control->pipe_d_term_deg = 0.0f;
+        corrected_pipe_command = control->command_pipe_pitch_deg;
+    } else if ((control->enabled != 0U) &&
+               (BallBalanceControl_AttitudeIsFresh(control, now_ms) != 0U)) {
         control->pipe_pitch_error_deg = control->command_pipe_pitch_deg -
                                         control->measured_pipe_pitch_deg;
         control->pipe_p_term_deg = control->pipe_kp *
@@ -1153,7 +1156,8 @@ static void BallBalanceControl_UpdateServoCommand(BallBalanceControl *control,
         control->pipe_d_term_deg = 0.0f;
     }
 
-    if (control->mapping_valid != 0U) {
+    if ((control->manual_pipe_mode_enabled != 0U) ||
+        (control->mapping_valid != 0U)) {
         /* 线性PWM换算由BSP执行；控制层输出经过IMU内环修正的相对水管角。 */
         control->feedforward_model_pitch_deg =
             (control->enabled != 0U) ?
@@ -1308,7 +1312,9 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     }
 
     normalized_enabled = (enabled != 0U) ? 1U : 0U;
-    if ((normalized_enabled != 0U) && (control->mapping_valid == 0U)) {
+    if ((normalized_enabled != 0U) &&
+        (control->manual_pipe_mode_enabled == 0U) &&
+        (control->mapping_valid == 0U)) {
         return;
     }
     if (normalized_enabled == 0U) {

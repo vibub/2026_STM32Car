@@ -559,7 +559,7 @@ static void HostCalib_HandleShuttleCommand(const char *argument)
     const char *cursor = argument;
     uint8_t sub_length = 0U;
     float angles[3];
-    float times[3];
+    uint32_t times[3];
     uint8_t index;
 
     while ((*cursor == ' ') || (*cursor == '\t')) {
