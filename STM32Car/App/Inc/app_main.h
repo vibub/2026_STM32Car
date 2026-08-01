@@ -11,6 +11,7 @@ extern volatile uint8_t g_app_init_step;
 #define APP_MODE_BASIC_LINE 0x01U /* 基础八路红外巡线模式编号。 */
 #define APP_MODE_AB         0x06U /* 第四项：A 到 B 中心稳定通过。 */
 #define APP_MODE_ABCD       0x07U /* 第五项：ABCD 整圈中心稳定通过。 */
+#define APP_MODE_ABCD_TARGET 0x08U /* 第六项：ABCD 整圈保持进入时钢球位置。 */
 
 typedef enum {
     APP_DYNAMIC_START_REJECT_NONE = 0,
@@ -18,7 +19,9 @@ typedef enum {
     APP_DYNAMIC_START_REJECT_CALIBRATING,
     APP_DYNAMIC_START_REJECT_NOT_CALIBRATED,
     APP_DYNAMIC_START_REJECT_OTHER_TASK,
-    APP_DYNAMIC_START_REJECT_BALANCE_ENABLE
+    APP_DYNAMIC_START_REJECT_BALANCE_ENABLE,
+    APP_DYNAMIC_START_REJECT_VISION,
+    APP_DYNAMIC_START_REJECT_TARGET_RANGE
 } AppDynamicStartRejectReason;
 
 typedef enum {
@@ -68,6 +71,7 @@ uint8_t App_StartSmoothAbRun(void);
 uint8_t App_StartSmoothLapRun(void);
 uint8_t App_StartAbRun(void);
 uint8_t App_StartAbcdRun(void);
+uint8_t App_StartAbcdTargetRun(void);
 uint8_t App_IsDynamicRunCommandLocked(void);
 uint8_t App_SetBallBalanceEnabled(uint8_t enabled);
 uint8_t App_GetBallBalanceEnabled(void);

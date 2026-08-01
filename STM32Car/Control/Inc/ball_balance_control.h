@@ -10,6 +10,7 @@
 #define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.014f /* 钢球速度阻尼增益，单位为度每毫米每秒。 */
 #define BALL_BALANCE_DEFAULT_PIPE_KP              0.60f /* IMU姿态角误差比例修正。 */
 #define BALL_BALANCE_DEFAULT_PIPE_KD_S            0.050f /* 使用120 Hz陀螺仪X轴角速度的阻尼系数，单位为秒。 */
+#define BALL_BALANCE_TARGET_LIMIT_MM             100.0f /* 钢球目标位置允许的绝对上限，单位为毫米。 */
 
 typedef struct {
     uint8_t valid;
@@ -69,6 +70,7 @@ typedef struct {
     uint8_t transport_imu_valid;
     uint8_t transport_wall_valid;
     uint8_t spike_reject_active;
+    uint8_t preserve_vision_on_enable;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
     uint32_t last_valid_ms;
@@ -204,8 +206,17 @@ void BallBalanceControl_Init(BallBalanceControl *control);
 void BallBalanceControl_SetEnabled(BallBalanceControl *control,
                                    uint8_t enabled,
                                    uint32_t now_ms);
+void BallBalanceControl_SetEnabledPreserveVision(
+    BallBalanceControl *control,
+    uint8_t enabled,
+    uint32_t now_ms);
 uint8_t BallBalanceControl_IsEnabled(const BallBalanceControl *control);
 uint8_t BallBalanceControl_IsActive(const BallBalanceControl *control);
+uint8_t BallBalanceControl_GetFreshObservedPosition(
+    const BallBalanceControl *control,
+    uint32_t now_ms,
+    uint32_t maximum_age_ms,
+    float *position_mm);
 void BallBalanceControl_SetTargetMm(BallBalanceControl *control,
                                     float target_mm);
 void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,

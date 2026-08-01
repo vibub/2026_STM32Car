@@ -243,6 +243,8 @@ static uint8_t s_last_ball_imu_fault;
 static uint32_t s_last_ball_sample_ms;
 static uint8_t s_tjc_status_pending;
 static Tjc_StatusText s_pending_tjc_status;
+static uint8_t s_tjc_dynamic_target_pending;
+static float s_pending_tjc_dynamic_target_mm;
 static uint8_t s_tjc_shuttle_phase_pending;
 static uint8_t s_pending_tjc_shuttle_phase;
 static float s_pending_tjc_shuttle_target_deg;
@@ -261,8 +263,10 @@ static void App_DynamicRunTask(uint32_t now_ms,
                                uint8_t include_measurement);
 static void App_DynamicRunFail(uint32_t now_ms,
                                DynamicRunFailure failure);
+static uint8_t App_DynamicRunIsLapMode(void);
 
 #define APP_LINE_SENSOR_FAILURE_LIMIT          3U /* 红外 I2C 连续读取失败后停车的次数门槛。 */
+#define APP_DYNAMIC_TARGET_SAMPLE_MAX_AGE_MS 300U /* 第六题目标捕获允许的滤波位置最大年龄。 */
 #define APP_BALL_SHUTTLE_CENTER_LIMIT_D10_MM  50  /* 第三题启动时最新单帧必须位于O点正负5毫米。 */
 #define APP_BALL_SHUTTLE_SAMPLE_MAX_AGE_MS   200U /* 第三题启动允许的K230最新样本最大年龄。 */
 #define APP_BALL_SHUTTLE_MIN_QUALITY          50U /* 第三题启动单帧所需的最低识别质量。 */
@@ -500,8 +504,8 @@ static const ChassisMotionConfig s_abcd_motion_config = {
 };
 
 static const DynamicRunTaskConfig s_dynamic_run_config = {
-    APP_DYNAMIC_PREPARE_TIMEOUT_MS,       /* 等待钢球回中稳定的最长时间。 */
-    APP_DYNAMIC_READY_HOLD_MS,            /* 中心条件连续保持的起步确认时间。 */
+    APP_DYNAMIC_PREPARE_TIMEOUT_MS,       /* 等待钢球任务目标稳定的最长时间。 */
+    APP_DYNAMIC_READY_HOLD_MS,            /* 目标条件连续保持的起步确认时间。 */
     APP_DYNAMIC_READY_SAMPLE_GAP_MS,      /* 准备阶段视觉样本间隔上限。 */
     APP_AB_TIMEOUT_MS,                    /* 第四题从起步到通过 B 的限时。 */
     APP_ABCD_TIMEOUT_MS,                  /* 第五题从起步到通过 A 的限时。 */
@@ -791,6 +795,12 @@ static void App_QueueTjcStatus(Tjc_StatusText status)
     s_tjc_status_pending = 1U;
 }
 
+static void App_QueueTjcDynamicTarget(float target_mm)
+{
+    s_pending_tjc_dynamic_target_mm = target_mm;
+    s_tjc_dynamic_target_pending = 1U;
+}
+
 static void App_QueueTjcShuttlePhase(uint8_t phase,
                                      float target_pipe_pitch_deg)
 {
@@ -804,6 +814,10 @@ static void App_SendPendingTjcStatus(void)
     if (s_tjc_status_pending != 0U) {
         s_tjc_status_pending = 0U;
         Protocol_Tjc_SendStatusText(s_pending_tjc_status);
+    }
+    if (s_tjc_dynamic_target_pending != 0U) {
+        s_tjc_dynamic_target_pending = 0U;
+        Protocol_Tjc_SendDynamicTarget(s_pending_tjc_dynamic_target_mm);
     }
     if (s_tjc_shuttle_phase_pending != 0U) {
         s_tjc_shuttle_phase_pending = 0U;
@@ -1031,7 +1045,7 @@ static void App_BallBalanceTask(uint32_t now_ms)
         s_pipe_attitude_output.pitch_deg,
         s_pipe_attitude_output.attitude_valid);
     wall_valid = (uint8_t) (
-        (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+        (App_DynamicRunIsLapMode() != 0U) &&
         (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
         (s_chassis_lateral_output.valid != 0U) &&
         (s_chassis_lateral_output.turn_active != 0U));
@@ -1218,6 +1232,19 @@ static uint8_t App_DynamicRunIsDriving(void)
     return DynamicRunTask_IsDriving(&s_dynamic_run_task);
 }
 
+static uint8_t App_DynamicRunIsLapMode(void)
+{
+    return (uint8_t) ((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) ||
+                      (s_dynamic_run_task.mode ==
+                       DYNAMIC_RUN_MODE_ABCD_TARGET));
+}
+
+static uint8_t App_DynamicRunIsTargetMode(void)
+{
+    return (uint8_t) (s_dynamic_run_task.mode ==
+                      DYNAMIC_RUN_MODE_ABCD_TARGET);
+}
+
 static void App_SetBallLimitWarning(uint8_t active)
 {
     uint8_t normalized_active = (active != 0U) ? 1U : 0U;
@@ -1253,8 +1280,12 @@ static Tjc_StatusText App_DynamicRunFailureStatus(
         case DYNAMIC_RUN_FAILURE_MOTOR:
             return TJC_STATUS_RUN_FAILED_MOTOR;
         default:
-            return (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) ?
-                   TJC_STATUS_AB_FAILED : TJC_STATUS_ABCD_FAILED;
+            if (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) {
+                return TJC_STATUS_AB_FAILED;
+            }
+            return (App_DynamicRunIsTargetMode() != 0U) ?
+                   TJC_STATUS_ABCD_TARGET_FAILED :
+                   TJC_STATUS_ABCD_FAILED;
     }
 }
 
@@ -1288,14 +1319,20 @@ static const ChassisMotionConfig *App_DynamicRunMotionConfig(void)
 
 static uint8_t App_DynamicRunAppMode(void)
 {
-    return (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) ?
-           APP_MODE_AB : APP_MODE_ABCD;
+    if (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) {
+        return APP_MODE_AB;
+    }
+    return (App_DynamicRunIsTargetMode() != 0U) ?
+           APP_MODE_ABCD_TARGET : APP_MODE_ABCD;
 }
 
 static Tjc_StatusText App_DynamicRunRunningStatus(void)
 {
-    return (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) ?
-           TJC_STATUS_AB_RUNNING : TJC_STATUS_ABCD_RUNNING;
+    if (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) {
+        return TJC_STATUS_AB_RUNNING;
+    }
+    return (App_DynamicRunIsTargetMode() != 0U) ?
+           TJC_STATUS_ABCD_TARGET_RUNNING : TJC_STATUS_ABCD_RUNNING;
 }
 
 static void App_DynamicRunTask(uint32_t now_ms,
@@ -1346,8 +1383,7 @@ static void App_DynamicRunTask(uint32_t now_ms,
     if (actions.start_motion != 0U) {
         motion_config = App_DynamicRunMotionConfig();
         app_mode = App_DynamicRunAppMode();
-        lap_stop_enabled = (uint8_t) (
-            s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD);
+        lap_stop_enabled = App_DynamicRunIsLapMode();
         BallBalanceControl_SetTransportMode(&s_ball_balance_control, 1U);
         if (App_StartLineRunInternal(now_ms,
                                      motion_config,
@@ -1370,6 +1406,7 @@ static void App_DynamicRunTask(uint32_t now_ms,
             BallBalanceControl_SetTransportMode(&s_ball_balance_control, 0U);
             BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U, now_ms);
         }
+        /* 第六题保留运输模式至底盘停稳，继续使用柔停减速度前馈保持目标。 */
         App_TimerStop(now_ms);
         Protocol_Tjc_SendDynamicRunResult(
             (uint8_t) s_dynamic_run_task.mode,
@@ -1379,6 +1416,11 @@ static void App_DynamicRunTask(uint32_t now_ms,
     }
 
     if (actions.enter_stop_mode != 0U) {
+        if (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD_TARGET) {
+            BallBalanceControl_SetEnabled(&s_ball_balance_control,
+                                          0U,
+                                          now_ms);
+        }
         App_EnterStopMode(now_ms);
     }
     App_UpdateChassisMotionDebug();
@@ -1495,7 +1537,7 @@ static void App_ControlStep(uint32_t now_ms)
 
     if (lap_stop_completed != 0U) {
         if ((s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
-            (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD)) {
+            (App_DynamicRunIsLapMode() != 0U)) {
             s_dynamic_route_passed = 1U;
         } else {
             App_EnterStopMode(now_ms);
@@ -1572,7 +1614,7 @@ static void App_FillK230Telemetry(uint32_t now_ms,
     if (s_pipe_attitude_output.accel_trusted != 0U) {
         flags |= APP_K230_TELEMETRY_FLAG_ACCEL_TRUSTED;
     }
-    if ((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+    if ((App_DynamicRunIsLapMode() != 0U) &&
         (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
         (s_chassis_lateral_output.turn_active != 0U)) {
         flags |= APP_K230_TELEMETRY_FLAG_WALL_ACTIVE;
@@ -1612,7 +1654,7 @@ static void App_K230TelemetryTask(uint32_t now_ms)
     App_FillK230Telemetry(now_ms, &telemetry);
     if (s_k230_telemetry_session_active == 0U) {
         if (((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_AB) ||
-             (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD)) &&
+             (App_DynamicRunIsLapMode() != 0U)) &&
             (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
             (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_START,
                                     &telemetry) != 0U)) {
@@ -1623,7 +1665,7 @@ static void App_K230TelemetryTask(uint32_t now_ms)
     }
 
     if (((s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_AB) &&
-         (s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_ABCD)) ||
+         (App_DynamicRunIsLapMode() == 0U)) ||
         (s_dynamic_run_task.state != DYNAMIC_RUN_STATE_RUNNING)) {
         if (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_END,
                                    &telemetry) != 0U) {
@@ -1734,6 +1776,8 @@ void App_Init(void)
     g_app_ball_limit_warning_count = 0U;
     s_tjc_status_pending = 0U;
     s_pending_tjc_status = TJC_STATUS_BALANCE_DISABLED;
+    s_tjc_dynamic_target_pending = 0U;
+    s_pending_tjc_dynamic_target_mm = 0.0f;
     s_tjc_shuttle_phase_pending = 0U;
     s_pending_tjc_shuttle_phase = 0U;
     s_pending_tjc_shuttle_target_deg = 0.0f;
@@ -1792,6 +1836,7 @@ uint8_t App_RequestMode(uint8_t mode)
     if (mode == APP_MODE_STOP) {
         DynamicRunTask_Cancel(&s_dynamic_run_task);
         s_dynamic_route_passed = 0U;
+        s_tjc_dynamic_target_pending = 0U;
         App_SetBallLimitWarning(0U);
         App_SetBallBalanceEnabled(0U);
         App_EnterStopMode(Board_TimeMs());
@@ -1873,12 +1918,15 @@ static uint8_t App_RejectDynamicStart(
 
 static uint8_t App_StartDynamicRun(DynamicRunMode mode,
                                    uint8_t app_mode,
-                                   Tjc_StatusText preparing_status)
+                                   Tjc_StatusText preparing_status,
+                                   uint8_t capture_current_target)
 {
     uint32_t now_ms = Board_TimeMs();
+    float target_mm = 0.0f;
 
     g_app_dynamic_start_reject =
         (uint8_t) APP_DYNAMIC_START_REJECT_NONE;
+    s_tjc_dynamic_target_pending = 0U;
     if (s_current_mode != APP_MODE_STOP) {
         return App_RejectDynamicStart(
             APP_DYNAMIC_START_REJECT_NOT_STOPPED,
@@ -1903,15 +1951,36 @@ static uint8_t App_StartDynamicRun(DynamicRunMode mode,
             APP_DYNAMIC_START_REJECT_OTHER_TASK,
             TJC_STATUS_RUN_REJECT_BUSY);
     }
+    if (capture_current_target != 0U) {
+        if (BallBalanceControl_GetFreshObservedPosition(
+                &s_ball_balance_control,
+                now_ms,
+                APP_DYNAMIC_TARGET_SAMPLE_MAX_AGE_MS,
+                &target_mm) == 0U) {
+            return App_RejectDynamicStart(
+                APP_DYNAMIC_START_REJECT_VISION,
+                TJC_STATUS_RUN_REJECT_VISION);
+        }
+        if (App_Abs(target_mm) > BALL_BALANCE_TARGET_LIMIT_MM) {
+            return App_RejectDynamicStart(
+                APP_DYNAMIC_START_REJECT_TARGET_RANGE,
+                TJC_STATUS_RUN_REJECT_TARGET);
+        }
+    }
 
     BallShuttleControl_Stop(&s_ball_shuttle_control);
     BallBalanceControl_SetManualPipeMode(
         &s_ball_balance_control, 0U, 0.0f);
     BallBalanceControl_SetEndpointHoldEnabled(&s_ball_balance_control, 0U);
-    BallBalanceControl_SetTargetMm(&s_ball_balance_control, 0.0f);
-    /* 准备阶段先使用完整位置控制回中，真正起步前再切换混合前馈。 */
+    BallBalanceControl_SetTargetMm(&s_ball_balance_control, target_mm);
+    /* 准备阶段先使用完整位置控制稳定目标，真正起步前再切换混合前馈。 */
     BallBalanceControl_SetTransportMode(&s_ball_balance_control, 0U);
-    BallBalanceControl_SetEnabled(&s_ball_balance_control, 1U, now_ms);
+    if (capture_current_target != 0U) {
+        BallBalanceControl_SetEnabledPreserveVision(
+            &s_ball_balance_control, 1U, now_ms);
+    } else {
+        BallBalanceControl_SetEnabled(&s_ball_balance_control, 1U, now_ms);
+    }
     if (BallBalanceControl_IsEnabled(&s_ball_balance_control) == 0U) {
         BallBalanceControl_SetTransportMode(&s_ball_balance_control, 0U);
         return App_RejectDynamicStart(
@@ -1932,6 +2001,9 @@ static uint8_t App_StartDynamicRun(DynamicRunMode mode,
     s_lap_stop_enabled = 0U;
     App_StopClosedLoop();
     App_QueueTjcStatus(preparing_status);
+    if (capture_current_target != 0U) {
+        App_QueueTjcDynamicTarget(target_mm);
+    }
     App_UpdateChassisMotionDebug();
     return 1U;
 }
@@ -1940,14 +2012,24 @@ uint8_t App_StartAbRun(void)
 {
     return App_StartDynamicRun(DYNAMIC_RUN_MODE_AB,
                                APP_MODE_AB,
-                               TJC_STATUS_AB_PREPARING);
+                               TJC_STATUS_AB_PREPARING,
+                               0U);
 }
 
 uint8_t App_StartAbcdRun(void)
 {
     return App_StartDynamicRun(DYNAMIC_RUN_MODE_ABCD,
                                APP_MODE_ABCD,
-                               TJC_STATUS_ABCD_PREPARING);
+                               TJC_STATUS_ABCD_PREPARING,
+                               0U);
+}
+
+uint8_t App_StartAbcdTargetRun(void)
+{
+    return App_StartDynamicRun(DYNAMIC_RUN_MODE_ABCD_TARGET,
+                               APP_MODE_ABCD_TARGET,
+                               TJC_STATUS_ABCD_TARGET_PREPARING,
+                               1U);
 }
 
 uint8_t App_IsDynamicRunCommandLocked(void)

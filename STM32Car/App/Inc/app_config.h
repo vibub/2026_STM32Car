@@ -31,8 +31,8 @@
 #define APP_K230_TELEMETRY_PERIOD_MS             50U /* ABCD遥测20 Hz，K230仅缓存，过A后再写SD卡。 */
 #define APP_AB_PASS_DISTANCE_CM           150.0f /* 第四项 A 到 B 直线的名义通过里程。 */
 #define APP_LAP_PASS_DISTANCE_CM          614.2f /* 第五、六项整圈的名义通过里程。 */
-#define APP_DYNAMIC_PREPARE_TIMEOUT_MS   10000U  /* 第四、五题等待钢球回中稳定的最长时间。 */
-#define APP_DYNAMIC_READY_HOLD_MS          300U  /* 钢球中心条件需要连续保持的起步确认时间。 */
+#define APP_DYNAMIC_PREPARE_TIMEOUT_MS   10000U  /* 第四至六题等待钢球目标稳定的最长时间。 */
+#define APP_DYNAMIC_READY_HOLD_MS          300U  /* 钢球目标条件需要连续保持的起步确认时间。 */
 #define APP_DYNAMIC_READY_SAMPLE_GAP_MS    200U  /* 准备阶段相邻有效视觉样本允许的最大间隔。 */
 #define APP_DYNAMIC_READY_POSITION_MM       5.0f /* 允许底盘起步的钢球位置误差绝对值上限。 */
 #define APP_DYNAMIC_READY_SPEED_MM_S        15.0f /* 允许底盘起步的钢球速度绝对值上限。 */

@@ -1658,6 +1658,91 @@ static void test_nonlinear_mapping_interpolation(void)
     assert(output.mapping_fault == 0U);
 }
 
+static void test_ball_balance_passive_observation(void)
+{
+    BallBalanceControl control;
+    BallBalanceMeasurement measurement;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
+    float captured_position_mm;
+    float captured_velocity_mm_s;
+    float observed_position_mm;
+    uint32_t now_ms = 100U;
+    uint8_t index;
+
+    build_linear_mapping(1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
+
+    measurement.valid = 1U;
+    measurement.position_d10_mm = 250;
+    measurement.quality = 80U;
+    measurement.sequence = 1U;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              0,
+                              &output);
+    assert(output.enabled == 0U);
+    assert(output.measurement_accepted != 0U);
+    assert(output.tracking_valid != 0U);
+    assert_float_near(output.filtered_position_mm, 25.0f);
+    assert_float_near(output.command_angle_deg, 0.0f);
+
+    measurement.position_d10_mm = 350;
+    measurement.sequence++;
+    now_ms += 100U;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              0,
+                              &output);
+    assert(output.filtered_position_mm > 25.0f);
+    assert(output.velocity_mm_s > 0.0f);
+    captured_position_mm = output.filtered_position_mm;
+    captured_velocity_mm_s = output.velocity_mm_s;
+    assert(BallBalanceControl_GetFreshObservedPosition(
+               &control, now_ms, 300U, &observed_position_mm) != 0U);
+    assert_float_near(observed_position_mm, captured_position_mm);
+
+    BallBalanceControl_SetTargetMm(&control, captured_position_mm);
+    BallBalanceControl_SetEnabledPreserveVision(&control, 1U, now_ms);
+    attitude.valid = 1U;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 10U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control,
+                                  now_ms,
+                                  0,
+                                  &attitude,
+                                  &output);
+    }
+    assert(output.enabled != 0U);
+    assert(output.tracking_valid != 0U);
+    assert_float_near(output.filtered_position_mm, captured_position_mm);
+    assert_float_near(output.velocity_mm_s, captured_velocity_mm_s);
+
+    control.integral_active = 1U;
+    control.integral_mm_s = 5.0f;
+    control.transport_recovery_active = 1U;
+    BallBalanceControl_SetEnabledPreserveVision(&control, 1U, now_ms);
+    assert(control.enabled != 0U);
+    assert(control.tracking_valid != 0U);
+    assert_float_near(control.filtered_position_mm, captured_position_mm);
+    assert_float_near(control.velocity_mm_s, captured_velocity_mm_s);
+    assert(control.integral_active == 0U);
+    assert_float_near(control.integral_mm_s, 0.0f);
+    assert(control.transport_recovery_active == 0U);
+
+    now_ms += 101U;
+    assert(BallBalanceControl_GetFreshObservedPosition(
+               &control, now_ms, 300U, &observed_position_mm) == 0U);
+}
+
 static void test_speed_pid(void)
 {
     WheelSpeedPid pid;
@@ -1831,6 +1916,7 @@ int main(void)
     test_flexible_pipe_mapping_limits();
     test_extended_downward_pipe_limit();
     test_nonlinear_mapping_interpolation();
+    test_ball_balance_passive_observation();
     test_ball_balance_transport_mode();
     test_speed_pid();
     puts("基础控制、IMU 姿态与钢球平衡主机测试通过");

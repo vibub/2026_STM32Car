@@ -307,7 +307,8 @@ uint8_t DynamicRunTask_Start(DynamicRunTask *task,
 {
     if ((task == 0) ||
         ((mode != DYNAMIC_RUN_MODE_AB) &&
-         (mode != DYNAMIC_RUN_MODE_ABCD)) ||
+         (mode != DYNAMIC_RUN_MODE_ABCD) &&
+         (mode != DYNAMIC_RUN_MODE_ABCD_TARGET)) ||
         (DynamicRunTask_IsActive(task) != 0U)) {
         return 0U;
     }

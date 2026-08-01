@@ -18,7 +18,7 @@ static DynamicRunTaskConfig build_config(void)
     config.ready_hold_ms = 300U;              /* 测试使用的中心稳定时间。 */
     config.ready_sample_gap_ms = 200U;        /* 测试使用的视觉样本间隔上限。 */
     config.ab_timeout_ms = 8000U;             /* 测试使用的第四题限时。 */
-    config.abcd_timeout_ms = 30000U;          /* 测试使用的第五题限时。 */
+    config.abcd_timeout_ms = 30000U;          /* 测试使用的第五、六题限时。 */
     config.ready_position_limit_mm = 5.0f;    /* 测试使用的起步位置门槛。 */
     config.ready_speed_limit_mm_s = 15.0f;    /* 测试使用的起步速度门槛。 */
     config.warning_limit_mm = 10.0f;          /* 测试使用的超差门槛。 */
@@ -352,6 +352,28 @@ static void test_running_vision_fault_debounced(void)
     assert(DynamicRunTask_IsActive(&task) == 0U);
 }
 
+static void test_abcd_target_uses_lap_timeout(void)
+{
+    DynamicRunTask task;
+    DynamicRunTaskConfig config = build_config();
+    DynamicRunTaskInput input;
+    DynamicRunTaskActions actions;
+
+    assert(DynamicRunTask_Init(&task, &config) != 0U);
+    start_running_task(&task, DYNAMIC_RUN_MODE_ABCD_TARGET);
+
+    input = build_ready_input(30299U);
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.request_soft_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_RUNNING);
+
+    input = build_ready_input(30300U);
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.request_soft_stop != 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
+    assert(task.result == DYNAMIC_RUN_RESULT_TIMEOUT);
+}
+
 static void test_abcd_braking_ignores_post_finish_ball_loss(void)
 {
     DynamicRunTask task;
@@ -399,7 +421,8 @@ int main(void)
     test_timeout_requests_soft_stop();
     test_ab_braking_preserves_frozen_result_after_ball_loss();
     test_running_vision_fault_debounced();
+    test_abcd_target_uses_lap_timeout();
     test_abcd_braking_ignores_post_finish_ball_loss();
-    puts("第四、五题动态任务状态机测试通过");
+    puts("第四至六题动态任务状态机测试通过");
     return 0;
 }
