@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define SERVO_DRIVER_MIN_PULSE_US          500U     /* 上位机实测确认的安全最小脉宽。 */
-#define SERVO_DRIVER_CENTER_PULSE_US      1070U     /* 上电默认零位，需通过TJC page2人工调平确认。 */
+#define SERVO_DRIVER_CENTER_PULSE_US      1060U     /* 水管水平位置对应的实测脉宽。 */
 #define SERVO_DRIVER_MAX_PULSE_US         1600U     /* 上位机实测确认的安全最大脉宽。 */
 #define SERVO_DRIVER_PIPE_DEG_PER_US         0.01009f /* PWM每增加1 us对应的正向水管角。 */
 #define SERVO_DRIVER_MIN_PIPE_PITCH_DEG   (-5.5495f) /* 兼容控制请求的相对水管角下限。 */

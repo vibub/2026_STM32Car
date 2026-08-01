@@ -1803,6 +1803,23 @@ static void test_ball_balance_transport_mode(void)
         output.transport_feedback_pitch_deg, 0.0f, 0.01f);
     assert(output.desired_pipe_pitch_deg < 0.0f);
 
+    /* The transport feedforward angle is the moving equilibrium, not an
+     * extra source of ball acceleration.  When measured pipe pitch follows
+     * that equilibrium, prediction must see approximately zero acceleration
+     * and must not enter recovery from feedforward alone. */
+    attitude.pitch_deg = output.transport_feedforward_pitch_deg;
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert_float_near_tolerance(
+        output.predicted_accel_mm_s2, 0.0f, 0.05f);
+    assert_float_near_tolerance(
+        output.predicted_position_mm, output.filtered_position_mm, 0.05f);
+    assert(output.transport_recovery_active == 0U);
+    attitude.pitch_deg = 0.0f;
+
     BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
     BallBalanceControl_SetTransportWallAcceleration(
         &control, 0.49f, 1U);
@@ -1833,7 +1850,7 @@ static void test_ball_balance_transport_mode(void)
     BallBalanceControl_SetTransportWallAcceleration(
         &control, 0.0f, 0U);
     /* 实际位置尚未到7 mm，但速度外推将越界时必须提前启用增强D制动。 */
-    measurement.position_d10_mm = 90;
+    measurement.position_d10_mm = 120;
     measurement.sequence++;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
@@ -1908,6 +1925,76 @@ static void test_ball_balance_transport_mode(void)
     assert(output.transport_feedback_pitch_deg >= -1.50f);
 }
 
+static void test_ball_balance_transport_startup_guard(void)
+{
+    BallBalanceControl control;
+    BallBalanceAttitude attitude;
+    BallBalanceOutput output;
+    float mapping_pitch_deg[LINKAGE_KINEMATICS_CALIBRATION_POINT_COUNT];
+    uint32_t now_ms = 1000U;
+    uint8_t index;
+
+    build_linear_mapping(1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_Init(&control);
+    BallBalanceControl_SetPipeCalibration(
+        &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
+    BallBalanceControl_SetEnabled(&control, 1U, now_ms);
+
+    attitude.valid = 1U;
+    attitude.timestamp_ms = now_ms;
+    attitude.pitch_deg = 0.0f;
+    attitude.pitch_rate_dps = 0.0f;
+    for (index = 0U; index < 30U; index++) {
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    }
+    assert(output.enabled != 0U);
+
+    /* Reproduce run 0005's captured state.  With the corrected 40 ms fixed
+     * lookahead, -3.6 mm at -16.4 mm/s no longer predicts a false crossing
+     * of the -7 mm recovery boundary. */
+    control.tracking_valid = 1U;
+    control.filter_ready = 1U;
+    control.last_valid_ms = now_ms;
+    control.filtered_position_mm = -3.6f;
+    control.predicted_position_mm = -7.7f;
+    control.velocity_mm_s = -16.4f;
+    BallBalanceControl_SetTransportMode(&control, 1U);
+    assert_float_near_tolerance(control.velocity_mm_s, 0.0f, 0.001f);
+    assert_float_near_tolerance(
+        control.predicted_position_mm, -3.6f, 0.001f);
+
+    /* The real captured velocity now remains comfortably inside the bound. */
+    control.velocity_mm_s = -16.4f;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    assert(output.predicted_position_mm > -7.0f);
+    assert(output.transport_recovery_active == 0U);
+    assert(output.transport_feedback_pitch_deg > -0.10f);
+
+    /* Even an artificial first-frame velocity large enough to predict a
+     * boundary crossing must not trigger recovery before warmup completes. */
+    control.velocity_mm_s = -100.0f;
+    control.last_valid_ms = now_ms;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    assert(output.predicted_position_mm <= -7.0f);
+    assert(output.transport_recovery_active == 0U);
+
+    /* A real position error beyond 7 mm still starts recovery immediately. */
+    control.filtered_position_mm = -8.0f;
+    control.velocity_mm_s = 0.0f;
+    control.last_valid_ms = now_ms;
+    now_ms += 20U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
+    assert(output.transport_recovery_active != 0U);
+    assert(output.transport_feedback_pitch_deg <= -0.74f);
+}
+
 int main(void)
 {
     test_infrared_eight_positions();
@@ -1930,6 +2017,7 @@ int main(void)
     test_nonlinear_mapping_interpolation();
     test_ball_balance_passive_observation();
     test_ball_balance_transport_mode();
+    test_ball_balance_transport_startup_guard();
     test_speed_pid();
     puts("基础控制、IMU 姿态与钢球平衡主机测试通过");
     return 0;
