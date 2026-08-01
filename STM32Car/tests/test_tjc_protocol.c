@@ -235,6 +235,9 @@ void App_GetBallShuttleConfig(float *phase_1_angle_deg,
 
 int main(void)
 {
+    static const uint8_t shuttle_query_frame[] = {
+        0x5AU, 0xA5U, 0x11U, 0xEEU
+    };
     static const uint8_t shuttle_save_frame[] = {
         0x5AU, 0xA5U, 0x10U,
         0xBCU, 0x02U, /* 第一阶段700 ms。 */
@@ -251,6 +254,13 @@ int main(void)
     };
 
     Protocol_Tjc_Init();
+
+    test_reset_tx();
+    test_feed(shuttle_query_frame,
+              (uint16_t) sizeof(shuttle_query_frame));
+    assert(test_tx_contains("page3.n0.val=300") != 0U);
+    assert(test_tx_contains("page3.n1.val=600") != 0U);
+    assert(test_tx_contains("page3.n2.val=300") != 0U);
 
     test_reset_tx();
     test_feed(shuttle_save_frame,
@@ -282,6 +292,6 @@ int main(void)
     assert(s_zero_adjust_active == 0U);
     assert(test_tx_contains("page2.n0.val=1150") != 0U);
 
-    puts("TJC page2零位PWM与page3第三题时间协议主机测试通过");
+    puts("TJC page2零位PWM与page3查询、烧录协议主机测试通过");
     return 0;
 }
