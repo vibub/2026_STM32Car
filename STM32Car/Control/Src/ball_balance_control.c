@@ -75,6 +75,8 @@
 #define BALL_BALANCE_TRANSPORT_IMU_BLEND              0.35f /* IMU 实测扰动对命令前馈的低频修正比例。 */
 #define BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG           2.00f /* 防止振动或侧向冲击污染纵向补偿。 */
 #define BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG            1.20f /* 起步和停车前馈的最大杆角。 */
+#define BALL_BALANCE_TRANSPORT_WALL_ACCEL_LIMIT_CM_S2  30.0f /* 管壁等效轴向加速度的实车调参保护。 */
+#define BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG        0.50f /* 弯道管壁补偿不得占满水管角度余量。 */
 #define BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM          0.012f /* 行驶中小幅位置修正增益。 */
 #define BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S        0.003f /* 行驶中钢珠速度阻尼。 */
 #define BALL_BALANCE_TRANSPORT_DEADBAND_MM              2.0f /* 中心附近不追逐视觉抖动。 */
@@ -560,8 +562,18 @@ static void BallBalanceControl_ApplyTransportCommand(
                  BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG) -
              expected_disturbance_deg);
     }
+    control->transport_wall_feedforward_pitch_deg = 0.0f;
+    if (control->transport_wall_valid != 0U) {
+        control->transport_wall_feedforward_pitch_deg =
+            BallBalanceControl_Limit(
+                -control->transport_wall_accel_cm_s2 *
+                    BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
+                -BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG,
+                BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG);
+    }
     control->transport_feedforward_pitch_deg = BallBalanceControl_Limit(
-        -effective_disturbance_deg,
+        -effective_disturbance_deg +
+            control->transport_wall_feedforward_pitch_deg,
         -BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG,
         BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG);
 
@@ -1234,6 +1246,10 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
         control->transport_command_accel_cm_s2;
     output->transport_imu_disturbance_deg =
         control->transport_imu_disturbance_deg;
+    output->transport_wall_accel_cm_s2 =
+        control->transport_wall_accel_cm_s2;
+    output->transport_wall_feedforward_pitch_deg =
+        control->transport_wall_feedforward_pitch_deg;
     output->transport_feedforward_pitch_deg =
         control->transport_feedforward_pitch_deg;
     output->transport_feedback_pitch_deg =
@@ -1301,8 +1317,11 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
         control->manual_pipe_mode_enabled = 0U;
         control->manual_pipe_target_deg = 0.0f;
         control->transport_imu_valid = 0U;
+        control->transport_wall_valid = 0U;
         control->transport_command_accel_cm_s2 = 0.0f;
         control->transport_imu_disturbance_deg = 0.0f;
+        control->transport_wall_accel_cm_s2 = 0.0f;
+        control->transport_wall_feedforward_pitch_deg = 0.0f;
         control->transport_feedforward_pitch_deg = 0.0f;
         control->transport_feedback_pitch_deg = 0.0f;
         control->integral_mm_s = 0.0f;
@@ -1407,8 +1426,11 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
         control->manual_pipe_target_deg = 0.0f;
     }
     control->transport_imu_valid = 0U;
+    control->transport_wall_valid = 0U;
     control->transport_command_accel_cm_s2 = 0.0f;
     control->transport_imu_disturbance_deg = 0.0f;
+    control->transport_wall_accel_cm_s2 = 0.0f;
+    control->transport_wall_feedforward_pitch_deg = 0.0f;
     control->transport_feedforward_pitch_deg = 0.0f;
     control->transport_feedback_pitch_deg = 0.0f;
     control->endpoint_hold_enabled = 0U;
@@ -1480,6 +1502,26 @@ void BallBalanceControl_SetTransportInputs(
         -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
         BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG);
     control->transport_imu_valid = (imu_valid != 0U) ? 1U : 0U;
+}
+
+void BallBalanceControl_SetTransportWallAcceleration(
+    BallBalanceControl *control,
+    float wall_accel_cm_s2,
+    uint8_t wall_valid)
+{
+    if (control == 0) {
+        return;
+    }
+
+    control->transport_wall_accel_cm_s2 = BallBalanceControl_Limit(
+        wall_accel_cm_s2,
+        -BALL_BALANCE_TRANSPORT_WALL_ACCEL_LIMIT_CM_S2,
+        BALL_BALANCE_TRANSPORT_WALL_ACCEL_LIMIT_CM_S2);
+    control->transport_wall_valid = (wall_valid != 0U) ? 1U : 0U;
+    if (control->transport_wall_valid == 0U) {
+        control->transport_wall_accel_cm_s2 = 0.0f;
+        control->transport_wall_feedforward_pitch_deg = 0.0f;
+    }
 }
 
 void BallBalanceControl_SetPidGains(BallBalanceControl *control,

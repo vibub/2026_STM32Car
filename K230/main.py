@@ -27,6 +27,7 @@ try:
     )
     from libs.PlatTasks import DetectionApp
     from vision_pipeline import VisionPipeline
+    from telemetry_logger import TelemetryRunLogger, TelemetryStreamParser
     try:
         from wifi_ap_rtsp import WifiApRtspStreamer
     except ImportError:
@@ -38,7 +39,7 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
+    print("required: ball_position.py, telemetry_logger.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
     raise
 
 actual_mapping_version = getattr(
@@ -385,6 +386,8 @@ def run():
     uart = None
     yolo = None
     video_streamer = None
+    telemetry_parser = TelemetryStreamParser()
+    telemetry_logger = TelemetryRunLogger()
     os.exitpoint(os.EXITPOINT_ENABLE)
 
     try:
@@ -433,11 +436,30 @@ def run():
         perf_uart_us = 0
         perf_osd_us = 0
         perf_loop_us = 0
+        last_result = None
+
+        def poll_stm32_telemetry(receive_ms):
+            data = uart.read()
+            if not data:
+                return
+            for telemetry_frame in telemetry_parser.feed(data):
+                try:
+                    saved_path = telemetry_logger.handle(
+                        telemetry_frame,
+                        last_result,
+                        receive_ms,
+                    )
+                    if saved_path is not None:
+                        print("ABCD telemetry saved:", saved_path)
+                except BaseException as error:
+                    print("ABCD telemetry save failed:")
+                    sys.print_exception(error)
 
         while True:
             os.exitpoint()
             loop_start_us = time.ticks_us()
             now_ms = time.ticks_ms()
+            poll_stm32_telemetry(now_ms)
             if (
                 VIDEO_AP_ENABLE and
                 not video_ap_started and
@@ -538,6 +560,8 @@ def run():
                 frame = pipeline.capture_vision_frame()
                 result = detector.detect(frame)
                 frame = None
+            last_result = result
+            poll_stm32_telemetry(time.ticks_ms())
 
             # 统计单位时间内真正完成的钢球识别次数，包含实际摄像头与系统开销。
             inference_window_frames += 1

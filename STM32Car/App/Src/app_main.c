@@ -185,6 +185,21 @@ volatile uint8_t g_app_ball_limit_warning;
 volatile uint32_t g_app_ball_limit_warning_count;
 volatile uint32_t g_app_k230_overflow_count;
 volatile uint32_t g_app_k230_error_count;
+volatile uint32_t g_app_k230_tx_frame_count;
+volatile uint32_t g_app_k230_tx_drop_count;
+volatile uint8_t g_app_lateral_valid;
+volatile uint8_t g_app_turn_active;
+volatile uint8_t g_app_lateral_bias_ready;
+volatile int8_t g_app_lateral_imu_sign;
+volatile float g_app_lateral_accel_x_bias_g;
+volatile float g_app_lateral_yaw_rate_dps;
+volatile float g_app_lateral_imu_accel_cm_s2;
+volatile float g_app_lateral_kinematic_accel_cm_s2;
+volatile float g_app_lateral_fused_accel_cm_s2;
+volatile float g_app_abcd_wall_coupling_gain =
+    APP_ABCD_WALL_COUPLING_GAIN;
+volatile float g_app_abcd_wall_accel_cm_s2;
+volatile float g_app_abcd_wall_pitch_deg;
 
 static uint32_t s_last_control_ms;
 static uint32_t s_oled_timer_start_ms;
@@ -197,6 +212,8 @@ static ChassisMotionProfile s_motion_profile;
 static ChassisMotionOutput s_motion_output;
 static ChassisAccelEstimator s_chassis_accel_estimator;
 static ChassisAccelOutput s_chassis_accel_output;
+static ChassisLateralEstimator s_chassis_lateral_estimator;
+static ChassisLateralOutput s_chassis_lateral_output;
 static BallBalanceControl s_ball_balance_control;
 static BallBalanceOutput s_ball_balance_output;
 static BallShuttleControl s_ball_shuttle_control;
@@ -218,6 +235,7 @@ static float s_balance_log_imu_accel_z_g;
 static float s_balance_log_imu_gyro_x_dps;
 #endif
 static float s_chassis_accel_cm_s2;
+static float s_latest_imu_accel_x_g;
 static uint8_t s_lap_stop_enabled;
 static uint8_t s_last_ball_active;
 static uint8_t s_last_ball_imu_fault;
@@ -234,6 +252,8 @@ volatile uint8_t g_app_host_calibration_enabled;
 static DynamicRunTask s_dynamic_run_task;
 static uint8_t s_dynamic_route_passed;
 static uint8_t s_ball_limit_warning;
+static uint8_t s_k230_telemetry_session_active;
+static uint32_t s_k230_telemetry_last_sample_ms;
 
 static void App_DynamicRunTask(uint32_t now_ms,
                                uint8_t evaluate_completion,
@@ -246,6 +266,15 @@ static void App_DynamicRunFail(uint32_t now_ms,
 #define APP_BALL_SHUTTLE_SAMPLE_MAX_AGE_MS   200U /* 第三题启动允许的K230最新样本最大年龄。 */
 #define APP_BALL_SHUTTLE_MIN_QUALITY          50U /* 第三题启动单帧所需的最低识别质量。 */
 #define APP_BALL_SHUTTLE_PIPE_SAFETY_DEG     7.0f /* 启动手动管角模式允许的最大当前俯仰。 */
+
+#define APP_K230_TELEMETRY_FLAG_LATERAL_VALID  (1U << 0)
+#define APP_K230_TELEMETRY_FLAG_TURN_ACTIVE    (1U << 1)
+#define APP_K230_TELEMETRY_FLAG_BIAS_READY     (1U << 2)
+#define APP_K230_TELEMETRY_FLAG_IMU_SIGN_READY (1U << 3)
+#define APP_K230_TELEMETRY_FLAG_BALL_VALID     (1U << 4)
+#define APP_K230_TELEMETRY_FLAG_OVERRANGE      (1U << 5)
+#define APP_K230_TELEMETRY_FLAG_ACCEL_TRUSTED  (1U << 6)
+#define APP_K230_TELEMETRY_FLAG_WALL_ACTIVE    (1U << 7)
 
 #define APP_SHUTTLE_NVM_ADDRESS       0x080E0000UL
 #define APP_SHUTTLE_NVM_END_ADDRESS   0x08100000UL
@@ -554,6 +583,24 @@ static void App_UpdateChassisMotionDebug(void)
     g_app_ball_limit_warning = s_ball_limit_warning;
     g_app_ball_limit_warning_count =
         s_dynamic_run_task.overrange_event_count;
+    g_app_lateral_valid = s_chassis_lateral_output.valid;
+    g_app_turn_active = s_chassis_lateral_output.turn_active;
+    g_app_lateral_bias_ready =
+        s_chassis_lateral_output.accel_bias_ready;
+    g_app_lateral_imu_sign =
+        s_chassis_lateral_output.imu_lateral_sign;
+    g_app_lateral_accel_x_bias_g =
+        s_chassis_lateral_output.accel_x_bias_g;
+    g_app_lateral_yaw_rate_dps =
+        s_chassis_lateral_output.yaw_rate_dps;
+    g_app_lateral_imu_accel_cm_s2 =
+        s_chassis_lateral_output.imu_accel_cm_s2;
+    g_app_lateral_kinematic_accel_cm_s2 =
+        s_chassis_lateral_output.kinematic_accel_cm_s2;
+    g_app_lateral_fused_accel_cm_s2 =
+        s_chassis_lateral_output.lateral_accel_cm_s2;
+    g_app_k230_tx_frame_count = K230Uart_GetTxFrameCount();
+    g_app_k230_tx_drop_count = K230Uart_GetTxDropCount();
 }
 
 static void App_UpdateBallBalanceDebug(void)
@@ -840,6 +887,15 @@ static void App_PipeAttitudeTask(uint32_t now_ms)
         measurement.gyro_z_dps = imu_sample.gyro_z_dps;
         measurement_ptr = &measurement;
         s_pipe_attitude_timestamp_ms = imu_sample.timestamp_ms;
+        s_latest_imu_accel_x_g = imu_sample.accel_x_g;
+        ChassisLateralEstimator_Update(
+            &s_chassis_lateral_estimator,
+            imu_sample.timestamp_ms,
+            s_chassis_accel_output.filtered_speed_cm_s,
+            imu_sample.accel_x_g,
+            imu_sample.gyro_z_dps,
+            imu_sample.valid,
+            &s_chassis_lateral_output);
 #if APP_ENABLE_BALANCE_LOG
         s_balance_log_imu_accel_y_g = imu_sample.accel_y_g;
         s_balance_log_imu_accel_z_g = imu_sample.accel_z_g;
@@ -938,6 +994,8 @@ static void App_BallBalanceTask(uint32_t now_ms)
     uint32_t overflow_count;
     uint32_t error_count;
     uint8_t byte;
+    uint8_t wall_valid;
+    float wall_accel_cm_s2;
 
     overflow_count = K230Uart_GetOverflowCount();
     error_count = K230Uart_GetErrorCount();
@@ -988,11 +1046,27 @@ static void App_BallBalanceTask(uint32_t now_ms)
         s_pipe_attitude_output.accel_pitch_deg -
         s_pipe_attitude_output.pitch_deg,
         s_pipe_attitude_output.attitude_valid);
+    wall_valid = (uint8_t) (
+        (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+        (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
+        (s_chassis_lateral_output.valid != 0U) &&
+        (s_chassis_lateral_output.turn_active != 0U));
+    wall_accel_cm_s2 = (wall_valid != 0U) ?
+        (g_app_abcd_wall_coupling_gain *
+         s_chassis_lateral_output.lateral_accel_cm_s2) : 0.0f;
+    BallBalanceControl_SetTransportWallAcceleration(
+        &s_ball_balance_control,
+        wall_accel_cm_s2,
+        wall_valid);
     BallBalanceControl_Update(&s_ball_balance_control,
                               now_ms,
                               measurement_ptr,
                               attitude_ptr,
                               &s_ball_balance_output);
+    g_app_abcd_wall_accel_cm_s2 =
+        s_ball_balance_output.transport_wall_accel_cm_s2;
+    g_app_abcd_wall_pitch_deg =
+        s_ball_balance_output.transport_wall_feedforward_pitch_deg;
     App_BallShuttleTask(now_ms);
     App_DynamicRunTask(now_ms, 0U, 1U);
     if ((s_pipe_attitude_output.servo_override_active == 0U) &&
@@ -1299,6 +1373,12 @@ static void App_DynamicRunTask(uint32_t now_ms,
 
     if (actions.request_soft_stop != 0U) {
         ChassisMotionProfile_RequestStop(&s_motion_profile);
+        if (s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) {
+            /* 通过A即结束第五题；随后只让底盘在A前方柔停，
+             * K230可以安全写SD卡，不再要求继续保持钢球。 */
+            BallBalanceControl_SetTransportMode(&s_ball_balance_control, 0U);
+            BallBalanceControl_SetEnabled(&s_ball_balance_control, 0U, now_ms);
+        }
         App_TimerStop(now_ms);
         Protocol_Tjc_SendDynamicRunResult(
             (uint8_t) s_dynamic_run_task.mode,
@@ -1473,6 +1553,100 @@ static void App_ControlStep(uint32_t now_ms)
     g_app_right_pwm_ratio = right_command;
 }
 
+static void App_FillK230Telemetry(uint32_t now_ms,
+                                  K230TelemetryInput *telemetry)
+{
+    uint16_t flags = 0U;
+
+    memset(telemetry, 0, sizeof(*telemetry));
+    if (s_chassis_lateral_output.valid != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_LATERAL_VALID;
+    }
+    if (s_chassis_lateral_output.turn_active != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_TURN_ACTIVE;
+    }
+    if (s_chassis_lateral_output.accel_bias_ready != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_BIAS_READY;
+    }
+    if (s_chassis_lateral_output.imu_sign_ready != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_IMU_SIGN_READY;
+    }
+    if (s_ball_balance_output.tracking_valid != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_BALL_VALID;
+    }
+    if (s_dynamic_run_task.overrange_latched != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_OVERRANGE;
+    }
+    if (s_pipe_attitude_output.accel_trusted != 0U) {
+        flags |= APP_K230_TELEMETRY_FLAG_ACCEL_TRUSTED;
+    }
+    if ((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+        (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
+        (s_chassis_lateral_output.turn_active != 0U)) {
+        flags |= APP_K230_TELEMETRY_FLAG_WALL_ACTIVE;
+    }
+
+    telemetry->timestamp_ms = now_ms;
+    telemetry->run_mode = (uint8_t) s_dynamic_run_task.mode;
+    telemetry->run_state = (uint8_t) s_dynamic_run_task.state;
+    telemetry->flags = flags;
+    telemetry->speed_cm_s = s_chassis_accel_output.filtered_speed_cm_s;
+    telemetry->yaw_rate_dps = s_chassis_lateral_output.yaw_rate_dps;
+    telemetry->accel_x_g = s_latest_imu_accel_x_g;
+    telemetry->lateral_kinematic_cm_s2 =
+        s_chassis_lateral_output.kinematic_accel_cm_s2;
+    telemetry->lateral_imu_cm_s2 =
+        s_chassis_lateral_output.imu_accel_cm_s2;
+    telemetry->lateral_fused_cm_s2 =
+        s_chassis_lateral_output.lateral_accel_cm_s2;
+    telemetry->ball_error_mm = s_ball_balance_output.error_mm;
+    telemetry->ball_velocity_mm_s = s_ball_balance_output.velocity_mm_s;
+    telemetry->pipe_command_deg =
+        s_ball_balance_output.command_pipe_pitch_deg;
+    telemetry->wall_accel_cm_s2 =
+        s_ball_balance_output.transport_wall_accel_cm_s2;
+    telemetry->wall_pitch_deg =
+        s_ball_balance_output.transport_wall_feedforward_pitch_deg;
+    telemetry->travelled_distance_cm =
+        s_motion_output.travelled_distance_cm;
+    telemetry->transport_feedback_pitch_deg =
+        s_ball_balance_output.transport_feedback_pitch_deg;
+}
+
+static void App_K230TelemetryTask(uint32_t now_ms)
+{
+    K230TelemetryInput telemetry;
+
+    App_FillK230Telemetry(now_ms, &telemetry);
+    if (s_k230_telemetry_session_active == 0U) {
+        if ((s_dynamic_run_task.mode == DYNAMIC_RUN_MODE_ABCD) &&
+            (s_dynamic_run_task.state == DYNAMIC_RUN_STATE_RUNNING) &&
+            (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_START,
+                                    &telemetry) != 0U)) {
+            s_k230_telemetry_session_active = 1U;
+            s_k230_telemetry_last_sample_ms = now_ms;
+        }
+        return;
+    }
+
+    if ((s_dynamic_run_task.mode != DYNAMIC_RUN_MODE_ABCD) ||
+        (s_dynamic_run_task.state != DYNAMIC_RUN_STATE_RUNNING)) {
+        if (K230Uart_SendTelemetry(K230_TELEMETRY_RUN_END,
+                                   &telemetry) != 0U) {
+            s_k230_telemetry_session_active = 0U;
+        }
+        return;
+    }
+
+    if ((uint32_t) (now_ms - s_k230_telemetry_last_sample_ms) >=
+        APP_K230_TELEMETRY_PERIOD_MS) {
+        if (K230Uart_SendTelemetry(K230_TELEMETRY_SAMPLE,
+                                   &telemetry) != 0U) {
+            s_k230_telemetry_last_sample_ms = now_ms;
+        }
+    }
+}
+
 void App_Init(void)
 {
     InfraredLineControl_Init(&s_line_control);
@@ -1482,6 +1656,7 @@ void App_Init(void)
     (void) DynamicRunTask_Init(&s_dynamic_run_task,
                                &s_dynamic_run_config);
     ChassisAccelEstimator_Init(&s_chassis_accel_estimator);
+    ChassisLateralEstimator_Init(&s_chassis_lateral_estimator);
     PipeAttitudeControl_Init(&s_pipe_attitude_control);
     BallBalanceControl_Init(&s_ball_balance_control);
     BalanceDebugLog_Init();
@@ -1528,12 +1703,15 @@ void App_Init(void)
     g_app_k230_error_count = s_last_k230_error_count;
     s_pipe_attitude_timestamp_ms = 0U;
     s_chassis_accel_cm_s2 = 0.0f;
+    s_latest_imu_accel_x_g = 0.0f;
     s_lap_stop_enabled = 0U;
     s_last_ball_active = 0U;
     s_last_ball_imu_fault = 0U;
     s_last_ball_sample_ms = 0U;
     s_dynamic_route_passed = 0U;
     s_ball_limit_warning = 0U;
+    s_k230_telemetry_session_active = 0U;
+    s_k230_telemetry_last_sample_ms = 0U;
     g_app_dynamic_run_mode = (uint8_t) DYNAMIC_RUN_MODE_NONE;
     g_app_dynamic_run_state = (uint8_t) DYNAMIC_RUN_STATE_IDLE;
     g_app_dynamic_run_result = (uint8_t) DYNAMIC_RUN_RESULT_NONE;
@@ -1604,6 +1782,7 @@ void App_Loop(void)
         App_DynamicRunTask(now_ms, 1U, 0U);
         now_ms = Board_TimeMs();
     }
+    App_K230TelemetryTask(now_ms);
     App_TimerTask(now_ms);
 }
 

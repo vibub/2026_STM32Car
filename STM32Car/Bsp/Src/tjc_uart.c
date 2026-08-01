@@ -147,6 +147,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     TjcUart_HandleRxComplete(huart);
 }
 
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    K230Uart_HandleTxComplete(huart);
+}
+
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     HostLinkUart_HandleError(huart);

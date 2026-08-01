@@ -246,6 +246,50 @@ static void test_chassis_accel_estimator(void)
     assert_near(output.accel_cm_s2, 0.0f, 0.001f);
 }
 
+static void test_chassis_lateral_estimator(void)
+{
+    ChassisLateralEstimator estimator;
+    ChassisLateralOutput output;
+    uint32_t now_ms = 0U;
+    uint16_t index;
+
+    ChassisLateralEstimator_Init(&estimator);
+    for (index = 0U; index < 40U; index++) {
+        now_ms += 10U;
+        ChassisLateralEstimator_Update(&estimator, now_ms,
+                                       0.0f, 0.020f, 0.0f, 1U,
+                                       &output);
+    }
+    assert(output.accel_bias_ready != 0U);
+    assert_near(output.accel_x_bias_g, 0.020f, 0.0001f);
+    assert(output.turn_active == 0U);
+
+    /* 26 cm/s、30 deg/s 对应约13.61 cm/s^2向心加速度。 */
+    for (index = 0U; index < 80U; index++) {
+        now_ms += 10U;
+        ChassisLateralEstimator_Update(
+            &estimator, now_ms, 26.0f,
+            0.020f + 13.61f / 980.665f,
+            30.0f, 1U, &output);
+    }
+    assert(output.valid != 0U);
+    assert(output.turn_active != 0U);
+    assert(output.imu_sign_ready != 0U);
+    assert(output.imu_lateral_sign == 1);
+    assert_near(output.kinematic_accel_cm_s2, 13.61f, 0.15f);
+    assert_near(output.imu_accel_cm_s2, 13.61f, 0.20f);
+    assert_near(output.lateral_accel_cm_s2, 13.61f, 0.25f);
+
+    for (index = 0U; index < 80U; index++) {
+        now_ms += 10U;
+        ChassisLateralEstimator_Update(&estimator, now_ms,
+                                       26.0f, 0.020f, 0.0f, 1U,
+                                       &output);
+    }
+    assert(output.turn_active == 0U);
+    assert_near(output.lateral_accel_cm_s2, 0.0f, 0.10f);
+}
+
 static void test_runtime_line_base_speed(void)
 {
     InfraredLineControl control;
@@ -362,6 +406,7 @@ int main(void)
     test_ab_and_abcd_time_budget();
     test_motion_profile_rejects_invalid_config();
     test_chassis_accel_estimator();
+    test_chassis_lateral_estimator();
     test_runtime_line_base_speed();
     test_dynamic_line_speed_uses_task_motion_limits();
     puts("平滑底盘速度轨迹与加速度估计测试通过");

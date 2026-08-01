@@ -434,8 +434,11 @@ void DynamicRunTask_Update(DynamicRunTask *task,
     }
 
     if (task->state == DYNAMIC_RUN_STATE_BRAKING) {
-        if (DynamicRunTask_CheckDrivingFaults(task, input, actions) != 0U) {
-            return;
+        /* ABCD 通过返程A点后计分已经结束，K230此时会把内存日志写入SD卡。
+         * 不再要求钢球视觉和姿态持续在线，只保留底盘柔停。 */
+        if ((task->mode != DYNAMIC_RUN_MODE_ABCD) &&
+            (DynamicRunTask_CheckDrivingFaults(task, input, actions) != 0U)) {
+                return;
         }
         if ((input->evaluate_completion != 0U) &&
             (input->motion_stopped != 0U)) {

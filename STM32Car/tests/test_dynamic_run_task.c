@@ -340,6 +340,42 @@ static void test_running_vision_fault_debounced(void)
     assert(DynamicRunTask_IsActive(&task) == 0U);
 }
 
+static void test_abcd_braking_ignores_post_finish_ball_loss(void)
+{
+    DynamicRunTask task;
+    DynamicRunTaskConfig config = build_config();
+    DynamicRunTaskInput input;
+    DynamicRunTaskActions actions;
+
+    assert(DynamicRunTask_Init(&task, &config) != 0U);
+    start_running_task(&task, DYNAMIC_RUN_MODE_ABCD);
+
+    input = build_ready_input(1000U);
+    input.route_passed = 1U;
+    input.travelled_distance_cm = 614.2f;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
+    assert(actions.request_soft_stop != 0U);
+
+    input = build_ready_input(1800U);
+    input.measurement_accepted = 0U;
+    input.balance_enabled = 0U;
+    input.tracking_valid = 0U;
+    input.timed_out = 1U;
+    input.attitude_valid = 0U;
+    input.imu_fault = 1U;
+    input.motion_stopped = 0U;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.hard_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
+
+    input.now_ms = 2000U;
+    input.motion_stopped = 1U;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.enter_stop_mode != 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_COMPLETE);
+}
+
 int main(void)
 {
     test_rejects_invalid_config();
@@ -351,6 +387,7 @@ int main(void)
     test_timeout_requests_soft_stop();
     test_braking_fault_preserves_frozen_time();
     test_running_vision_fault_debounced();
+    test_abcd_braking_ignores_post_finish_ball_loss();
     puts("第四、五题动态任务状态机测试通过");
     return 0;
 }

@@ -66,6 +66,7 @@ typedef struct {
     uint8_t transport_mode_enabled;
     uint8_t manual_pipe_mode_enabled;
     uint8_t transport_imu_valid;
+    uint8_t transport_wall_valid;
     uint8_t spike_reject_active;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
@@ -101,6 +102,8 @@ typedef struct {
     float brake_term_deg;
     float transport_command_accel_cm_s2;
     float transport_imu_disturbance_deg;
+    float transport_wall_accel_cm_s2;
+    float transport_wall_feedforward_pitch_deg;
     float transport_feedforward_pitch_deg;
     float transport_feedback_pitch_deg;
     float phase_pitch_deg;
@@ -167,6 +170,8 @@ typedef struct {
     float brake_term_deg;
     float transport_command_accel_cm_s2;
     float transport_imu_disturbance_deg;
+    float transport_wall_accel_cm_s2;
+    float transport_wall_feedforward_pitch_deg;
     float transport_feedforward_pitch_deg;
     float transport_feedback_pitch_deg;
     float phase_pitch_deg;
@@ -211,6 +216,10 @@ void BallBalanceControl_SetTransportInputs(
     float command_accel_cm_s2,
     float imu_disturbance_pitch_deg,
     uint8_t imu_valid);
+void BallBalanceControl_SetTransportWallAcceleration(
+    BallBalanceControl *control,
+    float wall_accel_cm_s2,
+    uint8_t wall_valid);
 void BallBalanceControl_SetPidGains(BallBalanceControl *control,
                                     float kp_deg_per_mm,
                                     float ki_deg_per_mm_s,

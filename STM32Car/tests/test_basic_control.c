@@ -1748,6 +1748,22 @@ static void test_ball_balance_transport_mode(void)
     assert(output.desired_pipe_pitch_deg < 0.0f);
 
     BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
+    BallBalanceControl_SetTransportWallAcceleration(
+        &control, 5.0f, 1U);
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert_float_near_tolerance(
+        output.transport_wall_feedforward_pitch_deg,
+        -0.292025f, 0.01f);
+    assert(output.transport_feedforward_pitch_deg < -0.28f);
+    assert(output.transport_feedforward_pitch_deg > -0.31f);
+
+    BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
+    BallBalanceControl_SetTransportWallAcceleration(
+        &control, 0.0f, 0U);
     measurement.position_d10_mm = 300;
     for (index = 0U; index < 8U; index++) {
         measurement.sequence++;
