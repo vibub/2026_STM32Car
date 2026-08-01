@@ -8,6 +8,7 @@
 
 static float s_angle_deg = 0.0f;
 static uint32_t s_pulse_us = SERVO_DRIVER_CENTER_PULSE_US;
+static uint32_t s_center_pulse_us = SERVO_DRIVER_CENTER_PULSE_US;
 
 static float ServoDriver_LimitAngle(float angle_deg)
 {
@@ -81,6 +82,18 @@ void ServoDriver_SetPipePitchDeg(float pipe_pitch_deg)
     ServoDriver_SetPulseUs(ServoDriver_PipePitchToPulseUs(pipe_pitch_deg));
 }
 
+uint8_t ServoDriver_SetCenterPulseUs(uint32_t center_pulse_us)
+{
+    if ((center_pulse_us < SERVO_DRIVER_MIN_PULSE_US) ||
+        (center_pulse_us > SERVO_DRIVER_MAX_PULSE_US)) {
+        return 0U;
+    }
+
+    /* 零位只改变相对水管角与PWM的换算基准，不在此处突然驱动舵机。 */
+    s_center_pulse_us = center_pulse_us;
+    return 1U;
+}
+
 float ServoDriver_GetAngle(void)
 {
     return s_angle_deg;
@@ -89,6 +102,11 @@ float ServoDriver_GetAngle(void)
 uint32_t ServoDriver_GetPulseUs(void)
 {
     return s_pulse_us;
+}
+
+uint32_t ServoDriver_GetCenterPulseUs(void)
+{
+    return s_center_pulse_us;
 }
 
 float ServoDriver_GetPipePitchDeg(void)
@@ -106,7 +124,7 @@ uint32_t ServoDriver_PipePitchToPulseUs(float pipe_pitch_deg)
     if (pipe_pitch_deg > SERVO_DRIVER_MAX_PIPE_PITCH_DEG) {
         pipe_pitch_deg = SERVO_DRIVER_MAX_PIPE_PITCH_DEG;
     }
-    pulse_us = (float) SERVO_DRIVER_CENTER_PULSE_US +
+    pulse_us = (float) s_center_pulse_us +
                pipe_pitch_deg / SERVO_DRIVER_PIPE_DEG_PER_US;
     return ServoDriver_LimitPulseUs((uint32_t) (pulse_us + 0.5f));
 }
@@ -115,5 +133,5 @@ float ServoDriver_PulseUsToPipePitchDeg(uint32_t pulse_us)
 {
     pulse_us = ServoDriver_LimitPulseUs(pulse_us);
     return SERVO_DRIVER_PIPE_DEG_PER_US *
-           ((float) pulse_us - (float) SERVO_DRIVER_CENTER_PULSE_US);
+           ((float) pulse_us - (float) s_center_pulse_us);
 }

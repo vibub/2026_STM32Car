@@ -20,6 +20,8 @@
 
 #define TJC_COMMAND_SHUTTLE_SAVE   0x10U /* Save three open-loop phase durations. */
 #define TJC_COMMAND_SHUTTLE_QUERY  0x11U /* Query the three saved phase durations. */
+#define TJC_COMMAND_PIPE_ZERO_SET     0x12U /* 接收串口屏n0.val并实时设置水平零位PWM。 */
+#define TJC_COMMAND_PIPE_ZERO_CONFIRM 0x13U /* 接收串口屏n0.val，确认零位并开始IMU标定。 */
 
 typedef enum {
     TJC_RESULT_STATE = 0x10U,
@@ -112,6 +114,8 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
 void Protocol_Tjc_SendDynamicTarget(float target_mm);
 void Protocol_Tjc_SendCalibrationPoint(uint8_t point_index,
                                        uint8_t point_count);
+void Protocol_Tjc_SendCalibrationZeroPwm(uint16_t pwm_us,
+                                        uint8_t confirmed);
 void Protocol_Tjc_SendCalibrationSuccess(int16_t scale_x100,
                                          int16_t offset_x100);
 void Protocol_Tjc_SendCalibrationRangeFailure(int16_t scale_x100,
