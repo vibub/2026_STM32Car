@@ -83,6 +83,8 @@ K230_UART_RX_IO = 4                # K230 UART1 RX 使用的物理 IO。
 SEND_INTERVAL_MS = 20               # 钢球位置按 20 ms 相位节拍通过 UART 上报。
 OSD_INTERVAL_MS = 40                # 检测框仍以 25 Hz 刷新，避免增加显示开销。
 CALIBRATION_INTERVAL_MS = 1000      # 红色刻度每秒重新标定一次。
+CALIBRATION_RETRY_INTERVAL_MS = 100 # 首次标定失败时快速重试，避免长时间发送无效位置。
+CAMERA_WARMUP_MS = 300              # Sensor 启动后等待自动曝光/白平衡基本稳定。
 CALIBRATION_HOLD_UPDATES = 250      # 标定暂时丢失时保留最近一次有效结果。
 INFERENCE_FPS_WINDOW_MS = 1000      # 真实 YOLO 推理帧率统计窗口。
 GC_INTERVAL_FRAMES = 60             # Run GC less often to reduce control-loop jitter.
@@ -419,6 +421,7 @@ def run():
         sequence = 0
         frame_count = 0
         now_ms = time.ticks_ms()
+        camera_started_ms = now_ms
         last_send_ms = now_ms
         last_osd_ms = now_ms
         last_calibration_ms = None
@@ -491,12 +494,22 @@ def run():
             ai_frame = None
             ai_array = None
             if use_yolo:
-                calibration_due = (
-                    last_calibration_ms is None or
-                    time.ticks_diff(now_ms, last_calibration_ms)
-                    >= CALIBRATION_INTERVAL_MS
+                calibration_interval_ms = (
+                    CALIBRATION_INTERVAL_MS
+                    if detector.calibration is not None
+                    else CALIBRATION_RETRY_INTERVAL_MS
                 )
-                # RTSP 直接编码 Display WBC；CV 通道只用于低频红色刻度标定。
+                calibration_due = (
+                    time.ticks_diff(now_ms, camera_started_ms)
+                    >= CAMERA_WARMUP_MS
+                    and (
+                        last_calibration_ms is None or
+                        time.ticks_diff(now_ms, last_calibration_ms)
+                        >= calibration_interval_ms
+                    )
+                )
+                # RTSP 直接编码 Display WBC；CV 通道在启动未标定时快速重试，
+                # 成功后才降为每秒一次，避免首次曝光不稳造成长期 B,0 上报。
                 if calibration_due:
                     stage_start_us = time.ticks_us()
                     frame = pipeline.capture_vision_frame()
