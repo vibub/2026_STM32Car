@@ -26,7 +26,7 @@
 #define APP_ABCD_MAX_ACCEL_CM_S2 APP_AB_MAX_ACCEL_CM_S2
 #define APP_ABCD_MAX_DECEL_CM_S2 APP_AB_MAX_DECEL_CM_S2
 #define APP_ABCD_MAX_JERK_CM_S3   APP_AB_MAX_JERK_CM_S3
-#define APP_ABCD_WALL_COUPLING_GAIN           0.020f /* 首圈实测：B-C约4.49 s内由0漂到-50 mm，对应约2%的向心加速度轴向耦合。 */
+#define APP_ABCD_WALL_COUPLING_GAIN          (-0.020f) /* 0003实测确认原符号与负误差回中方向相反；幅值保持2%，仅翻转补偿方向。 */
 #define APP_ENABLE_K230_TELEMETRY                 1U /* 实车调参：向 K230 发送遥测，过 A 后由 K230 落盘到 SD 卡。 */
 #define APP_K230_TELEMETRY_PERIOD_MS             50U /* ABCD遥测20 Hz，K230仅缓存，过A后再写SD卡。 */
 #define APP_AB_PASS_DISTANCE_CM           150.0f /* 第四项 A 到 B 直线的名义通过里程。 */

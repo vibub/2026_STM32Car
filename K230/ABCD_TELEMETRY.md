@@ -32,7 +32,7 @@ CSV 包含轮速、横摆角速度、IMU 横向加速度、`v*gyro_z` 向心加�
 首圈无补偿基线在 B-C 半圆内由 0 漂到约 -50 mm；当前首轮补偿系数为：
 
 ```c
-#define APP_ABCD_WALL_COUPLING_GAIN 0.020f
+#define APP_ABCD_WALL_COUPLING_GAIN (-0.020f)
 ```
 
 根据后续两段弯道的 `ball_error_mm`、`lateral_fused_cm_s2` 和

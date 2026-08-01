@@ -48,7 +48,7 @@
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
 #define BALL_BALANCE_VISION_SPIKE_JUMP_MM         15.0f  /* K230 一帧位置跳变超过该值视为跳变，抑制假速度。 */
 #define BALL_BALANCE_SPIKE_STUCK_MS               400U   /* 跳变持续超过该时间仍偏离，判定为真实新位置并重采样。 */
-#define BALL_BALANCE_TRANSPORT_SPIKE_JUMP_MM      30.0f  /* AB/ABCD 行驶中允许相邻低帧率视觉样本产生更大真实位移。 */
+#define BALL_BALANCE_TRANSPORT_SPIKE_JUMP_MM      30.0f  /* AB/ABCD 行驶中保留较宽跳变门限，避免真实快速位移被拒收。 */
 #define BALL_BALANCE_TRANSPORT_SPIKE_STUCK_MS     150U   /* 行驶时更快接受持续位移，避免长期使用旧位置盲控。 */
 #define BALL_BALANCE_IDLE_DATA_TIMEOUT_MS      1000U    /* 等待/破静摩擦时容忍 YOLO 短时漏检，避免杆反复回平重启。 */
 #define BALL_BALANCE_MOVING_DATA_TIMEOUT_MS     350U    /* 球已运动后仍快速退出盲控，避免失联时继续加速。 */
@@ -64,10 +64,10 @@
 #define BALL_BALANCE_ACTUATOR_SLEW_DPS             20.0f /* 姿态修正后最终相对水管角的变化率上限。 */
 #define BALL_BALANCE_DT_MIN_S                     0.010f /* 视觉测量 dt 的最小值。 */
 #define BALL_BALANCE_DT_MAX_S                     0.100f /* 视觉测量和任务 dt 的最大值。 */
-#define BALL_BALANCE_MEASUREMENT_DT_MAX_S         0.250f /* 兼容 K230 约 5~6 FPS 的真实帧间隔。 */
+#define BALL_BALANCE_MEASUREMENT_DT_MAX_S         0.250f /* 丢帧时限制速度计算使用的最大测量间隔。 */
 #define BALL_BALANCE_POSITION_FILTER_TAU_S        0.080f /* 适度平滑位置检测抖动。 */
-#define BALL_BALANCE_VELOCITY_FILTER_TAU_S        0.120f /* 平滑速度同时保留低帧率下的制动响应。 */
-#define BALL_BALANCE_VISION_LOOKAHEAD_S            0.25f /* 补偿 K230 推理和串口位置数据的固有延迟。 */
+#define BALL_BALANCE_VELOCITY_FILTER_TAU_S        0.120f /* 平滑速度检测噪声，保留运输制动趋势。 */
+#define BALL_BALANCE_VISION_LOOKAHEAD_S            0.040f /* K230 50~60 FPS：约两帧前视，覆盖推理与串口延迟。 */
 #define BALL_BALANCE_PREDICTION_MAX_S              0.45f /* 限制丢帧时的位置外推时间。 */
 #define BALL_BALANCE_BALL_ACCEL_SIGN_PER_PITCH    (-1.0f) /* 统一物理约定：正杆角使 K230 位置向负向加速。 */
 #define BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2     100.0f
@@ -88,6 +88,7 @@
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM        7.0f /* 预测位置接近题目边界前提前强回收。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到目标且降速后才退出。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_WARMUP_SAMPLES    3U /* 起步先用3帧重建速度，旧速度不得单独触发强恢复。 */
 #define BALL_BALANCE_POSITION_COMPARE_EPSILON_MM      0.001f /* 浮点位置边界比较容差，单位为毫米。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 10.0f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM   0.020f
@@ -231,6 +232,7 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
     control->integral_active = 0U;
     control->braking_active = 0U;
     control->transport_recovery_active = 0U;
+    control->transport_recovery_sample_count = 0U;
     control->zero_hold_freeze_active = 0U;
     control->turnaround_freeze_active = 0U;
     control->outward_motion_seen = 0U;
@@ -280,6 +282,7 @@ static void BallBalanceControl_ResetControlStatePreserveVision(
     control->integral_active = 0U;
     control->braking_active = 0U;
     control->transport_recovery_active = 0U;
+    control->transport_recovery_sample_count = 0U;
     control->zero_hold_freeze_active = 0U;
     control->turnaround_freeze_active = 0U;
     control->outward_motion_seen = 0U;
@@ -345,6 +348,42 @@ static void BallBalanceControl_FillFixedMapping(BallBalanceControl *control)
     control->maximum_pipe_pitch_deg = BALL_BALANCE_MAX_PIPE_PITCH_DEG;
 }
 
+static void BallBalanceControl_UpdateTransportFeedforward(
+    BallBalanceControl *control)
+{
+    float expected_disturbance_deg;
+    float effective_disturbance_deg;
+
+    expected_disturbance_deg = BallBalanceControl_Limit(
+        control->transport_command_accel_cm_s2 *
+        BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
+        -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG);
+    effective_disturbance_deg = expected_disturbance_deg;
+    if (control->transport_imu_valid != 0U) {
+        effective_disturbance_deg += BALL_BALANCE_TRANSPORT_IMU_BLEND *
+            (BallBalanceControl_Limit(
+                 control->transport_imu_disturbance_deg,
+                 -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
+                 BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG) -
+             expected_disturbance_deg);
+    }
+    control->transport_wall_feedforward_pitch_deg = 0.0f;
+    if (control->transport_wall_valid != 0U) {
+        control->transport_wall_feedforward_pitch_deg =
+            BallBalanceControl_Limit(
+                -control->transport_wall_accel_cm_s2 *
+                    BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
+                -BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG,
+                BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG);
+    }
+    control->transport_feedforward_pitch_deg = BallBalanceControl_Limit(
+        -effective_disturbance_deg +
+            control->transport_wall_feedforward_pitch_deg,
+        -BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG,
+        BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG);
+}
+
 static void BallBalanceControl_UpdatePrediction(BallBalanceControl *control,
                                                 uint32_t now_ms)
 {
@@ -365,6 +404,13 @@ static void BallBalanceControl_UpdatePrediction(BallBalanceControl *control,
         sample_age_s + BALL_BALANCE_VISION_LOOKAHEAD_S,
         0.0f,
         BALL_BALANCE_PREDICTION_MAX_S);
+    if (control->transport_mode_enabled != 0U) {
+        /* Compute this cycle's equilibrium before prediction.  In transport
+         * mode the feedforward pipe angle counteracts chassis/turning
+         * acceleration, so only the angle left relative to that equilibrium
+         * should be treated as ball acceleration. */
+        BallBalanceControl_UpdateTransportFeedforward(control);
+    }
     effective_pipe_pitch_deg = control->measured_pipe_pitch_deg;
     if ((control->attitude_ready != 0U) &&
         ((uint32_t) (now_ms - control->last_attitude_ms) <=
@@ -373,6 +419,10 @@ static void BallBalanceControl_UpdatePrediction(BallBalanceControl *control,
             0.5f * control->measured_pipe_rate_dps * prediction_s;
         effective_pipe_pitch_deg = BallBalanceControl_LimitActualPitch(
             control, effective_pipe_pitch_deg);
+        if (control->transport_mode_enabled != 0U) {
+            effective_pipe_pitch_deg -=
+                control->transport_feedforward_pitch_deg;
+        }
         control->predicted_accel_mm_s2 =
             BALL_BALANCE_BALL_ACCEL_SIGN_PER_PITCH *
             BALL_BALANCE_ACCEL_PER_PIPE_DEG_MM_S2 *
@@ -599,8 +649,6 @@ static float BallBalanceControl_CalculateMovingPitch(
 static void BallBalanceControl_ApplyTransportCommand(
     BallBalanceControl *control)
 {
-    float expected_disturbance_deg;
-    float effective_disturbance_deg;
     float feedback_error_mm;
     float feedback_limit_deg;
     float kd_deg_per_mm_s;
@@ -608,34 +656,7 @@ static void BallBalanceControl_ApplyTransportCommand(
     float position_deadband_mm;
     float predicted_error_mm;
 
-    expected_disturbance_deg = BallBalanceControl_Limit(
-        control->transport_command_accel_cm_s2 *
-        BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
-        -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
-        BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG);
-    effective_disturbance_deg = expected_disturbance_deg;
-    if (control->transport_imu_valid != 0U) {
-        effective_disturbance_deg += BALL_BALANCE_TRANSPORT_IMU_BLEND *
-            (BallBalanceControl_Limit(
-                 control->transport_imu_disturbance_deg,
-                 -BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG,
-                 BALL_BALANCE_TRANSPORT_IMU_LIMIT_DEG) -
-             expected_disturbance_deg);
-    }
-    control->transport_wall_feedforward_pitch_deg = 0.0f;
-    if (control->transport_wall_valid != 0U) {
-        control->transport_wall_feedforward_pitch_deg =
-            BallBalanceControl_Limit(
-                -control->transport_wall_accel_cm_s2 *
-                    BALL_BALANCE_TRANSPORT_ACCEL_TO_DEG,
-                -BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG,
-                BALL_BALANCE_TRANSPORT_WALL_FF_LIMIT_DEG);
-    }
-    control->transport_feedforward_pitch_deg = BallBalanceControl_Limit(
-        -effective_disturbance_deg +
-            control->transport_wall_feedforward_pitch_deg,
-        -BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG,
-        BALL_BALANCE_TRANSPORT_FF_LIMIT_DEG);
+    BallBalanceControl_UpdateTransportFeedforward(control);
 
     position_deadband_mm = BALL_BALANCE_TRANSPORT_TRANSIENT_DEADBAND_MM;
     if (BallBalanceControl_Abs(control->transport_command_accel_cm_s2) <=
@@ -654,8 +675,10 @@ static void BallBalanceControl_ApplyTransportCommand(
         }
     } else if ((BallBalanceControl_Abs(control->error_mm) >=
                 BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM) ||
-               (BallBalanceControl_Abs(predicted_error_mm) >=
-                BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM)) {
+               ((control->transport_recovery_sample_count >=
+                 BALL_BALANCE_TRANSPORT_RECOVERY_WARMUP_SAMPLES) &&
+                (BallBalanceControl_Abs(predicted_error_mm) >=
+                 BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM))) {
         control->transport_recovery_active = 1U;
     }
     feedback_error_mm = control->error_mm;
@@ -1064,8 +1087,8 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
             BALL_BALANCE_DT_MIN_S,
             BALL_BALANCE_MEASUREMENT_DT_MAX_S);
         previous_position = control->filtered_position_mm;
-        /* 跳变抑制：停车平衡仍使用严格阈值；AB/ABCD 运输模式考虑 K230
-         * 只有约 5~6 FPS，允许球在相邻样本间产生更大的真实位移。
+        /* 跳变抑制：停车平衡仍使用严格阈值；AB/ABCD 运输模式保留较宽
+         * 门限，避免行驶振动下的真实快速位移被当作错误帧。
          * 一帧位置跳变超过当前模式阈值时才视为检测错误。
          * 不更新滤波位置与速度，只让测量超时保护去接管，避免
          * 假速度触发 P/D 反打把钢球推向端部。
@@ -1113,6 +1136,12 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
     control->last_measurement_dt_s = measurement_dt_s;
     control->tracking_valid = 1U;
     control->timed_out = 0U;
+    if ((accepted != 0U) &&
+        (control->transport_mode_enabled != 0U) &&
+        (control->transport_recovery_sample_count <
+         BALL_BALANCE_TRANSPORT_RECOVERY_WARMUP_SAMPLES)) {
+        control->transport_recovery_sample_count++;
+    }
     return accepted;
 }
 
@@ -1614,6 +1643,7 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
 
     control->transport_mode_enabled = normalized_enabled;
     control->transport_recovery_active = 0U;
+    control->transport_recovery_sample_count = 0U;
     /* 模式切换时丢弃停车阶段尚未确认的跳变候选，避免旧的 400 ms
      * 计时在刚起步时把第一帧真实位移错误地重采样为零速度。 */
     control->spike_reject_active = 0U;
@@ -1621,6 +1651,12 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
     if (normalized_enabled != 0U) {
         control->manual_pipe_mode_enabled = 0U;
         control->manual_pipe_target_deg = 0.0f;
+        /* 准备阶段的低帧率速度估计不能带入起步，否则0.25 s外推会在
+         * 位置仍接近中心时越过7 mm阈值并立即打出强恢复角。 */
+        control->velocity_mm_s = 0.0f;
+        control->predicted_position_mm = control->filtered_position_mm;
+        control->predicted_accel_mm_s2 = 0.0f;
+        control->last_measurement_dt_s = 0.0f;
     }
     control->transport_imu_valid = 0U;
     control->transport_wall_valid = 0U;

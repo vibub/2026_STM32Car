@@ -66,6 +66,7 @@ typedef struct {
     uint8_t endpoint_hold_enabled;
     uint8_t transport_mode_enabled;
     uint8_t transport_recovery_active;
+    uint8_t transport_recovery_sample_count;
     uint8_t manual_pipe_mode_enabled;
     uint8_t transport_imu_valid;
     uint8_t transport_wall_valid;
