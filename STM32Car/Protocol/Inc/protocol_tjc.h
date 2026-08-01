@@ -93,6 +93,8 @@ void Protocol_Tjc_SendResult(Tjc_Result result,
                              uint8_t current_mode,
                              uint8_t request);
 void Protocol_Tjc_SendStatusText(Tjc_StatusText status);
+void Protocol_Tjc_SendShuttlePhase(uint8_t phase,
+                                   float target_pipe_pitch_deg);
 void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
                                        uint8_t run_result,
                                        uint32_t elapsed_ms,

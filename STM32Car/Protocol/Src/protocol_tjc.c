@@ -117,9 +117,10 @@ static const uint8_t s_text_shuttle_ready[] = {
     0xE5U, 0xB0U, 0xB1U, 0xE7U, 0xBBU, 0xAAU
 };
 static const uint8_t s_text_shuttle_not_ready[] = {
-    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0x85U, 0x88U,
-    0xE4U, 0xB8U, 0xADU, 0xE5U, 0xBFU, 0x83U,
-    0xE7U, 0xA8U, 0xB3U, 0xE5U, 0xAEU, 0x9AU
+    0xE8U, 0xAFU, 0xB7U, 0xE5U, 0xB0U, 0x86U,
+    0xE7U, 0x90U, 0x83U, 0xE6U, 0x94U, 0xBEU,
+    0xE5U, 0x9BU, 0x9EU, 0xE4U, 0xB8U, 0xADU,
+    0xE5U, 0xBFU, 0x83U
 };
 static const uint8_t s_text_shuttle_running[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
@@ -130,8 +131,18 @@ static const uint8_t s_text_shuttle_turning[] = {
     0xE5U, 0x88U, 0xB0U, 0xE8U, 0xBEU, 0xBEU
 };
 static const uint8_t s_text_shuttle_success[] = {
-    0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
-    0xE6U, 0x88U, 0x90U, 0xE5U, 0x8AU, 0x9FU
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xB8U, 0x89U,
+    0xE9U, 0xA2U, 0x98U, 0xE6U, 0xB0U, 0xB4U,
+    0xE5U, 0xB9U, 0xB3U, 0xE4U, 0xBFU, 0x9DU,
+    0xE6U, 0x8CU, 0x81U
+};
+static const uint8_t s_text_shuttle_phase[] = {
+    0xE7U, 0xACU, 0xACU, 0xE4U, 0xB8U, 0x89U,
+    0xE9U, 0xA2U, 0x98U, 0xE9U, 0x98U, 0xB6U,
+    0xE6U, 0xAEU, 0xB5U
+};
+static const uint8_t s_text_degree[] = {
+    0xE5U, 0xBAU, 0xA6U
 };
 static const uint8_t s_text_shuttle_failed[] = {
     0xE4U, 0xB8U, 0x89U, 0xE9U, 0xA2U, 0x98U,
@@ -700,6 +711,53 @@ void Protocol_Tjc_SendDynamicRunResult(uint8_t run_mode,
     frame[length++] = (uint8_t) 'm';
     length = Protocol_Tjc_AppendBytes(
         frame, length, s_tjc_text_suffix,
+        (uint16_t) sizeof(s_tjc_text_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
+}
+
+void Protocol_Tjc_SendShuttlePhase(uint8_t phase,
+                                   float target_pipe_pitch_deg)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+    float scaled = target_pipe_pitch_deg * 100.0f;
+    int16_t target_x100;
+
+    if ((phase == 0U) || (phase > 3U)) {
+        return;
+    }
+    if (scaled > 32767.0f) {
+        scaled = 32767.0f;
+    } else if (scaled < -32767.0f) {
+        scaled = -32767.0f;
+    }
+    target_x100 = (int16_t) ((scaled >= 0.0f) ?
+                             (scaled + 0.5f) : (scaled - 0.5f));
+
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_prefix,
+        (uint16_t) (sizeof(s_tjc_text_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_text_shuttle_phase,
+        (uint16_t) sizeof(s_text_shuttle_phase));
+    frame[length++] = (uint8_t) ('0' + phase);
+    frame[length++] = (uint8_t) ' ';
+    length = Protocol_Tjc_AppendFixedX100(
+        frame, length, target_x100, 1U);
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_text_degree,
+        (uint16_t) sizeof(s_text_degree));
+    length = Protocol_Tjc_AppendBytes(
+        frame,
+        length,
+        s_tjc_text_suffix,
         (uint16_t) sizeof(s_tjc_text_suffix));
     TjcUart_SendData(frame, length);
     g_tjc_status_text_count++;

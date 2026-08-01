@@ -17,6 +17,7 @@ CMD_BALANCE = "BALANCE"
 CMD_TARGET = "TARGET"
 CMD_TUNE_STREAM = "TSTREAM"
 CMD_VIN = "VIN"
+CMD_SHUTTLE = "SHUTTLE"
 
 RESP_PONG = "PONG"
 RESP_OK = "OK"
@@ -28,6 +29,7 @@ RESP_VIN = "VIN"
 RESP_STREAM = "S"
 RESP_PID = "PID"
 RESP_TUNE_STREAM = "T"
+RESP_SHUTTLE = "SHUTTLE"
 
 PWM_MIN_US = 500
 PWM_CENTER_US = 1050
@@ -64,6 +66,18 @@ def parse_pid(line):
     if len(parts) != 6 or parts[0] != RESP_PID:
         raise ValueError(f"PID 响应格式错误: {line!r}")
     return tuple(float(value) for value in parts[1:])
+
+
+def parse_shuttle_config(line):
+    """'SHUTTLE <ang1> <ms1> <ang2> <ms2> <ang3> <ms3>' -> (ang, ms) 三元组。"""
+    parts = line.split()
+    if len(parts) != 7 or parts[0] != RESP_SHUTTLE:
+        raise ValueError(f"SHUTTLE 响应格式错误: {line!r}")
+    return (
+        (float(parts[1]), int(parts[2])),
+        (float(parts[3]), int(parts[4])),
+        (float(parts[5]), int(parts[6])),
+    )
 
 
 def parse_tune_stream(line):

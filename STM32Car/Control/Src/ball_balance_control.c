@@ -970,6 +970,22 @@ static void BallBalanceControl_UpdateEnableState(BallBalanceControl *control,
         (uint8_t) ((attitude_fresh != 0U) &&
                    (BallBalanceControl_Abs(control->measured_pipe_pitch_deg) <=
                     BALL_BALANCE_PIPE_SAFETY_LIMIT_DEG));
+    if (control->manual_pipe_mode_enabled != 0U) {
+        if (attitude_safe == 0U) {
+            control->enabled = 0U;
+            control->imu_fault = 1U;
+            control->attitude_stable_ready = 0U;
+            return;
+        }
+        if (control->enabled == 0U) {
+            control->enabled = 1U;
+            control->enabled_since_ms = now_ms;
+            BallBalanceControl_ClearVisionState(control, 1U);
+        }
+        control->imu_fault = 0U;
+        control->attitude_stable_ready = 1U;
+        return;
+    }
     if (control->enabled != 0U) {
         if (attitude_safe == 0U) {
             control->enabled = 0U;
@@ -1105,7 +1121,9 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
     output->trajectory_phase = control->trajectory_phase;
     output->endpoint_hold_enabled = control->endpoint_hold_enabled;
     output->transport_mode_enabled = control->transport_mode_enabled;
+    output->manual_pipe_mode_enabled = control->manual_pipe_mode_enabled;
     output->target_mm = control->target_mm;
+    output->manual_pipe_target_deg = control->manual_pipe_target_deg;
     output->position_kp_deg_per_mm = control->position_kp_deg_per_mm;
     output->position_ki_deg_per_mm_s =
         control->position_ki_deg_per_mm_s;
@@ -1191,6 +1209,8 @@ void BallBalanceControl_SetEnabled(BallBalanceControl *control,
     if (normalized_enabled == 0U) {
         control->endpoint_hold_enabled = 0U;
         control->transport_mode_enabled = 0U;
+        control->manual_pipe_mode_enabled = 0U;
+        control->manual_pipe_target_deg = 0.0f;
         control->transport_imu_valid = 0U;
         control->transport_command_accel_cm_s2 = 0.0f;
         control->transport_imu_disturbance_deg = 0.0f;
@@ -1293,6 +1313,10 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
     }
 
     control->transport_mode_enabled = normalized_enabled;
+    if (normalized_enabled != 0U) {
+        control->manual_pipe_mode_enabled = 0U;
+        control->manual_pipe_target_deg = 0.0f;
+    }
     control->transport_imu_valid = 0U;
     control->transport_command_accel_cm_s2 = 0.0f;
     control->transport_imu_disturbance_deg = 0.0f;
@@ -1306,6 +1330,48 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
     control->phase_pitch_deg = 0.0f;
     control->desired_pipe_pitch_deg = 0.0f;
     control->pipe_command_rate_dps = 0.0f;
+}
+
+void BallBalanceControl_SetManualPipeMode(BallBalanceControl *control,
+                                         uint8_t enabled,
+                                         float target_pipe_pitch_deg)
+{
+    uint8_t normalized_enabled;
+
+    if (control == 0) {
+        return;
+    }
+
+    normalized_enabled = (enabled != 0U) ? 1U : 0U;
+    if (normalized_enabled == 0U) {
+        control->manual_pipe_mode_enabled = 0U;
+        control->manual_pipe_target_deg = 0.0f;
+        control->desired_pipe_pitch_deg = 0.0f;
+        control->command_pipe_pitch_deg = 0.0f;
+        control->pipe_command_rate_dps = 0.0f;
+        control->desired_angle_deg = 0.0f;
+        control->command_angle_deg = 0.0f;
+        control->trajectory_phase = BALL_BALANCE_PHASE_WAIT_PIPE;
+        return;
+    }
+
+    control->manual_pipe_target_deg = BallBalanceControl_LimitActualPitch(
+        control, target_pipe_pitch_deg);
+    if (control->manual_pipe_mode_enabled == 0U) {
+        control->transport_mode_enabled = 0U;
+        control->endpoint_hold_enabled = 0U;
+        control->integral_mm_s = 0.0f;
+        control->p_term_deg = 0.0f;
+        control->i_term_deg = 0.0f;
+        control->d_term_deg = 0.0f;
+        control->brake_term_deg = 0.0f;
+        control->integral_active = 0U;
+        control->braking_active = 0U;
+        BallBalanceControl_ClearVisionState(control, 1U);
+    }
+    control->manual_pipe_mode_enabled = 1U;
+    control->desired_pipe_pitch_deg = control->manual_pipe_target_deg;
+    control->trajectory_phase = BALL_BALANCE_PHASE_MANUAL_PIPE;
 }
 
 void BallBalanceControl_SetTransportInputs(
@@ -1437,22 +1503,35 @@ void BallBalanceControl_Update(BallBalanceControl *control,
     BallBalanceControl_UpdatePipeSettled(control, now_ms);
 
     if (control->enabled != 0U) {
-        measurement_accepted = BallBalanceControl_AcceptMeasurement(
-            control, now_ms, measurement);
-        if (control->tracking_valid != 0U) {
-            elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
-            if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
-                BallBalanceControl_ClearVisionState(control, 0U);
+        if (control->manual_pipe_mode_enabled != 0U) {
+            control->tracking_valid = 0U;
+            control->timed_out = 0U;
+            control->error_mm = 0.0f;
+            control->p_term_deg = 0.0f;
+            control->i_term_deg = 0.0f;
+            control->d_term_deg = 0.0f;
+            control->brake_term_deg = 0.0f;
+            control->desired_pipe_pitch_deg =
+                control->manual_pipe_target_deg;
+            control->trajectory_phase = BALL_BALANCE_PHASE_MANUAL_PIPE;
+        } else {
+            measurement_accepted = BallBalanceControl_AcceptMeasurement(
+                control, now_ms, measurement);
+            if (control->tracking_valid != 0U) {
+                elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
+                if (elapsed_ms > BallBalanceControl_DataTimeoutMs(control)) {
+                    BallBalanceControl_ClearVisionState(control, 0U);
+                    control->timed_out = 1U;
+                } else {
+                    BallBalanceControl_UpdatePrediction(control, now_ms);
+                    BallBalanceControl_UpdateTrajectory(
+                        control, now_ms, measurement_accepted);
+                }
+            } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
+                       BALL_BALANCE_IDLE_DATA_TIMEOUT_MS) {
                 control->timed_out = 1U;
-            } else {
-                BallBalanceControl_UpdatePrediction(control, now_ms);
-                BallBalanceControl_UpdateTrajectory(
-                    control, now_ms, measurement_accepted);
+                control->desired_pipe_pitch_deg = 0.0f;
             }
-        } else if ((uint32_t) (now_ms - control->enabled_since_ms) >
-                   BALL_BALANCE_IDLE_DATA_TIMEOUT_MS) {
-            control->timed_out = 1U;
-            control->desired_pipe_pitch_deg = 0.0f;
         }
     } else {
         control->desired_pipe_pitch_deg = 0.0f;

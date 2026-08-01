@@ -2,171 +2,73 @@
 
 #include <string.h>
 
-#define BALL_SHUTTLE_READY_POSITION_MM          5.0f /* 中心准备阶段允许的位置误差。 */
-#define BALL_SHUTTLE_READY_SPEED_MM_S            5.0f /* 中心准备阶段允许的钢球速度。 */
-#define BALL_SHUTTLE_READY_HYST_POSITION_MM      8.0f /* 已就绪状态的位置撤销阈值。 */
-#define BALL_SHUTTLE_READY_HYST_SPEED_MM_S       8.0f /* 已就绪状态的速度撤销阈值。 */
-#define BALL_SHUTTLE_READY_TIME_MS              500U  /* 中心条件连续满足的最短时间。 */
-#define BALL_SHUTTLE_TURN_ARM_POSITION_MM       30.0f /* 进入正向中后段后武装预测折返。 */
-#define BALL_SHUTTLE_TURN_ARM_SPEED_MM_S         5.0f /* 武装预测折返所需的最小正向速度。 */
-#define BALL_SHUTTLE_POSITIVE_TARGET_MM         50.0f /* 第三题正向物理峰值目标。 */
-#define BALL_SHUTTLE_POSITIVE_TOLERANCE_MM       5.0f /* 正向物理峰值允许误差。 */
-#define BALL_SHUTTLE_TURN_LEAD_MIN_MM            2.0f /* 动态折返最小提前量。 */
-#define BALL_SHUTTLE_TURN_LEAD_MAX_MM           15.0f /* 动态折返最大提前量。 */
-#define BALL_SHUTTLE_TURN_CONFIRM_SAMPLES         2U  /* 预测折返连续新样本确认数。 */
-#define BALL_SHUTTLE_POSITIVE_HARD_LIMIT_MM     55.0f /* 正向实测位置的无条件折返上限。 */
-#define BALL_SHUTTLE_PEAK_REVERSE_SPEED_MM_S    -5.0f /* 确认物理峰值所需的反向速度。 */
-#define BALL_SHUTTLE_PEAK_DROP_MM                1.0f /* 确认物理峰值所需的最小回落量。 */
-#define BALL_SHUTTLE_PEAK_CONFIRM_SAMPLES         2U  /* 速度反向连续新样本确认数。 */
-#define BALL_SHUTTLE_NEGATIVE_SETTLE_MM        -30.0f /* 进入最终目标前二十毫米时启用端点积分。 */
-#define BALL_SHUTTLE_FINAL_TARGET_MM            -50.0f /* 第三题最终稳定目标位置。 */
-#define BALL_SHUTTLE_FINAL_TOLERANCE_MM           5.0f /* 最终位置必须满足题目正负五毫米要求。 */
-#define BALL_SHUTTLE_FINAL_SPEED_MM_S             5.0f /* 最终稳定允许的最大钢球速度。 */
-#define BALL_SHUTTLE_STABLE_TIME_MS             500U  /* 位置和速度连续满足要求的最短时间。 */
-#define BALL_SHUTTLE_TIMEOUT_MS                5000U  /* 正式起跑到最终稳定的总时间上限。 */
-
-static float BallShuttleControl_Abs(float value)
+static void BallShuttleControl_LoadDefaults(BallShuttleConfig *config)
 {
-    return (value < 0.0f) ? -value : value;
+    config->angle_magnitude_deg[0] =
+        BALL_SHUTTLE_DEFAULT_PHASE_1_ANGLE_DEG;
+    config->angle_magnitude_deg[1] =
+        BALL_SHUTTLE_DEFAULT_PHASE_2_ANGLE_DEG;
+    config->angle_magnitude_deg[2] =
+        BALL_SHUTTLE_DEFAULT_PHASE_3_ANGLE_DEG;
+    config->duration_ms[0] = BALL_SHUTTLE_DEFAULT_PHASE_1_TIME_MS;
+    config->duration_ms[1] = BALL_SHUTTLE_DEFAULT_PHASE_2_TIME_MS;
+    config->duration_ms[2] = BALL_SHUTTLE_DEFAULT_PHASE_3_TIME_MS;
 }
 
-static float BallShuttleControl_Max(float first, float second)
+static uint8_t BallShuttleControl_ConfigIsValid(
+    const BallShuttleConfig *config)
 {
-    return (first > second) ? first : second;
-}
+    uint8_t index;
+    uint32_t total_time_ms = 0U;
 
-static float BallShuttleControl_Clamp(float value,
-                                      float minimum,
-                                      float maximum)
-{
-    if (value < minimum) {
-        return minimum;
+    if (config == 0) {
+        return 0U;
     }
-    if (value > maximum) {
-        return maximum;
+    for (index = 0U; index < BALL_SHUTTLE_PHASE_COUNT; index++) {
+        if (!((config->angle_magnitude_deg[index] >= 0.0f) &&
+              (config->angle_magnitude_deg[index] <=
+               BALL_SHUTTLE_MAX_ANGLE_DEG))) {
+            return 0U;
+        }
+        if ((config->duration_ms[index] <
+             BALL_SHUTTLE_MIN_PHASE_TIME_MS) ||
+            (config->duration_ms[index] >
+             BALL_SHUTTLE_MAX_PHASE_TIME_MS)) {
+            return 0U;
+        }
+        total_time_ms += config->duration_ms[index];
     }
-    return value;
+    return (uint8_t) (total_time_ms <= BALL_SHUTTLE_MAX_TOTAL_TIME_MS);
 }
 
-static uint8_t BallShuttleControl_IsHealthy(
+static void BallShuttleControl_ResetRuntime(BallShuttleControl *control)
+{
+    control->state = BALL_SHUTTLE_STATE_IDLE;
+    control->failure = BALL_SHUTTLE_FAILURE_NONE;
+    control->started_ms = 0U;
+    control->phase_started_ms = 0U;
+    control->elapsed_ms = 0U;
+    control->target_pipe_pitch_deg = 0.0f;
+}
+
+static uint8_t BallShuttleControl_MeasurementIsHealthy(
     const BallShuttleMeasurement *measurement)
 {
     return (uint8_t) ((measurement != 0) &&
-                      (measurement->balance_enabled != 0U) &&
-                      (measurement->tracking_valid != 0U) &&
-                      (measurement->timed_out == 0U) &&
+                      (measurement->pipe_control_enabled != 0U) &&
+                      (measurement->manual_pipe_mode_enabled != 0U) &&
+                      (measurement->attitude_valid != 0U) &&
                       (measurement->imu_fault == 0U) &&
                       (measurement->mapping_fault == 0U));
 }
 
 static BallShuttleEvent BallShuttleControl_Fail(
-    BallShuttleControl *control,
-    BallShuttleFailure failure)
+    BallShuttleControl *control)
 {
     control->state = BALL_SHUTTLE_STATE_FAILED;
-    control->failure = failure;
-    control->start_ready = 0U;
-    control->ready_timer_active = 0U;
-    control->stable_ready = 0U;
+    control->failure = BALL_SHUTTLE_FAILURE_PIPE_CONTROL;
+    control->target_pipe_pitch_deg = 0.0f;
     return BALL_SHUTTLE_EVENT_FAILED;
-}
-
-static BallShuttleEvent BallShuttleControl_UpdateReady(
-    BallShuttleControl *control,
-    uint32_t now_ms,
-    const BallShuttleMeasurement *measurement)
-{
-    uint8_t health_ready;
-    uint8_t center_ready;
-    uint8_t hysteresis_ready;
-
-    health_ready = BallShuttleControl_IsHealthy(measurement);
-    if ((measurement == 0) ||
-        (measurement->ready_monitor_enabled == 0U) ||
-        (health_ready == 0U)) {
-        control->ready_timer_active = 0U;
-        if (control->start_ready != 0U) {
-            control->start_ready = 0U;
-            return BALL_SHUTTLE_EVENT_NOT_READY;
-        }
-        return BALL_SHUTTLE_EVENT_NONE;
-    }
-
-    hysteresis_ready = (uint8_t) (
-        (BallShuttleControl_Abs(measurement->filtered_position_mm) <=
-         BALL_SHUTTLE_READY_HYST_POSITION_MM) &&
-        (BallShuttleControl_Abs(measurement->velocity_mm_s) <=
-         BALL_SHUTTLE_READY_HYST_SPEED_MM_S));
-    if (control->start_ready != 0U) {
-        if (hysteresis_ready != 0U) {
-            return BALL_SHUTTLE_EVENT_NONE;
-        }
-        control->start_ready = 0U;
-        control->ready_timer_active = 0U;
-        return BALL_SHUTTLE_EVENT_NOT_READY;
-    }
-
-    center_ready = (uint8_t) (
-        (BallShuttleControl_Abs(measurement->filtered_position_mm) <=
-         BALL_SHUTTLE_READY_POSITION_MM) &&
-        (BallShuttleControl_Abs(measurement->velocity_mm_s) <=
-         BALL_SHUTTLE_READY_SPEED_MM_S));
-    if (center_ready == 0U) {
-        control->ready_timer_active = 0U;
-        return BALL_SHUTTLE_EVENT_NONE;
-    }
-    if (measurement->measurement_accepted == 0U) {
-        return BALL_SHUTTLE_EVENT_NONE;
-    }
-
-    if (control->ready_timer_active == 0U) {
-        control->ready_timer_active = 1U;
-        control->ready_since_ms = now_ms;
-    } else if ((uint32_t) (now_ms - control->ready_since_ms) >=
-               BALL_SHUTTLE_READY_TIME_MS) {
-        control->start_ready = 1U;
-        control->ready_timer_active = 0U;
-        return BALL_SHUTTLE_EVENT_READY;
-    }
-    return BALL_SHUTTLE_EVENT_NONE;
-}
-
-static void BallShuttleControl_UpdatePeak(
-    BallShuttleControl *control,
-    const BallShuttleMeasurement *measurement)
-{
-    uint8_t reverse_sample;
-
-    if (measurement->filtered_position_mm > control->positive_peak_mm) {
-        control->positive_peak_mm = measurement->filtered_position_mm;
-    }
-    if ((control->positive_peak_checked != 0U) ||
-        (measurement->measurement_accepted == 0U)) {
-        return;
-    }
-
-    reverse_sample = (uint8_t) (
-        (measurement->velocity_mm_s <=
-         BALL_SHUTTLE_PEAK_REVERSE_SPEED_MM_S) &&
-        (measurement->filtered_position_mm <=
-         (control->positive_peak_mm - BALL_SHUTTLE_PEAK_DROP_MM)));
-    if (reverse_sample != 0U) {
-        if (control->peak_reverse_confirm_count <
-            BALL_SHUTTLE_PEAK_CONFIRM_SAMPLES) {
-            control->peak_reverse_confirm_count++;
-        }
-        if (control->peak_reverse_confirm_count >=
-            BALL_SHUTTLE_PEAK_CONFIRM_SAMPLES) {
-            control->positive_peak_checked = 1U;
-            control->positive_peak_valid = (uint8_t) (
-                BallShuttleControl_Abs(
-                    control->positive_peak_mm -
-                    BALL_SHUTTLE_POSITIVE_TARGET_MM) <=
-                BALL_SHUTTLE_POSITIVE_TOLERANCE_MM);
-        }
-    } else {
-        control->peak_reverse_confirm_count = 0U;
-    }
 }
 
 void BallShuttleControl_Init(BallShuttleControl *control)
@@ -176,35 +78,79 @@ void BallShuttleControl_Init(BallShuttleControl *control)
     }
 
     memset(control, 0, sizeof(*control));
+    BallShuttleControl_LoadDefaults(&control->config);
     control->state = BALL_SHUTTLE_STATE_IDLE;
+}
+
+uint8_t BallShuttleControl_SetConfig(BallShuttleControl *control,
+                                     const BallShuttleConfig *config)
+{
+    if ((control == 0) ||
+        (BallShuttleControl_IsRunning(control) != 0U) ||
+        (BallShuttleControl_ConfigIsValid(config) == 0U)) {
+        return 0U;
+    }
+
+    control->config = *config;
+    return 1U;
+}
+
+void BallShuttleControl_GetConfig(const BallShuttleControl *control,
+                                  BallShuttleConfig *config)
+{
+    if ((control == 0) || (config == 0)) {
+        return;
+    }
+
+    *config = control->config;
+}
+
+uint8_t BallShuttleControl_ResetConfig(BallShuttleControl *control)
+{
+    BallShuttleConfig config;
+
+    if ((control == 0) ||
+        (BallShuttleControl_IsRunning(control) != 0U)) {
+        return 0U;
+    }
+    BallShuttleControl_LoadDefaults(&config);
+    control->config = config;
+    return 1U;
 }
 
 uint8_t BallShuttleControl_Start(BallShuttleControl *control,
                                  uint32_t now_ms)
 {
     if ((control == 0) ||
-        (control->state != BALL_SHUTTLE_STATE_IDLE) ||
-        (control->start_ready == 0U)) {
+        (BallShuttleControl_IsRunning(control) != 0U) ||
+        (BallShuttleControl_ConfigIsValid(&control->config) == 0U)) {
         return 0U;
     }
 
-    control->state = BALL_SHUTTLE_STATE_MOVING_POSITIVE;
+    control->state = BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE;
     control->failure = BALL_SHUTTLE_FAILURE_NONE;
-    control->start_ready = 0U;
-    control->ready_timer_active = 0U;
-    control->stable_ready = 0U;
-    control->turn_armed = 0U;
-    control->turn_confirm_count = 0U;
-    control->peak_reverse_confirm_count = 0U;
-    control->positive_peak_checked = 0U;
-    control->positive_peak_valid = 0U;
     control->started_ms = now_ms;
-    control->stable_since_ms = 0U;
+    control->phase_started_ms = now_ms;
     control->elapsed_ms = 0U;
-    control->predicted_turn_lead_mm = 0.0f;
-    control->predicted_peak_mm = 0.0f;
-    control->positive_peak_mm = 0.0f;
+    control->target_pipe_pitch_deg =
+        -control->config.angle_magnitude_deg[0];
     return 1U;
+}
+
+void BallShuttleControl_HoldLevel(BallShuttleControl *control,
+                                  uint32_t now_ms)
+{
+    if (control == 0) {
+        return;
+    }
+
+    if (control->started_ms != 0U) {
+        control->elapsed_ms = (uint32_t) (now_ms - control->started_ms);
+    }
+    control->state = BALL_SHUTTLE_STATE_HOLDING_LEVEL;
+    control->failure = BALL_SHUTTLE_FAILURE_NONE;
+    control->phase_started_ms = now_ms;
+    control->target_pipe_pitch_deg = 0.0f;
 }
 
 void BallShuttleControl_Stop(BallShuttleControl *control)
@@ -213,7 +159,7 @@ void BallShuttleControl_Stop(BallShuttleControl *control)
         return;
     }
 
-    BallShuttleControl_Init(control);
+    BallShuttleControl_ResetRuntime(control);
 }
 
 BallShuttleEvent BallShuttleControl_Update(
@@ -221,169 +167,66 @@ BallShuttleEvent BallShuttleControl_Update(
     uint32_t now_ms,
     const BallShuttleMeasurement *measurement)
 {
-    float prediction_lead_mm;
-    float braking_lead_mm;
-    float final_error_mm;
-    uint8_t final_position_ready;
-    uint8_t final_speed_ready;
-    uint8_t predicted_turn_ready;
+    uint32_t phase_elapsed_ms;
 
     if (control == 0) {
         return BALL_SHUTTLE_EVENT_NONE;
     }
-    if (control->state == BALL_SHUTTLE_STATE_IDLE) {
-        return BallShuttleControl_UpdateReady(control, now_ms, measurement);
-    }
-    if (control->state == BALL_SHUTTLE_STATE_FAILED) {
+    if ((control->state == BALL_SHUTTLE_STATE_IDLE) ||
+        (control->state == BALL_SHUTTLE_STATE_FAILED)) {
         return BALL_SHUTTLE_EVENT_NONE;
     }
-    if (measurement == 0) {
-        return BallShuttleControl_Fail(
-            control, BALL_SHUTTLE_FAILURE_TRACKING);
+    if (BallShuttleControl_MeasurementIsHealthy(measurement) == 0U) {
+        return BallShuttleControl_Fail(control);
     }
 
     control->elapsed_ms = (uint32_t) (now_ms - control->started_ms);
-    if ((measurement->timed_out != 0U) ||
-        (measurement->tracking_valid == 0U)) {
-        return BallShuttleControl_Fail(
-            control, BALL_SHUTTLE_FAILURE_TRACKING);
-    }
-    if ((measurement->balance_enabled == 0U) ||
-        (measurement->imu_fault != 0U) ||
-        (measurement->mapping_fault != 0U)) {
-        return BallShuttleControl_Fail(
-            control, BALL_SHUTTLE_FAILURE_BALANCE);
-    }
-    if ((control->state != BALL_SHUTTLE_STATE_HOLDING_NEGATIVE) &&
-        (control->elapsed_ms > BALL_SHUTTLE_TIMEOUT_MS)) {
-        return BallShuttleControl_Fail(
-            control, BALL_SHUTTLE_FAILURE_TIMEOUT);
-    }
+    phase_elapsed_ms = (uint32_t) (now_ms - control->phase_started_ms);
 
     switch (control->state) {
-        case BALL_SHUTTLE_STATE_MOVING_POSITIVE:
-            if (measurement->filtered_position_mm >
-                control->positive_peak_mm) {
-                control->positive_peak_mm =
-                    measurement->filtered_position_mm;
-            }
-            if (measurement->filtered_position_mm >=
-                BALL_SHUTTLE_POSITIVE_HARD_LIMIT_MM) {
-                control->state = BALL_SHUTTLE_STATE_MOVING_NEGATIVE;
-                control->turn_confirm_count = 0U;
-                return BALL_SHUTTLE_EVENT_TURN_NEGATIVE;
-            }
-            if ((control->turn_armed == 0U) &&
-                (measurement->filtered_position_mm >=
-                 BALL_SHUTTLE_TURN_ARM_POSITION_MM) &&
-                (measurement->velocity_mm_s >=
-                 BALL_SHUTTLE_TURN_ARM_SPEED_MM_S)) {
-                control->turn_armed = 1U;
-            }
-
-            prediction_lead_mm =
-                measurement->predicted_position_mm -
-                measurement->filtered_position_mm;
-            if (prediction_lead_mm < 0.0f) {
-                prediction_lead_mm = 0.0f;
-            }
-            braking_lead_mm = measurement->stop_distance_mm;
-            if (braking_lead_mm < 0.0f) {
-                braking_lead_mm = 0.0f;
-            }
-            control->predicted_turn_lead_mm = BallShuttleControl_Clamp(
-                BallShuttleControl_Max(prediction_lead_mm,
-                                       braking_lead_mm),
-                BALL_SHUTTLE_TURN_LEAD_MIN_MM,
-                BALL_SHUTTLE_TURN_LEAD_MAX_MM);
-            control->predicted_peak_mm =
-                measurement->filtered_position_mm +
-                control->predicted_turn_lead_mm;
-            /* 慢速未武装时，正目标本身仍需连续两个新样本确认。 */
-            predicted_turn_ready = (uint8_t) (
-                (((control->turn_armed != 0U) &&
-                  (control->predicted_peak_mm >=
-                   BALL_SHUTTLE_POSITIVE_TARGET_MM))) ||
-                (measurement->filtered_position_mm >=
-                 BALL_SHUTTLE_POSITIVE_TARGET_MM));
-
-            if (measurement->measurement_accepted != 0U) {
-                if (predicted_turn_ready != 0U) {
-                    if (control->turn_confirm_count <
-                        BALL_SHUTTLE_TURN_CONFIRM_SAMPLES) {
-                        control->turn_confirm_count++;
-                    }
-                } else {
-                    control->turn_confirm_count = 0U;
-                }
-            }
-            if (control->turn_confirm_count >=
-                BALL_SHUTTLE_TURN_CONFIRM_SAMPLES) {
-                control->state = BALL_SHUTTLE_STATE_MOVING_NEGATIVE;
-                control->turn_confirm_count = 0U;
-                return BALL_SHUTTLE_EVENT_TURN_NEGATIVE;
+        case BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE:
+            if (phase_elapsed_ms >= control->config.duration_ms[0]) {
+                control->state = BALL_SHUTTLE_STATE_PHASE_2_POSITIVE;
+                control->phase_started_ms = now_ms;
+                control->target_pipe_pitch_deg =
+                    control->config.angle_magnitude_deg[1];
+                return BALL_SHUTTLE_EVENT_PHASE_2;
             }
             break;
 
-        case BALL_SHUTTLE_STATE_MOVING_NEGATIVE:
-            BallShuttleControl_UpdatePeak(control, measurement);
-            if (measurement->filtered_position_mm <=
-                BALL_SHUTTLE_NEGATIVE_SETTLE_MM) {
-                control->state = BALL_SHUTTLE_STATE_SETTLING_NEGATIVE;
-                control->stable_ready = 0U;
-                return BALL_SHUTTLE_EVENT_ENABLE_ENDPOINT_HOLD;
+        case BALL_SHUTTLE_STATE_PHASE_2_POSITIVE:
+            if (phase_elapsed_ms >= control->config.duration_ms[1]) {
+                control->state = BALL_SHUTTLE_STATE_PHASE_3_NEGATIVE;
+                control->phase_started_ms = now_ms;
+                control->target_pipe_pitch_deg =
+                    -control->config.angle_magnitude_deg[2];
+                return BALL_SHUTTLE_EVENT_PHASE_3;
             }
             break;
 
-        case BALL_SHUTTLE_STATE_SETTLING_NEGATIVE:
-            BallShuttleControl_UpdatePeak(control, measurement);
-            final_error_mm = measurement->filtered_position_mm -
-                             BALL_SHUTTLE_FINAL_TARGET_MM;
-            final_position_ready = (uint8_t) (
-                BallShuttleControl_Abs(final_error_mm) <=
-                BALL_SHUTTLE_FINAL_TOLERANCE_MM);
-            final_speed_ready = (uint8_t) (
-                BallShuttleControl_Abs(measurement->velocity_mm_s) <=
-                BALL_SHUTTLE_FINAL_SPEED_MM_S);
-            if ((final_position_ready != 0U) &&
-                (final_speed_ready != 0U)) {
-                if (control->stable_ready == 0U) {
-                    control->stable_ready = 1U;
-                    control->stable_since_ms = now_ms;
-                } else if ((uint32_t) (now_ms -
-                                       control->stable_since_ms) >=
-                           BALL_SHUTTLE_STABLE_TIME_MS) {
-                    if ((control->positive_peak_checked == 0U) ||
-                        (control->positive_peak_valid == 0U)) {
-                        return BallShuttleControl_Fail(
-                            control,
-                            BALL_SHUTTLE_FAILURE_POSITIVE_PEAK);
-                    }
-                    control->state =
-                        BALL_SHUTTLE_STATE_HOLDING_NEGATIVE;
-                    return BALL_SHUTTLE_EVENT_SUCCEEDED;
-                }
-            } else {
-                control->stable_ready = 0U;
+        case BALL_SHUTTLE_STATE_PHASE_3_NEGATIVE:
+            if (phase_elapsed_ms >= control->config.duration_ms[2]) {
+                control->state = BALL_SHUTTLE_STATE_HOLDING_LEVEL;
+                control->phase_started_ms = now_ms;
+                control->target_pipe_pitch_deg = 0.0f;
+                return BALL_SHUTTLE_EVENT_SUCCEEDED;
             }
             break;
 
-        case BALL_SHUTTLE_STATE_HOLDING_NEGATIVE:
-            return BALL_SHUTTLE_EVENT_NONE;
+        case BALL_SHUTTLE_STATE_HOLDING_LEVEL:
+            break;
 
         default:
-            return BallShuttleControl_Fail(
-                control, BALL_SHUTTLE_FAILURE_BALANCE);
+            return BallShuttleControl_Fail(control);
     }
 
     return BALL_SHUTTLE_EVENT_NONE;
 }
 
-uint8_t BallShuttleControl_IsReady(const BallShuttleControl *control)
+float BallShuttleControl_GetTargetPipePitchDeg(
+    const BallShuttleControl *control)
 {
-    return (uint8_t) ((control != 0) &&
-                      (control->state == BALL_SHUTTLE_STATE_IDLE) &&
-                      (control->start_ready != 0U));
+    return (control != 0) ? control->target_pipe_pitch_deg : 0.0f;
 }
 
 uint8_t BallShuttleControl_IsRunning(const BallShuttleControl *control)
@@ -393,14 +236,14 @@ uint8_t BallShuttleControl_IsRunning(const BallShuttleControl *control)
     }
 
     return (uint8_t) (
-        (control->state == BALL_SHUTTLE_STATE_MOVING_POSITIVE) ||
-        (control->state == BALL_SHUTTLE_STATE_MOVING_NEGATIVE) ||
-        (control->state == BALL_SHUTTLE_STATE_SETTLING_NEGATIVE));
+        (control->state == BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE) ||
+        (control->state == BALL_SHUTTLE_STATE_PHASE_2_POSITIVE) ||
+        (control->state == BALL_SHUTTLE_STATE_PHASE_3_NEGATIVE));
 }
 
 uint8_t BallShuttleControl_IsHolding(const BallShuttleControl *control)
 {
     return (uint8_t) ((control != 0) &&
                       (control->state ==
-                       BALL_SHUTTLE_STATE_HOLDING_NEGATIVE));
+                       BALL_SHUTTLE_STATE_HOLDING_LEVEL));
 }

@@ -21,6 +21,16 @@ typedef enum {
     APP_DYNAMIC_START_REJECT_BALANCE_ENABLE
 } AppDynamicStartRejectReason;
 
+typedef enum {
+    APP_SHUTTLE_START_REJECT_NONE = 0,
+    APP_SHUTTLE_START_REJECT_NOT_STOPPED,
+    APP_SHUTTLE_START_REJECT_BUSY,
+    APP_SHUTTLE_START_REJECT_CALIBRATION,
+    APP_SHUTTLE_START_REJECT_ATTITUDE,
+    APP_SHUTTLE_START_REJECT_CENTER,
+    APP_SHUTTLE_START_REJECT_CONFIG
+} AppBallShuttleStartRejectReason;
+
 /* USART1 PID调参遥测快照；由App一次性复制，避免协议层直接访问控制器内部状态。 */
 typedef struct {
     uint8_t enabled;
@@ -49,6 +59,7 @@ typedef struct {
 
 extern volatile uint8_t g_app_dynamic_run_failure;
 extern volatile uint8_t g_app_dynamic_start_reject;
+extern volatile uint8_t g_app_ball_shuttle_start_reject;
 
 void App_Init(void);
 void App_Loop(void);
@@ -63,6 +74,22 @@ uint8_t App_IsDynamicRunCommandLocked(void);
 uint8_t App_SetBallBalanceEnabled(uint8_t enabled);
 uint8_t App_GetBallBalanceEnabled(void);
 uint8_t App_StartBallShuttle(void);
+uint8_t App_StopBallShuttle(void);
+uint8_t App_SetBallShuttleConfig(float phase_1_angle_deg,
+                                 uint32_t phase_1_time_ms,
+                                 float phase_2_angle_deg,
+                                 uint32_t phase_2_time_ms,
+                                 float phase_3_angle_deg,
+                                 uint32_t phase_3_time_ms);
+void App_GetBallShuttleConfig(float *phase_1_angle_deg,
+                              uint32_t *phase_1_time_ms,
+                              float *phase_2_angle_deg,
+                              uint32_t *phase_2_time_ms,
+                              float *phase_3_angle_deg,
+                              uint32_t *phase_3_time_ms);
+uint8_t App_ResetBallShuttleConfig(void);
+uint8_t App_GetBallShuttleState(void);
+uint8_t App_GetBallShuttleStartReject(void);
 uint8_t App_StartPipeCalibration(void);
 uint8_t App_GetPipeCalibrationActive(void);
 uint8_t App_GetPipeCalibrationValid(void);

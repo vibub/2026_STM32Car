@@ -1332,233 +1332,139 @@ static void test_ball_balance_endpoint_integral(void)
     assert(output.desired_pipe_pitch_deg > 0.0f);
 }
 
-static void prepare_ball_shuttle(BallShuttleControl *control,
-                                 BallShuttleMeasurement *measurement,
-                                 uint32_t base_ms)
+static void prepare_shuttle_measurement(BallShuttleMeasurement *measurement)
 {
-    BallShuttleEvent event;
-
-    BallShuttleControl_Init(control);
-    measurement->ready_monitor_enabled = 1U;
-    measurement->measurement_accepted = 1U;
-    measurement->balance_enabled = 1U;
-    measurement->tracking_valid = 1U;
-    measurement->timed_out = 0U;
+    measurement->pipe_control_enabled = 1U;
+    measurement->manual_pipe_mode_enabled = 1U;
+    measurement->attitude_valid = 1U;
     measurement->imu_fault = 0U;
     measurement->mapping_fault = 0U;
-    measurement->filtered_position_mm = 0.0f;
-    measurement->predicted_position_mm = 0.0f;
-    measurement->stop_distance_mm = 0.0f;
-    measurement->velocity_mm_s = 0.0f;
-
-    event = BallShuttleControl_Update(control, base_ms, measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    event = BallShuttleControl_Update(control, base_ms + 500U, measurement);
-    assert(event == BALL_SHUTTLE_EVENT_READY);
-    assert(BallShuttleControl_IsReady(control) != 0U);
 }
 
 static void test_ball_shuttle_control(void)
 {
     BallShuttleControl control;
     BallShuttleMeasurement measurement;
+    BallShuttleConfig config;
     BallShuttleEvent event;
 
     BallShuttleControl_Init(&control);
     assert(control.state == BALL_SHUTTLE_STATE_IDLE);
-    assert(BallShuttleControl_Start(&control, 100U) == 0U);
+    assert(BallShuttleControl_IsRunning(&control) == 0U);
+    assert(BallShuttleControl_IsHolding(&control) == 0U);
+    prepare_shuttle_measurement(&measurement);
 
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    measurement.filtered_position_mm = 7.5f;
-    measurement.velocity_mm_s = 7.5f;
-    event = BallShuttleControl_Update(&control, 520U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(BallShuttleControl_IsReady(&control) != 0U);
+    config.angle_magnitude_deg[0] = 3.0f;
+    config.angle_magnitude_deg[1] = 4.0f;
+    config.angle_magnitude_deg[2] = 2.0f;
+    config.duration_ms[0] = 100U;
+    config.duration_ms[1] = 200U;
+    config.duration_ms[2] = 150U;
+    assert(BallShuttleControl_SetConfig(&control, &config) != 0U);
 
-    measurement.filtered_position_mm = 8.1f;
-    event = BallShuttleControl_Update(&control, 540U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NOT_READY);
-    assert(BallShuttleControl_IsReady(&control) == 0U);
-    assert(BallShuttleControl_Start(&control, 550U) == 0U);
+    config.duration_ms[0] = 6000U;
+    assert(BallShuttleControl_SetConfig(&control, &config) == 0U);
+    config.duration_ms[0] = 100U;
+    config.duration_ms[1] = 200U;
+    config.duration_ms[2] = 150U;
+    assert(BallShuttleControl_SetConfig(&control, &config) != 0U);
+    config.angle_magnitude_deg[2] = 6.0f;
+    assert(BallShuttleControl_SetConfig(&control, &config) == 0U);
+    config.angle_magnitude_deg[2] = 2.0f;
+    assert(BallShuttleControl_SetConfig(&control, &config) != 0U);
+    config.duration_ms[1] = 4800U;
+    assert(BallShuttleControl_SetConfig(&control, &config) == 0U);
 
-    measurement.filtered_position_mm = 0.0f;
-    measurement.velocity_mm_s = 0.0f;
-    event = BallShuttleControl_Update(&control, 600U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    event = BallShuttleControl_Update(&control, 1100U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_READY);
-    assert(BallShuttleControl_Start(&control, 1200U) != 0U);
+    config.duration_ms[1] = 200U;
+    assert(BallShuttleControl_SetConfig(&control, &config) != 0U);
+    assert(BallShuttleControl_Start(&control, 0U) != 0U);
     assert(BallShuttleControl_IsRunning(&control) != 0U);
-
-    measurement.filtered_position_mm = 30.0f;
-    measurement.predicted_position_mm = 35.0f;
-    measurement.stop_distance_mm = 15.0f;
-    measurement.velocity_mm_s = 10.0f;
-    event = BallShuttleControl_Update(&control, 1300U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.turn_armed != 0U);
-    assert(control.turn_confirm_count == 0U);
     assert_float_near_tolerance(
-        control.predicted_turn_lead_mm, 15.0f, 0.001f);
+        BallShuttleControl_GetTargetPipePitchDeg(&control), -3.0f, 0.001f);
+    assert(BallShuttleControl_SetConfig(&control, &config) == 0U);
 
-    measurement.filtered_position_mm = 40.0f;
-    measurement.predicted_position_mm = 51.0f;
-    measurement.stop_distance_mm = 8.0f;
-    event = BallShuttleControl_Update(&control, 1320U, &measurement);
+    event = BallShuttleControl_Update(&control, 50U, &measurement);
     assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.turn_confirm_count == 1U);
+    assert(control.state == BALL_SHUTTLE_STATE_PHASE_1_NEGATIVE);
+
+    event = BallShuttleControl_Update(&control, 100U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_PHASE_2);
+    assert(control.state == BALL_SHUTTLE_STATE_PHASE_2_POSITIVE);
     assert_float_near_tolerance(
-        control.predicted_turn_lead_mm, 11.0f, 0.001f);
+        BallShuttleControl_GetTargetPipePitchDeg(&control), 4.0f, 0.001f);
 
-    measurement.measurement_accepted = 0U;
-    event = BallShuttleControl_Update(&control, 1330U, &measurement);
+    event = BallShuttleControl_Update(&control, 200U, &measurement);
     assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.turn_confirm_count == 1U);
+    assert(control.state == BALL_SHUTTLE_STATE_PHASE_2_POSITIVE);
 
-    measurement.measurement_accepted = 1U;
-    measurement.filtered_position_mm = 40.5f;
-    measurement.predicted_position_mm = 50.5f;
-    event = BallShuttleControl_Update(&control, 1340U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_TURN_NEGATIVE);
-    assert(control.state == BALL_SHUTTLE_STATE_MOVING_NEGATIVE);
+    event = BallShuttleControl_Update(&control, 300U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_PHASE_3);
+    assert(control.state == BALL_SHUTTLE_STATE_PHASE_3_NEGATIVE);
+    assert_float_near_tolerance(
+        BallShuttleControl_GetTargetPipePitchDeg(&control), -2.0f, 0.001f);
 
-    measurement.filtered_position_mm = 52.0f;
-    measurement.velocity_mm_s = 10.0f;
-    event = BallShuttleControl_Update(&control, 1360U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    measurement.filtered_position_mm = 51.5f;
-    measurement.velocity_mm_s = -6.0f;
-    event = BallShuttleControl_Update(&control, 1380U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.peak_reverse_confirm_count == 0U);
+    measurement.attitude_valid = 0U;
+    event = BallShuttleControl_Update(&control, 310U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    assert(control.failure == BALL_SHUTTLE_FAILURE_PIPE_CONTROL);
+    assert(control.state == BALL_SHUTTLE_STATE_FAILED);
 
-    measurement.filtered_position_mm = 50.8f;
-    event = BallShuttleControl_Update(&control, 1400U, &measurement);
+    prepare_shuttle_measurement(&measurement);
+    event = BallShuttleControl_Update(&control, 320U, &measurement);
     assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.peak_reverse_confirm_count == 1U);
-    measurement.measurement_accepted = 0U;
-    event = BallShuttleControl_Update(&control, 1410U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.peak_reverse_confirm_count == 1U);
 
-    measurement.measurement_accepted = 1U;
-    measurement.filtered_position_mm = 50.5f;
-    event = BallShuttleControl_Update(&control, 1420U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.positive_peak_checked != 0U);
-    assert(control.positive_peak_valid != 0U);
-    assert_float_near_tolerance(control.positive_peak_mm, 52.0f, 0.001f);
+    assert(BallShuttleControl_Start(&control, 1000U) != 0U);
+    measurement.imu_fault = 1U;
+    event = BallShuttleControl_Update(&control, 1010U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    measurement.imu_fault = 0U;
 
-    measurement.filtered_position_mm = -30.0f;
-    event = BallShuttleControl_Update(&control, 2200U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_ENABLE_ENDPOINT_HOLD);
-    assert(control.state == BALL_SHUTTLE_STATE_SETTLING_NEGATIVE);
+    assert(BallShuttleControl_Start(&control, 2000U) != 0U);
+    measurement.mapping_fault = 1U;
+    event = BallShuttleControl_Update(&control, 2010U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    measurement.mapping_fault = 0U;
 
-    measurement.filtered_position_mm = -45.0f;
-    measurement.velocity_mm_s = 5.0f;
-    event = BallShuttleControl_Update(&control, 3000U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.stable_ready != 0U);
-    event = BallShuttleControl_Update(&control, 3500U, &measurement);
+    assert(BallShuttleControl_Start(&control, 3000U) != 0U);
+    measurement.pipe_control_enabled = 0U;
+    event = BallShuttleControl_Update(&control, 3010U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    measurement.pipe_control_enabled = 1U;
+
+    assert(BallShuttleControl_Start(&control, 3100U) != 0U);
+    measurement.manual_pipe_mode_enabled = 0U;
+    event = BallShuttleControl_Update(&control, 3110U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_FAILED);
+    measurement.manual_pipe_mode_enabled = 1U;
+
+    assert(BallShuttleControl_Start(&control, 4000U) != 0U);
+    event = BallShuttleControl_Update(&control, 4100U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_PHASE_2);
+    event = BallShuttleControl_Update(&control, 4300U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_PHASE_3);
+    event = BallShuttleControl_Update(&control, 4450U, &measurement);
     assert(event == BALL_SHUTTLE_EVENT_SUCCEEDED);
     assert(BallShuttleControl_IsHolding(&control) != 0U);
-    assert(control.elapsed_ms == 2300U);
+    assert_float_near_tolerance(
+        BallShuttleControl_GetTargetPipePitchDeg(&control), 0.0f, 0.001f);
+    assert(control.elapsed_ms == 450U);
 
-    measurement.timed_out = 1U;
-    measurement.tracking_valid = 0U;
-    event = BallShuttleControl_Update(&control, 3520U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_TRACKING);
+    event = BallShuttleControl_Update(&control, 5000U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_NONE);
+    assert(BallShuttleControl_IsHolding(&control) != 0U);
+
+    BallShuttleControl_HoldLevel(&control, 5000U);
+    assert(control.state == BALL_SHUTTLE_STATE_HOLDING_LEVEL);
+    assert_float_near_tolerance(
+        BallShuttleControl_GetTargetPipePitchDeg(&control), 0.0f, 0.001f);
+    event = BallShuttleControl_Update(&control, 5100U, &measurement);
+    assert(event == BALL_SHUTTLE_EVENT_NONE);
+
     BallShuttleControl_Stop(&control);
     assert(control.state == BALL_SHUTTLE_STATE_IDLE);
-    assert(BallShuttleControl_IsReady(&control) == 0U);
-    assert(BallShuttleControl_Start(&control, 3600U) == 0U);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.filtered_position_mm = 50.0f;
-    measurement.predicted_position_mm = 50.0f;
-    measurement.stop_distance_mm = 0.0f;
-    measurement.velocity_mm_s = 0.0f;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.turn_confirm_count == 1U);
-    measurement.measurement_accepted = 0U;
-    event = BallShuttleControl_Update(&control, 630U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.turn_confirm_count == 1U);
-    measurement.measurement_accepted = 1U;
-    event = BallShuttleControl_Update(&control, 640U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_TURN_NEGATIVE);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.filtered_position_mm = 55.0f;
-    measurement.velocity_mm_s = 0.0f;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_TURN_NEGATIVE);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.filtered_position_mm = 56.0f;
-    measurement.velocity_mm_s = 20.0f;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_TURN_NEGATIVE);
-    measurement.filtered_position_mm = 55.0f;
-    measurement.velocity_mm_s = -6.0f;
-    event = BallShuttleControl_Update(&control, 640U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    measurement.filtered_position_mm = 54.0f;
-    event = BallShuttleControl_Update(&control, 660U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    assert(control.positive_peak_checked != 0U);
-    assert(control.positive_peak_valid == 0U);
-    assert(BallShuttleControl_IsRunning(&control) != 0U);
-
-    measurement.filtered_position_mm = -30.0f;
-    event = BallShuttleControl_Update(&control, 1000U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_ENABLE_ENDPOINT_HOLD);
-    measurement.filtered_position_mm = -50.0f;
-    measurement.velocity_mm_s = 0.0f;
-    event = BallShuttleControl_Update(&control, 1200U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_NONE);
-    event = BallShuttleControl_Update(&control, 1700U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_POSITIVE_PEAK);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    event = BallShuttleControl_Update(&control, 5601U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_TIMEOUT);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.tracking_valid = 0U;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_TRACKING);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.imu_fault = 1U;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_BALANCE);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.mapping_fault = 1U;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_BALANCE);
-
-    prepare_ball_shuttle(&control, &measurement, 0U);
-    assert(BallShuttleControl_Start(&control, 600U) != 0U);
-    measurement.balance_enabled = 0U;
-    event = BallShuttleControl_Update(&control, 620U, &measurement);
-    assert(event == BALL_SHUTTLE_EVENT_FAILED);
-    assert(control.failure == BALL_SHUTTLE_FAILURE_BALANCE);
+    assert(BallShuttleControl_Start(&control, 5200U) != 0U);
+    BallShuttleControl_Stop(&control);
+    assert(BallShuttleControl_IsRunning(&control) == 0U);
 }
 
 static void test_extended_downward_pipe_limit(void)
