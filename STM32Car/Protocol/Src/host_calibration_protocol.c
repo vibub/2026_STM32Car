@@ -530,6 +530,144 @@ static void HostCalib_ProcessSample(const char *argument)
     g_host_calibration_valid_command_count++;
 }
 
+static void HostCalib_SendShuttleConfig(void)
+{
+    float angle_1;
+    float angle_2;
+    float angle_3;
+    uint32_t time_1;
+    uint32_t time_2;
+    uint32_t time_3;
+    char reply[HOST_PROTOCOL_REPLY_BUFFER_SIZE];
+
+    App_GetBallShuttleConfig(&angle_1, &time_1,
+                             &angle_2, &time_2,
+                             &angle_3, &time_3);
+    (void) snprintf(reply, sizeof(reply), "SHUTTLE");
+    HostCalib_AppendFloatField(reply, sizeof(reply), angle_1, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), (float) time_1, 0U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), angle_2, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), (float) time_2, 0U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), angle_3, 2U);
+    HostCalib_AppendFloatField(reply, sizeof(reply), (float) time_3, 0U);
+    HostCalib_SendLine(reply);
+}
+
+static void HostCalib_HandleShuttleCommand(const char *argument)
+{
+    char sub[12];
+    const char *cursor = argument;
+    uint8_t sub_length = 0U;
+    float angles[3];
+    float times[3];
+    uint8_t index;
+
+    while ((*cursor == ' ') || (*cursor == '\t')) {
+        cursor++;
+    }
+    while ((*cursor != '\0') && (*cursor != ' ') &&
+           (*cursor != '\t') &&
+           (sub_length + 1U < sizeof(sub))) {
+        sub[sub_length] = *cursor;
+        sub_length++;
+        cursor++;
+    }
+    sub[sub_length] = '\0';
+    while ((*cursor == ' ') || (*cursor == '\t')) {
+        cursor++;
+    }
+
+    if (strcmp(sub, "GET") == 0) {
+        if (*cursor != '\0') {
+            HostCalib_SendLine("ERR parse");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_SendShuttleConfig();
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(sub, "DEFAULT") == 0) {
+        if (*cursor != '\0') {
+            HostCalib_SendLine("ERR parse");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if (App_ResetBallShuttleConfig() == 0U) {
+            HostCalib_SendLine("ERR busy");
+        } else {
+            HostCalib_SendLine("OK");
+        }
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(sub, "START") == 0) {
+        if (*cursor != '\0') {
+            HostCalib_SendLine("ERR parse");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if (App_StartBallShuttle() == 0U) {
+            HostCalib_SendLine("ERR state");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_SendLine("OK");
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(sub, "STOP") == 0) {
+        if (*cursor != '\0') {
+            HostCalib_SendLine("ERR parse");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        if (App_StopBallShuttle() == 0U) {
+            HostCalib_SendLine("ERR state");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_SendLine("OK");
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(sub, "SET") == 0) {
+        float set_values[6];
+
+        if (HostCalib_ParseFloatList(cursor, set_values, 6U) == 0U) {
+            HostCalib_SendLine("ERR parse");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        for (index = 0U; index < 3U; index++) {
+            angles[index] = set_values[index * 2U];
+            if (set_values[index * 2U + 1U] < 0.0f) {
+                times[index] = 0U;
+            } else {
+                times[index] = (uint32_t) (set_values[index * 2U + 1U] +
+                                           0.5f);
+            }
+        }
+        if (App_SetBallShuttleConfig(angles[0], times[0],
+                                     angles[1], times[1],
+                                     angles[2], times[2]) == 0U) {
+            HostCalib_SendLine("ERR range");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_SendLine("OK");
+        g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    HostCalib_SendLine("ERR unknown");
+    g_host_calibration_invalid_command_count++;
+}
+
 static void HostCalib_ProcessLine(const char *line)
 {
     char command[16];
@@ -686,6 +824,16 @@ static void HostCalib_ProcessLine(const char *line)
         }
         HostCalib_SendLine("OK");
         g_host_calibration_valid_command_count++;
+        return;
+    }
+
+    if (strcmp(command, "SHUTTLE") == 0) {
+        if (App_GetHostCalibrationEnabled() != 0U) {
+            HostCalib_SendLine("ERR busy");
+            g_host_calibration_invalid_command_count++;
+            return;
+        }
+        HostCalib_HandleShuttleCommand(argument);
         return;
     }
 

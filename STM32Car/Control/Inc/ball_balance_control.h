@@ -29,7 +29,8 @@ typedef enum {
     BALL_BALANCE_PHASE_WAIT_PIPE = 0,
     BALL_BALANCE_PHASE_BREAKAWAY = 1,
     BALL_BALANCE_PHASE_MOVING = 2,
-    BALL_BALANCE_PHASE_HOLD = 3
+    BALL_BALANCE_PHASE_HOLD = 3,
+    BALL_BALANCE_PHASE_MANUAL_PIPE = 4
 } BallBalancePhase;
 
 typedef struct {
@@ -63,6 +64,7 @@ typedef struct {
     uint8_t desired_cache_valid;
     uint8_t endpoint_hold_enabled;
     uint8_t transport_mode_enabled;
+    uint8_t manual_pipe_mode_enabled;
     uint8_t transport_imu_valid;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
@@ -76,6 +78,7 @@ typedef struct {
     uint32_t kick_stage_started_ms;
     uint32_t turnaround_freeze_started_ms;
     float target_mm;
+    float manual_pipe_target_deg;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
     float position_kd_deg_per_mm_s;
@@ -141,7 +144,9 @@ typedef struct {
     uint8_t trajectory_phase;
     uint8_t endpoint_hold_enabled;
     uint8_t transport_mode_enabled;
+    uint8_t manual_pipe_mode_enabled;
     float target_mm;
+    float manual_pipe_target_deg;
     float position_kp_deg_per_mm;
     float position_ki_deg_per_mm_s;
     float position_kd_deg_per_mm_s;
@@ -195,6 +200,9 @@ void BallBalanceControl_SetEndpointHoldEnabled(BallBalanceControl *control,
                                                uint8_t enabled);
 void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
                                          uint8_t enabled);
+void BallBalanceControl_SetManualPipeMode(BallBalanceControl *control,
+                                         uint8_t enabled,
+                                         float target_pipe_pitch_deg);
 void BallBalanceControl_SetTransportInputs(
     BallBalanceControl *control,
     float command_accel_cm_s2,

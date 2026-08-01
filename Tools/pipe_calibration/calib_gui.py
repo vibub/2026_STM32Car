@@ -42,6 +42,7 @@ from protocol import (
     CMD_PING,
     CMD_SAMPLE,
     CMD_SERVO,
+    CMD_SHUTTLE,
     CMD_STREAM,
     CMD_TARGET,
     CMD_TUNE_STREAM,
@@ -49,11 +50,13 @@ from protocol import (
     RESP_PID,
     RESP_PONG,
     RESP_SAMPLE_OK,
+    RESP_SHUTTLE,
     PWM_CENTER_US,
     PWM_MAX_US,
     PWM_MIN_US,
     parse_pid,
     parse_sample,
+    parse_shuttle_config,
     parse_tune_stream,
 )
 import table as tbl
@@ -103,10 +106,12 @@ class CalibrationApp:
         self.pid_tab = PidTuningTab(self.notebook, self)
         self.calib_tab = CalibrationTab(self.notebook, self)
         self.validate_tab = ValidationTab(self.notebook, self)
+        self.shuttle_tab = ShuttleTab(self.notebook, self)
         self.notebook.add(self.base_tab.frame, text="基础区")
         self.notebook.add(self.pid_tab.frame, text="PID调参")
         self.notebook.add(self.calib_tab.frame, text="标定区")
         self.notebook.add(self.validate_tab.frame, text="验证区")
+        self.notebook.add(self.shuttle_tab.frame, text="第三题")
 
         log_frame = ttk.LabelFrame(self.root, text="日志")
         log_frame.pack(fill="both", padx=6, pady=6)
@@ -1994,6 +1999,173 @@ class ValidationTab:
         path = os.path.join(self.app.data_dir, f"validation_{stamp}.csv")
         tbl.write_validation_csv(path, self.results)
         self.app.log(f"验证结果已保存: {path}")
+
+
+class ShuttleTab:
+    """第三题：开环水管角序列，角度幅值 0~5.5°，时间 20~5000 ms，总和≤5 s。"""
+
+    def __init__(self, parent, app):
+        self.app = app
+        self.frame = ttk.Frame(parent)
+
+        params = ttk.LabelFrame(self.frame, text="第三题序列参数（角度为幅值，按 负/正/负 执行）")
+        params.pack(fill="x", padx=6, pady=6)
+        header = ttk.Frame(params)
+        header.pack(fill="x", padx=6, pady=(6, 0))
+        ttk.Label(header, text="阶段", width=8).pack(side="left")
+        ttk.Label(header, text="角度(°)", width=10).pack(side="left", padx=2)
+        ttk.Label(header, text="时间(ms)", width=12).pack(side="left", padx=2)
+        self.angle_vars = []
+        self.time_vars = []
+        for index, (angle_default, time_default) in enumerate(
+            (("5.0", "300"), ("5.0", "600"), ("5.0", "300"))
+        ):
+            row = ttk.Frame(params)
+            row.pack(fill="x", padx=6, pady=2)
+            ttk.Label(row, text=f"阶段{index + 1}", width=8).pack(side="left")
+            angle_var = tk.StringVar(value=angle_default)
+            ttk.Entry(row, textvariable=angle_var, width=10).pack(side="left", padx=2)
+            time_var = tk.StringVar(value=time_default)
+            ttk.Entry(row, textvariable=time_var, width=12).pack(side="left", padx=2)
+            self.angle_vars.append(angle_var)
+            self.time_vars.append(time_var)
+        row = ttk.Frame(params)
+        row.pack(fill="x", padx=6, pady=(6, 2))
+        self.total_var = tk.StringVar(value="总和 1200 ms / ≤5000 ms")
+        ttk.Label(row, textvariable=self.total_var, foreground="#1565c0").pack(side="left")
+        self.angle_vars[0].trace_add("write", lambda *_: self._update_total())
+        self.angle_vars[1].trace_add("write", lambda *_: self._update_total())
+        self.angle_vars[2].trace_add("write", lambda *_: self._update_total())
+        self.time_vars[0].trace_add("write", lambda *_: self._update_total())
+        self.time_vars[1].trace_add("write", lambda *_: self._update_total())
+        self.time_vars[2].trace_add("write", lambda *_: self._update_total())
+
+        row = ttk.Frame(params)
+        row.pack(fill="x", padx=6, pady=4)
+        self.read_btn = ttk.Button(row, text="读取参数", command=self.read_config)
+        self.read_btn.pack(side="left")
+        self.set_btn = ttk.Button(row, text="写入参数", command=self.write_config)
+        self.set_btn.pack(side="left", padx=4)
+        self.default_btn = ttk.Button(row, text="恢复默认", command=self.reset_default)
+        self.default_btn.pack(side="left")
+        self.start_btn = ttk.Button(row, text="启动第三题", command=self.start)
+        self.start_btn.pack(side="left", padx=(14, 4))
+        self.stop_btn = ttk.Button(row, text="停止并水平", command=self.stop)
+        self.stop_btn.pack(side="left")
+        self.state_var = tk.StringVar(value="状态: 未知")
+        ttk.Label(row, textvariable=self.state_var, foreground="#1565c0").pack(side="left", padx=8)
+
+        ttk.Label(
+            self.frame,
+            text="提示：启动前请确保标定模式(CAL)关闭、小车停车、钢球人工放回中心；"
+            "运行期间K230数据不参与控制，仅需IMU姿态有效。",
+            foreground="#616161",
+        ).pack(anchor="w", padx=8, pady=4)
+
+    def _update_total(self):
+        total = 0
+        for index in range(3):
+            try:
+                total += int(float(self.time_vars[index].get()))
+            except (TypeError, ValueError):
+                total = 0
+                break
+        self.total_var.set(f"总和 {total} ms / ≤5000 ms")
+
+    def _read_params(self):
+        angles = []
+        times = []
+        for index in range(3):
+            try:
+                angle = float(self.angle_vars[index].get())
+            except (TypeError, ValueError):
+                raise ValueError(f"阶段{index + 1} 角度无效")
+            try:
+                time_ms = int(float(self.time_vars[index].get()))
+            except (TypeError, ValueError):
+                raise ValueError(f"阶段{index + 1} 时间无效")
+            angles.append(angle)
+            times.append(time_ms)
+        return angles, times
+
+    def read_config(self):
+        resp = self.app.send(f"{CMD_SHUTTLE} GET", expect=RESP_SHUTTLE)
+        if resp is None:
+            return
+        try:
+            phases = parse_shuttle_config(resp)
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        for index, (angle, time_ms) in enumerate(phases):
+            self.angle_vars[index].set(f"{angle:.2f}")
+            self.time_vars[index].set(str(time_ms))
+        self.app.log(f"已读取第三题参数: {phases}")
+
+    def write_config(self):
+        try:
+            angles, times = self._read_params()
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        if any(angle < 0 or angle > 5.5 for angle in angles):
+            self.app.log("角度必须位于 0~5.5°。", error=True)
+            return
+        if any(time_ms < 20 or time_ms > 5000 for time_ms in times):
+            self.app.log("时间必须位于 20~5000 ms。", error=True)
+            return
+        if sum(times) > 5000:
+            self.app.log("三段总时间超过 5000 ms。", error=True)
+            return
+        cmd = (
+            f"{CMD_SHUTTLE} SET {angles[0]:.2f} {times[0]} "
+            f"{angles[1]:.2f} {times[1]} {angles[2]:.2f} {times[2]}"
+        )
+        resp = self.app.send(cmd, expect=RESP_OK)
+        if resp is not None:
+            self.app.log("第三题参数已写入。")
+
+    def reset_default(self):
+        resp = self.app.send(f"{CMD_SHUTTLE} DEFAULT", expect=RESP_OK)
+        if resp is not None:
+            self.angle_vars[0].set("5.0")
+            self.angle_vars[1].set("5.0")
+            self.angle_vars[2].set("5.0")
+            self.time_vars[0].set("300")
+            self.time_vars[1].set("600")
+            self.time_vars[2].set("300")
+            self.app.log("第三题参数已恢复默认。")
+
+    def start(self):
+        if self.app.link is None:
+            self.app.log("未连接设备。", error=True)
+            return
+        try:
+            angles, times = self._read_params()
+        except ValueError as exc:
+            self.app.log(str(exc), error=True)
+            return
+        cmd = (
+            f"{CMD_SHUTTLE} SET {angles[0]:.2f} {times[0]} "
+            f"{angles[1]:.2f} {times[1]} {angles[2]:.2f} {times[2]}"
+        )
+        resp = self.app.send(cmd, expect=RESP_OK)
+        if resp is None:
+            self.state_var.set("状态: 参数写入失败")
+            return
+        resp = self.app.send(f"{CMD_SHUTTLE} START", expect=RESP_OK)
+        if resp is None:
+            self.state_var.set("状态: 启动被拒绝（钢球需放回中心）")
+            return
+        self.state_var.set("状态: 运行中")
+        self.app.log("第三题已启动。")
+
+    def stop(self):
+        resp = self.app.send(f"{CMD_SHUTTLE} STOP", expect=RESP_OK)
+        if resp is None:
+            return
+        self.state_var.set("状态: 已回水平")
+        self.app.log("第三题已停止并回水平。")
 
 
 def main():
