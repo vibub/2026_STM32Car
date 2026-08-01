@@ -88,7 +88,7 @@
 #define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM        7.0f /* 预测位置接近题目边界前提前强回收。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         4.0f /* 回到中心且降速后才退出。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到中心死区且降速后才退出。 */
 #define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 10.0f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM   0.020f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S 0.016f

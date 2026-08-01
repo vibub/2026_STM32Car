@@ -26,7 +26,7 @@
 #define APP_ABCD_MAX_ACCEL_CM_S2 APP_AB_MAX_ACCEL_CM_S2
 #define APP_ABCD_MAX_DECEL_CM_S2 APP_AB_MAX_DECEL_CM_S2
 #define APP_ABCD_MAX_JERK_CM_S3   APP_AB_MAX_JERK_CM_S3
-#define APP_ABCD_WALL_COUPLING_GAIN             0.0f /* 横向向心加速度到管轴扰动的实测耦合；首圈0为基线，允许正负。 */
+#define APP_ABCD_WALL_COUPLING_GAIN           0.020f /* 首圈实测：B-C约4.49 s内由0漂到-50 mm，对应约2%的向心加速度轴向耦合。 */
 #define APP_ENABLE_K230_TELEMETRY                 0U /* 首轮肉眼测试：不向 K230 发送数据，接收链路保持启用。 */
 #define APP_K230_TELEMETRY_PERIOD_MS             50U /* ABCD遥测20 Hz，K230仅缓存，过A后再写SD卡。 */
 #define APP_AB_PASS_DISTANCE_CM           150.0f /* 第四项 A 到 B 直线的名义通过里程。 */

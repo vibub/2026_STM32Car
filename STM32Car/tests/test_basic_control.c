@@ -1720,6 +1720,20 @@ static void test_ball_balance_transport_mode(void)
 
     BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
     BallBalanceControl_SetTransportWallAcceleration(
+        &control, 0.49f, 1U);
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert_float_near_tolerance(
+        output.transport_wall_feedforward_pitch_deg,
+        -0.05978f, 0.005f);
+    assert(output.transport_feedforward_pitch_deg < -0.05f);
+    assert(output.transport_feedforward_pitch_deg > -0.07f);
+
+    /* 极端横向冲击仍必须受弯道前馈0.5度限幅保护。 */
+    BallBalanceControl_SetTransportWallAcceleration(
         &control, 5.0f, 1U);
     measurement.sequence++;
     now_ms += 100U;
@@ -1729,8 +1743,6 @@ static void test_ball_balance_transport_mode(void)
     assert_float_near_tolerance(
         output.transport_wall_feedforward_pitch_deg,
         -0.50f, 0.01f);
-    assert(output.transport_feedforward_pitch_deg < -0.49f);
-    assert(output.transport_feedforward_pitch_deg > -0.51f);
 
     BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
     BallBalanceControl_SetTransportWallAcceleration(
