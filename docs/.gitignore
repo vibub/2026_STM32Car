@@ -1,0 +1,9 @@
+# XeLaTeX / latexmk 的中间编译文件
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.xdv
