@@ -87,15 +87,15 @@
 #define BALL_BALANCE_TRANSPORT_P_LIMIT_DEG             0.38f /* 弯道位置修正保持小幅。 */
 #define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM       10.0f /* 达到题目误差边界立即进入强回收。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到中心死区且降速后才退出。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 15.0f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM        7.0f /* 预测位置接近题目边界前提前强回收。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         4.0f /* 回到中心且降速后才退出。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 10.0f
 #define BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM   0.020f
-#define BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S 0.014f
-#define BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG       0.65f /* 越界后给足克服机构迟滞的最小回拉角。 */
-#define BALL_BALANCE_TRANSPORT_RECOVERY_P_LIMIT_DEG     1.00f
-#define BALL_BALANCE_TRANSPORT_RECOVERY_D_LIMIT_DEG     0.80f
-#define BALL_BALANCE_TRANSPORT_RECOVERY_FB_LIMIT_DEG    1.20f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S 0.016f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG       0.75f /* 越界后给足克服机构迟滞的最小回拉角。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_P_LIMIT_DEG     1.20f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_D_LIMIT_DEG     1.00f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_FB_LIMIT_DEG    1.50f
 
 static uint8_t BallBalanceControl_AttitudeIsFresh(
     const BallBalanceControl *control,
@@ -565,6 +565,7 @@ static void BallBalanceControl_ApplyTransportCommand(
     float kd_deg_per_mm_s;
     float p_limit_deg;
     float position_deadband_mm;
+    float predicted_error_mm;
 
     expected_disturbance_deg = BallBalanceControl_Limit(
         control->transport_command_accel_cm_s2 *
@@ -601,6 +602,7 @@ static void BallBalanceControl_ApplyTransportCommand(
         position_deadband_mm = BALL_BALANCE_TRANSPORT_CRUISE_DEADBAND_MM;
     }
     control->transport_position_deadband_mm = position_deadband_mm;
+    predicted_error_mm = control->predicted_position_mm - control->target_mm;
     if (control->transport_recovery_active != 0U) {
         if ((BallBalanceControl_Abs(control->error_mm) <=
              BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM) &&
@@ -608,8 +610,10 @@ static void BallBalanceControl_ApplyTransportCommand(
              BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S)) {
             control->transport_recovery_active = 0U;
         }
-    } else if (BallBalanceControl_Abs(control->error_mm) >=
-               BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM) {
+    } else if ((BallBalanceControl_Abs(control->error_mm) >=
+                BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM) ||
+               (BallBalanceControl_Abs(predicted_error_mm) >=
+                BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM)) {
         control->transport_recovery_active = 1U;
     }
     feedback_error_mm = control->error_mm;

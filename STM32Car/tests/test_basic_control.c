@@ -1695,8 +1695,8 @@ static void test_ball_balance_transport_mode(void)
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
-    assert(output.transport_feedforward_pitch_deg < -0.45f);
-    assert(output.transport_feedforward_pitch_deg > -0.75f);
+    assert(output.transport_feedforward_pitch_deg < -0.90f);
+    assert(output.transport_feedforward_pitch_deg > -1.05f);
     assert_float_near_tolerance(
         output.transport_feedback_pitch_deg, 0.0f, 0.01f);
     assert(output.desired_pipe_pitch_deg < 0.0f);
@@ -1711,13 +1711,25 @@ static void test_ball_balance_transport_mode(void)
         &control, now_ms, &measurement, &attitude, &output);
     assert_float_near_tolerance(
         output.transport_wall_feedforward_pitch_deg,
-        -0.292025f, 0.01f);
-    assert(output.transport_feedforward_pitch_deg < -0.28f);
-    assert(output.transport_feedforward_pitch_deg > -0.31f);
+        -0.50f, 0.01f);
+    assert(output.transport_feedforward_pitch_deg < -0.49f);
+    assert(output.transport_feedforward_pitch_deg > -0.51f);
 
     BallBalanceControl_SetTransportInputs(&control, 0.0f, 0.0f, 1U);
     BallBalanceControl_SetTransportWallAcceleration(
         &control, 0.0f, 0U);
+    /* 实际位置尚未到7 mm，但速度外推将越界时必须提前启用增强D制动。 */
+    measurement.position_d10_mm = 90;
+    measurement.sequence++;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert(output.error_mm < 7.0f);
+    assert(output.predicted_position_mm >= 7.0f);
+    assert(output.transport_recovery_active != 0U);
+    assert(output.d_term_deg > 0.20f);
+
     measurement.position_d10_mm = 300;
     measurement.sequence++;
     now_ms += 100U;
@@ -1737,14 +1749,14 @@ static void test_ball_balance_transport_mode(void)
             &control, now_ms, &measurement, &attitude, &output);
     }
     assert(output.transport_recovery_active != 0U);
-    assert(output.transport_feedback_pitch_deg >= 0.64f);
-    assert(output.transport_feedback_pitch_deg <= 1.20f);
+    assert(output.transport_feedback_pitch_deg >= 0.74f);
+    assert(output.transport_feedback_pitch_deg <= 1.50f);
     assert(output.desired_pipe_pitch_deg > 0.0f);
     assert(output.integral_active == 0U);
 
     /* 匀速时扩大中心死区，避免小位置抖动反复驱动水管；速度阻尼不在此清零。 */
     measurement.position_d10_mm = 40;
-    for (index = 0U; index < 8U; index++) {
+    for (index = 0U; index < 16U; index++) {
         measurement.sequence++;
         now_ms += 100U;
         attitude.timestamp_ms = now_ms;
@@ -1778,8 +1790,8 @@ static void test_ball_balance_transport_mode(void)
             &control, now_ms, &measurement, &attitude, &output);
     }
     assert(output.transport_recovery_active != 0U);
-    assert(output.transport_feedback_pitch_deg <= -0.64f);
-    assert(output.transport_feedback_pitch_deg >= -1.20f);
+    assert(output.transport_feedback_pitch_deg <= -0.74f);
+    assert(output.transport_feedback_pitch_deg >= -1.50f);
 }
 
 int main(void)

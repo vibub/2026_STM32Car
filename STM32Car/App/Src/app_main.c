@@ -1537,6 +1537,7 @@ static void App_ControlStep(uint32_t now_ms)
     g_app_right_pwm_ratio = right_command;
 }
 
+#if APP_ENABLE_K230_TELEMETRY
 static void App_FillK230Telemetry(uint32_t now_ms,
                                   K230TelemetryInput *telemetry)
 {
@@ -1632,6 +1633,13 @@ static void App_K230TelemetryTask(uint32_t now_ms)
         }
     }
 }
+#else
+static void App_K230TelemetryTask(uint32_t now_ms)
+{
+    /* 首轮 ABCD 实测仅肉眼观察；保留 K230 RX，不占用 UART4 TX。 */
+    (void) now_ms;
+}
+#endif
 
 void App_Init(void)
 {
