@@ -22,12 +22,12 @@
 #define APP_AB_MAX_ACCEL_CM_S2              10.0f /* AB 起步使用较小纵向加速度，减小钢珠瞬态位移。 */
 #define APP_AB_MAX_DECEL_CM_S2               8.0f /* 通过 B 后柔和停车，不参与通过计时。 */
 #define APP_AB_MAX_JERK_CM_S3                30.0f /* AB 加速度变化率上限。 */
-#define APP_ABCD_SPEED_CM_S          APP_AB_SPEED_CM_S /* 第五项底盘巡航参数与已实测的 AB 保持同步。 */
+#define APP_ABCD_SPEED_CM_S                  27.5f /* 35 cm/s实测22 s/圈，按比例降速到约28 s/圈；不改加速度曲线。 */
 #define APP_ABCD_MAX_ACCEL_CM_S2 APP_AB_MAX_ACCEL_CM_S2
 #define APP_ABCD_MAX_DECEL_CM_S2 APP_AB_MAX_DECEL_CM_S2
 #define APP_ABCD_MAX_JERK_CM_S3   APP_AB_MAX_JERK_CM_S3
 #define APP_ABCD_WALL_COUPLING_GAIN           0.020f /* 首圈实测：B-C约4.49 s内由0漂到-50 mm，对应约2%的向心加速度轴向耦合。 */
-#define APP_ENABLE_K230_TELEMETRY                 0U /* 首轮肉眼测试：不向 K230 发送数据，接收链路保持启用。 */
+#define APP_ENABLE_K230_TELEMETRY                 1U /* 实车调参：向 K230 发送遥测，过 A 后由 K230 落盘到 SD 卡。 */
 #define APP_K230_TELEMETRY_PERIOD_MS             50U /* ABCD遥测20 Hz，K230仅缓存，过A后再写SD卡。 */
 #define APP_AB_PASS_DISTANCE_CM           150.0f /* 第四项 A 到 B 直线的名义通过里程。 */
 #define APP_LAP_PASS_DISTANCE_CM          614.2f /* 第五、六项整圈的名义通过里程。 */

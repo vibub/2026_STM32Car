@@ -29,14 +29,14 @@ CSV 包含轮速、横摆角速度、IMU 横向加速度、`v*gyro_z` 向心加�
 | 6 | 姿态滤波当前信任加速度计 |
 | 7 | 管壁补偿通道已进入弯道状态 |
 
-管壁轴向耦合初始为零：
+首圈无补偿基线在 B-C 半圆内由 0 漂到约 -50 mm；当前首轮补偿系数为：
 
 ```c
-#define APP_ABCD_WALL_COUPLING_GAIN 0.0f
+#define APP_ABCD_WALL_COUPLING_GAIN 0.020f
 ```
 
-先跑一圈取得无补偿基线，再根据两段弯道的 `ball_error_mm`、
-`lateral_fused_cm_s2` 和 `transport_feedback` 方向修改该有符号系数。
+根据后续两段弯道的 `ball_error_mm`、`lateral_fused_cm_s2` 和
+`transport_feedback` 方向继续修改该有符号系数。
 取出 SD 卡后可用仓库内脚本给出首个拟合值：
 
 ```text
