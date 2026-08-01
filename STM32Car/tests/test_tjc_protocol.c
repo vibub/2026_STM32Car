@@ -20,6 +20,8 @@ static uint32_t s_zero_pwm_us = 1070U;
 static uint32_t s_last_set_pwm_us;
 static uint32_t s_last_confirm_pwm_us;
 static uint8_t s_start_adjust_count;
+static uint32_t s_last_saved_times_ms[3];
+static uint8_t s_save_count;
 
 static void test_reset_tx(void)
 {
@@ -194,9 +196,10 @@ uint8_t App_SaveBallShuttleTimes(uint32_t phase_1_time_ms,
                                  uint32_t phase_2_time_ms,
                                  uint32_t phase_3_time_ms)
 {
-    (void) phase_1_time_ms;
-    (void) phase_2_time_ms;
-    (void) phase_3_time_ms;
+    s_last_saved_times_ms[0] = phase_1_time_ms;
+    s_last_saved_times_ms[1] = phase_2_time_ms;
+    s_last_saved_times_ms[2] = phase_3_time_ms;
+    s_save_count++;
     return 1U;
 }
 
@@ -211,24 +214,34 @@ void App_GetBallShuttleConfig(float *phase_1_angle_deg,
         *phase_1_angle_deg = 0.0f;
     }
     if (phase_1_time_ms != 0) {
-        *phase_1_time_ms = 300U;
+        *phase_1_time_ms = (s_save_count != 0U) ?
+                           s_last_saved_times_ms[0] : 300U;
     }
     if (phase_2_angle_deg != 0) {
         *phase_2_angle_deg = 0.0f;
     }
     if (phase_2_time_ms != 0) {
-        *phase_2_time_ms = 600U;
+        *phase_2_time_ms = (s_save_count != 0U) ?
+                           s_last_saved_times_ms[1] : 600U;
     }
     if (phase_3_angle_deg != 0) {
         *phase_3_angle_deg = 0.0f;
     }
     if (phase_3_time_ms != 0) {
-        *phase_3_time_ms = 300U;
+        *phase_3_time_ms = (s_save_count != 0U) ?
+                           s_last_saved_times_ms[2] : 300U;
     }
 }
 
 int main(void)
 {
+    static const uint8_t shuttle_save_frame[] = {
+        0x5AU, 0xA5U, 0x10U,
+        0xBCU, 0x02U, /* 第一阶段700 ms。 */
+        0x50U, 0x03U, /* 第二阶段848 ms。 */
+        0x21U, 0x02U, /* 第三阶段545 ms。 */
+        0x48U, 0x78U  /* 前9字节的Modbus CRC16，小端发送。 */
+    };
     static const uint8_t enter_frame[] = {0x5AU, 0xA5U, 0x04U, 0xFBU};
     static const uint8_t set_frame[] = {
         0x5AU, 0xA5U, 0x12U, 0x7EU, 0x04U, 0x00U, 0x00U
@@ -238,6 +251,19 @@ int main(void)
     };
 
     Protocol_Tjc_Init();
+
+    test_reset_tx();
+    test_feed(shuttle_save_frame,
+              (uint16_t) sizeof(shuttle_save_frame));
+    assert(s_save_count == 1U);
+    assert(s_last_saved_times_ms[0] == 700U);
+    assert(s_last_saved_times_ms[1] == 848U);
+    assert(s_last_saved_times_ms[2] == 545U);
+    assert(test_tx_contains("page3.n0.val=700") != 0U);
+    assert(test_tx_contains("page3.n1.val=848") != 0U);
+    assert(test_tx_contains("page3.n2.val=545") != 0U);
+    assert(test_tx_contains("page3.t0.txt=\"") != 0U);
+
     test_reset_tx();
     test_feed(enter_frame, (uint16_t) sizeof(enter_frame));
     assert(s_start_adjust_count == 1U);
@@ -256,6 +282,6 @@ int main(void)
     assert(s_zero_adjust_active == 0U);
     assert(test_tx_contains("page2.n0.val=1150") != 0U);
 
-    puts("TJC page2零位PWM直传协议主机测试通过");
+    puts("TJC page2零位PWM与page3第三题时间协议主机测试通过");
     return 0;
 }

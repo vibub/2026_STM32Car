@@ -2244,12 +2244,12 @@ uint8_t App_SaveBallShuttleTimes(uint32_t phase_1_time_ms,
 
     if ((s_current_mode != APP_MODE_STOP) ||
         (BallShuttleControl_IsRunning(&s_ball_shuttle_control) != 0U) ||
-        (BallShuttleControl_IsHolding(&s_ball_shuttle_control) != 0U) ||
         (DynamicRunTask_IsActive(&s_dynamic_run_task) != 0U) ||
         (App_IsPipeCalibrationBusy() != 0U)) {
         return 0U;
     }
 
+    /* 第三题结束后的水平保持状态允许重新烧录时间，便于连续实测调参。 */
     BallShuttleControl_GetConfig(&s_ball_shuttle_control, &previous);
     updated = previous;
     updated.duration_ms[0] = phase_1_time_ms;
