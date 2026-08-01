@@ -1458,7 +1458,7 @@ static void App_DynamicRunTask(uint32_t now_ms,
     App_UpdateChassisMotionDebug();
 }
 
-static void App_ControlStep(uint32_t now_ms)
+static void App_ControlStep(uint32_t now_ms, uint32_t control_elapsed_ms)
 {
     EncoderSample encoder;
     InfraredLineOutput line_output = {0};
@@ -1499,7 +1499,8 @@ static void App_ControlStep(uint32_t now_ms)
         }
     }
 
-    EncoderDriver_Sample(&encoder);
+    EncoderDriver_Sample(&encoder,
+                         (float) control_elapsed_ms * 0.001f);
     g_app_left_speed_cm_s = encoder.left_cm_s;
     g_app_right_speed_cm_s = encoder.right_cm_s;
     ChassisAccelEstimator_Update(&s_chassis_accel_estimator,
@@ -1512,7 +1513,7 @@ static void App_ControlStep(uint32_t now_ms)
     distance_delta_cm = 0.5f *
                         (App_Abs(encoder.left_cm_s) +
                          App_Abs(encoder.right_cm_s)) *
-                        ((float) APP_CONTROL_PERIOD_MS / 1000.0f);
+                        encoder.sample_seconds;
     App_UpdateChassisMotionDebug();
 
     if (sensor_failure_stop != 0U) {
@@ -1844,6 +1845,7 @@ void App_Init(void)
 void App_Loop(void)
 {
     uint32_t now_ms;
+    uint32_t control_elapsed_ms;
 
     Protocol_Tjc_Task();
 #if APP_USE_HOST_CALIBRATION
@@ -1858,8 +1860,9 @@ void App_Loop(void)
     App_BallBalanceTask(now_ms);
     if ((uint32_t) (now_ms - s_last_control_ms) >= APP_CONTROL_PERIOD_MS) {
         /* Do not backfill missed periods with the same encoder sample. */
+        control_elapsed_ms = (uint32_t) (now_ms - s_last_control_ms);
         s_last_control_ms = now_ms;
-        App_ControlStep(now_ms);
+        App_ControlStep(now_ms, control_elapsed_ms);
         now_ms = Board_TimeMs();
         App_DynamicRunTask(now_ms, 1U, 0U);
         now_ms = Board_TimeMs();
