@@ -87,6 +87,15 @@
 #define BALL_BALANCE_TRANSPORT_P_LIMIT_DEG             0.38f /* 弯道位置修正保持小幅。 */
 #define BALL_BALANCE_TRANSPORT_D_LIMIT_DEG             0.18f /* 弯道速度阻尼限幅。 */
 #define BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG            0.45f /* 行驶中总位置修正限幅。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM       10.0f /* 达到题目误差边界立即进入强回收。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM         5.0f /* 回到中心死区且降速后才退出。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S 15.0f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM   0.020f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S 0.014f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG       0.65f /* 越界后给足克服机构迟滞的最小回拉角。 */
+#define BALL_BALANCE_TRANSPORT_RECOVERY_P_LIMIT_DEG     1.00f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_D_LIMIT_DEG     0.80f
+#define BALL_BALANCE_TRANSPORT_RECOVERY_FB_LIMIT_DEG    1.20f
 
 static uint8_t BallBalanceControl_AttitudeIsFresh(
     const BallBalanceControl *control,
@@ -221,6 +230,7 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
     control->filter_ready = 0U;
     control->integral_active = 0U;
     control->braking_active = 0U;
+    control->transport_recovery_active = 0U;
     control->zero_hold_freeze_active = 0U;
     control->turnaround_freeze_active = 0U;
     control->outward_motion_seen = 0U;
@@ -551,6 +561,9 @@ static void BallBalanceControl_ApplyTransportCommand(
     float expected_disturbance_deg;
     float effective_disturbance_deg;
     float feedback_error_mm;
+    float feedback_limit_deg;
+    float kd_deg_per_mm_s;
+    float p_limit_deg;
     float position_deadband_mm;
 
     expected_disturbance_deg = BallBalanceControl_Limit(
@@ -588,6 +601,17 @@ static void BallBalanceControl_ApplyTransportCommand(
         position_deadband_mm = BALL_BALANCE_TRANSPORT_CRUISE_DEADBAND_MM;
     }
     control->transport_position_deadband_mm = position_deadband_mm;
+    if (control->transport_recovery_active != 0U) {
+        if ((BallBalanceControl_Abs(control->error_mm) <=
+             BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_MM) &&
+            (BallBalanceControl_Abs(control->velocity_mm_s) <=
+             BALL_BALANCE_TRANSPORT_RECOVERY_EXIT_SPEED_MM_S)) {
+            control->transport_recovery_active = 0U;
+        }
+    } else if (BallBalanceControl_Abs(control->error_mm) >=
+               BALL_BALANCE_TRANSPORT_RECOVERY_ENTER_MM) {
+        control->transport_recovery_active = 1U;
+    }
     feedback_error_mm = control->error_mm;
     if (BallBalanceControl_Abs(feedback_error_mm) <=
         position_deadband_mm) {
@@ -597,18 +621,47 @@ static void BallBalanceControl_ApplyTransportCommand(
     } else {
         feedback_error_mm += position_deadband_mm;
     }
+    p_limit_deg = BALL_BALANCE_TRANSPORT_P_LIMIT_DEG;
+    kd_deg_per_mm_s = BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S;
+    feedback_limit_deg = BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG;
+    if (control->transport_recovery_active != 0U) {
+        control->p_term_deg =
+            BALL_BALANCE_TRANSPORT_RECOVERY_KP_DEG_PER_MM *
+            feedback_error_mm;
+        if ((feedback_error_mm > 0.0f) &&
+            (control->p_term_deg <
+             BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG)) {
+            control->p_term_deg =
+                BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG;
+        } else if ((feedback_error_mm < 0.0f) &&
+                   (control->p_term_deg >
+                    -BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG)) {
+            control->p_term_deg =
+                -BALL_BALANCE_TRANSPORT_RECOVERY_MIN_P_DEG;
+        }
+        p_limit_deg = BALL_BALANCE_TRANSPORT_RECOVERY_P_LIMIT_DEG;
+        kd_deg_per_mm_s =
+            BALL_BALANCE_TRANSPORT_RECOVERY_KD_DEG_PER_MM_S;
+        feedback_limit_deg =
+            BALL_BALANCE_TRANSPORT_RECOVERY_FB_LIMIT_DEG;
+    } else {
+        control->p_term_deg =
+            BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM * feedback_error_mm;
+    }
     control->p_term_deg = BallBalanceControl_Limit(
-        BALL_BALANCE_TRANSPORT_KP_DEG_PER_MM * feedback_error_mm,
-        -BALL_BALANCE_TRANSPORT_P_LIMIT_DEG,
-        BALL_BALANCE_TRANSPORT_P_LIMIT_DEG);
+        control->p_term_deg, -p_limit_deg, p_limit_deg);
     control->d_term_deg = BallBalanceControl_Limit(
-        BALL_BALANCE_TRANSPORT_KD_DEG_PER_MM_S * control->velocity_mm_s,
-        -BALL_BALANCE_TRANSPORT_D_LIMIT_DEG,
-        BALL_BALANCE_TRANSPORT_D_LIMIT_DEG);
+        kd_deg_per_mm_s * control->velocity_mm_s,
+        (control->transport_recovery_active != 0U) ?
+            -BALL_BALANCE_TRANSPORT_RECOVERY_D_LIMIT_DEG :
+            -BALL_BALANCE_TRANSPORT_D_LIMIT_DEG,
+        (control->transport_recovery_active != 0U) ?
+            BALL_BALANCE_TRANSPORT_RECOVERY_D_LIMIT_DEG :
+            BALL_BALANCE_TRANSPORT_D_LIMIT_DEG);
     control->transport_feedback_pitch_deg = BallBalanceControl_Limit(
         control->p_term_deg + control->d_term_deg,
-        -BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG,
-        BALL_BALANCE_TRANSPORT_FB_LIMIT_DEG);
+        -feedback_limit_deg,
+        feedback_limit_deg);
     control->i_term_deg = 0.0f;
     control->integral_mm_s = 0.0f;
     control->integral_active = 0U;
@@ -1271,6 +1324,8 @@ static void BallBalanceControl_FillOutput(const BallBalanceControl *control,
         control->transport_command_accel_cm_s2;
     output->transport_position_deadband_mm =
         control->transport_position_deadband_mm;
+    output->transport_recovery_active =
+        control->transport_recovery_active;
     output->transport_imu_disturbance_deg =
         control->transport_imu_disturbance_deg;
     output->transport_wall_accel_cm_s2 =
@@ -1450,6 +1505,7 @@ void BallBalanceControl_SetTransportMode(BallBalanceControl *control,
     }
 
     control->transport_mode_enabled = normalized_enabled;
+    control->transport_recovery_active = 0U;
     /* 模式切换时丢弃停车阶段尚未确认的跳变候选，避免旧的 400 ms
      * 计时在刚起步时把第一帧真实位移错误地重采样为零速度。 */
     control->spike_reject_active = 0U;

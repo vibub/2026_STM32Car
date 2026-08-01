@@ -64,6 +64,7 @@ typedef struct {
     uint8_t desired_cache_valid;
     uint8_t endpoint_hold_enabled;
     uint8_t transport_mode_enabled;
+    uint8_t transport_recovery_active;
     uint8_t manual_pipe_mode_enabled;
     uint8_t transport_imu_valid;
     uint8_t transport_wall_valid;
@@ -151,6 +152,7 @@ typedef struct {
     uint8_t trajectory_phase;
     uint8_t endpoint_hold_enabled;
     uint8_t transport_mode_enabled;
+    uint8_t transport_recovery_active;
     uint8_t manual_pipe_mode_enabled;
     float target_mm;
     float manual_pipe_target_deg;
