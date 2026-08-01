@@ -26,7 +26,9 @@ static uint8_t DynamicRunTask_ConfigIsValid(
         (config->warning_clear_mm >= 0.0f) &&
         (config->warning_clear_mm < config->warning_limit_mm) &&
         (config->warning_clear_samples > 0U) &&
-        (config->overrange_confirm_samples > 0U));
+        (config->overrange_confirm_samples > 0U) &&
+        (config->imu_fault_debounce_ms > 0U) &&
+        (config->vision_fault_debounce_ms > 0U));
 }
 
 static void DynamicRunTask_ResetRuntime(DynamicRunTask *task)
@@ -205,12 +207,63 @@ static void DynamicRunTask_UpdateMetrics(
     }
 }
 
+static uint8_t DynamicRunTask_VisionUnsafeDebounced(
+    DynamicRunTask *task,
+    const DynamicRunTaskInput *input)
+{
+    uint8_t vision_lost = (uint8_t) ((input->tracking_valid == 0U) ||
+                                     (input->timed_out != 0U));
+
+    /* 视觉短暂失联（K230 偶发丢帧、处理卡顿）先保持运行让控制器用
+     * 预测值维持，持续超过配置时长仍未恢复才判视觉故障停车。 */
+    if (vision_lost != 0U) {
+        if (task->vision_unsafe_active == 0U) {
+            task->vision_unsafe_active = 1U;
+            task->vision_unsafe_since_ms = input->now_ms;
+        }
+        return (uint8_t) ((uint32_t) (input->now_ms -
+                                      task->vision_unsafe_since_ms) >=
+                          task->config.vision_fault_debounce_ms);
+    }
+    task->vision_unsafe_active = 0U;
+    task->vision_unsafe_since_ms = 0U;
+    return 0U;
+}
+
+static uint8_t DynamicRunTask_ImuUnsafeDebounced(
+    DynamicRunTask *task,
+    const DynamicRunTaskInput *input)
+{
+    /* IMU 已由平衡控制器去抖后报告硬故障，必须立即判失败停车，
+     * 不允许带着已关闭的平衡继续行驶。 */
+    if (input->imu_fault != 0U) {
+        task->imu_unsafe_active = 0U;
+        task->imu_unsafe_since_ms = 0U;
+        return 1U;
+    }
+
+    /* 姿态数据短暂不新鲜（如起步变速造成 100 ms 超时）先保持运行让内环
+     * 自纠，持续超过配置时长仍未恢复才判 IMU 故障，容忍瞬态。 */
+    if (input->attitude_valid == 0U) {
+        if (task->imu_unsafe_active == 0U) {
+            task->imu_unsafe_active = 1U;
+            task->imu_unsafe_since_ms = input->now_ms;
+        }
+        return (uint8_t) ((uint32_t) (input->now_ms -
+                                      task->imu_unsafe_since_ms) >=
+                          task->config.imu_fault_debounce_ms);
+    }
+    task->imu_unsafe_active = 0U;
+    task->imu_unsafe_since_ms = 0U;
+    return 0U;
+}
+
 static uint8_t DynamicRunTask_CheckDrivingFaults(
     DynamicRunTask *task,
     const DynamicRunTaskInput *input,
     DynamicRunTaskActions *actions)
 {
-    if ((input->imu_fault != 0U) || (input->attitude_valid == 0U)) {
+    if (DynamicRunTask_ImuUnsafeDebounced(task, input) != 0U) {
         DynamicRunTask_SetFailure(task, DYNAMIC_RUN_FAILURE_IMU,
                                   input->now_ms, actions);
         return 1U;
@@ -220,7 +273,7 @@ static uint8_t DynamicRunTask_CheckDrivingFaults(
                                   input->now_ms, actions);
         return 1U;
     }
-    if ((input->tracking_valid == 0U) || (input->timed_out != 0U)) {
+    if (DynamicRunTask_VisionUnsafeDebounced(task, input) != 0U) {
         DynamicRunTask_SetFailure(task, DYNAMIC_RUN_FAILURE_VISION,
                                   input->now_ms, actions);
         return 1U;
@@ -323,7 +376,7 @@ void DynamicRunTask_Update(DynamicRunTask *task,
     task->update_time_ready = 1U;
 
     if (task->state == DYNAMIC_RUN_STATE_PREPARING) {
-        if (input->imu_fault != 0U) {
+        if (DynamicRunTask_ImuUnsafeDebounced(task, input) != 0U) {
             DynamicRunTask_SetFailure(task, DYNAMIC_RUN_FAILURE_IMU,
                                       input->now_ms, actions);
             return;

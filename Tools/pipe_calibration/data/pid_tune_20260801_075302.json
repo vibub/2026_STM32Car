@@ -1,0 +1,29 @@
+{
+  "created": "2026-08-01T07:53:02",
+  "csv_file": "pid_tune_20260801_075302.csv",
+  "protocol": "pclink-1.2",
+  "start_gains": {
+    "position_kp": 0.03,
+    "position_ki": 0.008,
+    "position_kd": 0.025,
+    "pipe_kp": 0.6,
+    "pipe_kd_s": 0.05
+  },
+  "metrics": {
+    "duration_s": 8.647365299999365,
+    "sample_count": 173,
+    "position_error_rms_mm": 31.401053165210765,
+    "position_error_max_abs_mm": 37.12,
+    "velocity_rms_mm_s": 10.840935773230388,
+    "pipe_tracking_rms_deg": 0.727073200789548,
+    "pipe_rate_rms_dps": 6.268623100191488,
+    "zero_crossing_count": 0,
+    "integral_active_ratio": 0.0,
+    "braking_active_ratio": 0.6069364161849711,
+    "pwm_min_us": 886,
+    "pwm_max_us": 1117
+  },
+  "preliminary_suggestions": [
+    "水管跟随误差和角速度都偏大：降低姿态Kp，或小幅提高姿态Kd增加阻尼。"
+  ]
+}

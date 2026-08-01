@@ -1,0 +1,30 @@
+{
+  "created": "2026-08-01T08:40:50",
+  "csv_file": "pid_tune_20260801_084050.csv",
+  "protocol": "pclink-1.2",
+  "start_gains": {
+    "position_kp": 0.014,
+    "position_ki": 0.008,
+    "position_kd": 0.006,
+    "pipe_kp": 0.6,
+    "pipe_kd_s": 0.05
+  },
+  "metrics": {
+    "duration_s": 18.565986999994493,
+    "sample_count": 371,
+    "position_error_rms_mm": 41.59740502545504,
+    "position_error_max_abs_mm": 86.51,
+    "velocity_rms_mm_s": 37.061571963990524,
+    "pipe_tracking_rms_deg": 0.8412014239048308,
+    "pipe_rate_rms_dps": 5.95594297055165,
+    "zero_crossing_count": 6,
+    "integral_active_ratio": 0.31536388140161725,
+    "braking_active_ratio": 0.6765498652291105,
+    "pwm_min_us": 770,
+    "pwm_max_us": 1142
+  },
+  "preliminary_suggestions": [
+    "目标附近往返次数较多：优先降低位置Kp或Ki，必要时小幅提高位置Kd。",
+    "水管跟随误差和角速度都偏大：降低姿态Kp，或小幅提高姿态Kd增加阻尼。"
+  ]
+}
