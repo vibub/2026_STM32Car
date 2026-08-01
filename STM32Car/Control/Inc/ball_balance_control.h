@@ -75,6 +75,7 @@ typedef struct {
     uint32_t last_attitude_ms;
     uint32_t last_attitude_timestamp_ms;
     uint32_t attitude_stable_since_ms;
+    uint32_t attitude_unsafe_since_ms; /* 姿态不安全连续起始时刻，用于故障去抖。 */
     uint32_t pipe_settle_since_ms;
     uint32_t phase_started_ms;
     uint32_t kick_stage_started_ms;

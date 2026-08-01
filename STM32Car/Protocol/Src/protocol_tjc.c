@@ -9,10 +9,15 @@ typedef enum {
     TJC_RX_WAIT_HEADER_0 = 0,
     TJC_RX_WAIT_HEADER_1,
     TJC_RX_WAIT_COMMAND,
-    TJC_RX_WAIT_CHECKSUM
+    TJC_RX_WAIT_CHECKSUM,
+    TJC_RX_WAIT_SHUTTLE_DATA,
+    TJC_RX_WAIT_SHUTTLE_CRC_LOW,
+    TJC_RX_WAIT_SHUTTLE_CRC_HIGH
 } Tjc_RxState;
 
 #define TJC_STATUS_FRAME_BUFFER_SIZE 128U /* TJC 中文状态和动态结果命令的最大发送缓存。 */
+
+#define TJC_SHUTTLE_DATA_SIZE 6U
 
 static const uint8_t s_tjc_text_prefix[] = "page0.t0.txt=\"";
 static const uint8_t s_tjc_text_suffix[] = {'\"', 0xFFU, 0xFFU, 0xFFU};
@@ -273,6 +278,21 @@ static const uint8_t s_text_result_max_error[] = {
 };
 
 static const uint8_t s_tjc_command_suffix[] = {0xFFU, 0xFFU, 0xFFU};
+static const uint8_t s_tjc_shuttle_number_prefix[][14] = {
+    "page3.n0.val=", "page3.n1.val=", "page3.n2.val="
+};
+static const uint8_t s_tjc_shuttle_status_prefix[] = "page3.t0.txt=\"";
+static const uint8_t s_tjc_shuttle_status_suffix[] = {
+    '"', 0xFFU, 0xFFU, 0xFFU
+};
+static const uint8_t s_text_shuttle_saved[] = {
+    0xE5U, 0xB7U, 0xB2U, 0xE7U, 0x83U, 0xA7U,
+    0xE5U, 0xBDU, 0x95U
+};
+static const uint8_t s_text_shuttle_save_failed[] = {
+    0xE7U, 0x83U, 0xA7U, 0xE5U, 0xBDU, 0x95U,
+    0xE5U, 0xA4U, 0xB1U, 0xE8U, 0xB4U, 0xA5U
+};
 static const uint8_t s_tjc_warning_circle_100[] =
     "cir 160,120,100,63488";
 static const uint8_t s_tjc_warning_circle_99[] =
@@ -285,6 +305,9 @@ static const uint8_t s_tjc_refresh_page[] = "ref 0";
 
 static Tjc_RxState s_rx_state;
 static uint8_t s_rx_command;
+static uint8_t s_rx_shuttle_data[TJC_SHUTTLE_DATA_SIZE];
+static uint8_t s_rx_shuttle_index;
+static uint8_t s_rx_shuttle_crc_low;
 
 volatile uint32_t g_tjc_rx_byte_count;
 volatile uint32_t g_tjc_valid_command_count;
@@ -301,11 +324,31 @@ static void Protocol_Tjc_ResetRxParser(void)
 {
     s_rx_state = TJC_RX_WAIT_HEADER_0;
     s_rx_command = TJC_COMMAND_STOP;
+    s_rx_shuttle_index = 0U;
+    s_rx_shuttle_crc_low = 0U;
 }
 
 static uint8_t Protocol_Tjc_CalculateRequestChecksum(uint8_t command)
 {
     return (uint8_t) (TJC_REQUEST_HEADER_0 ^ TJC_REQUEST_HEADER_1 ^ command);
+}
+
+static uint16_t Protocol_Tjc_CalculateModbusCrc(const uint8_t *data,
+                                                uint8_t length)
+{
+    uint16_t crc = 0xFFFFU;
+    uint8_t index;
+    uint8_t bit;
+
+    for (index = 0U; index < length; index++) {
+        crc ^= data[index];
+        for (bit = 0U; bit < 8U; bit++) {
+            crc = ((crc & 1U) != 0U) ?
+                  (uint16_t) ((crc >> 1U) ^ 0xA001U) :
+                  (uint16_t) (crc >> 1U);
+        }
+    }
+    return crc;
 }
 
 static uint16_t Protocol_Tjc_AppendBytes(uint8_t *buffer,
@@ -382,6 +425,23 @@ static uint16_t Protocol_Tjc_AppendUnsignedX10(uint8_t *buffer,
     return length;
 }
 
+static uint16_t Protocol_Tjc_AppendUnsigned(uint8_t *buffer,
+                                            uint16_t length,
+                                            uint32_t value)
+{
+    uint32_t divisor = 1U;
+
+    while ((value / divisor) >= 10U) {
+        divisor *= 10U;
+    }
+    do {
+        buffer[length++] = (uint8_t) ('0' +
+            (uint8_t) ((value / divisor) % 10U));
+        divisor /= 10U;
+    } while (divisor != 0U);
+    return length;
+}
+
 static void Protocol_Tjc_SendTextFrame(const uint8_t *text,
                                        uint16_t text_length)
 {
@@ -412,6 +472,76 @@ static void Protocol_Tjc_SendAsciiCommand(const uint8_t *command,
     TjcUart_SendData(command, command_length);
     TjcUart_SendData(s_tjc_command_suffix,
                      (uint16_t) sizeof(s_tjc_command_suffix));
+}
+
+static void Protocol_Tjc_SendShuttleStatus(const uint8_t *text,
+                                           uint16_t text_length)
+{
+    uint8_t frame[TJC_STATUS_FRAME_BUFFER_SIZE];
+    uint16_t length = 0U;
+
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_tjc_shuttle_status_prefix,
+        (uint16_t) (sizeof(s_tjc_shuttle_status_prefix) - 1U));
+    length = Protocol_Tjc_AppendBytes(frame, length, text, text_length);
+    length = Protocol_Tjc_AppendBytes(
+        frame, length, s_tjc_shuttle_status_suffix,
+        (uint16_t) sizeof(s_tjc_shuttle_status_suffix));
+    TjcUart_SendData(frame, length);
+    g_tjc_status_text_count++;
+}
+
+static void Protocol_Tjc_SendShuttleTimes(void)
+{
+    uint32_t duration_ms[3];
+    uint8_t frame[32];
+    uint16_t length;
+    uint8_t index;
+
+    App_GetBallShuttleConfig(0, &duration_ms[0],
+                             0, &duration_ms[1],
+                             0, &duration_ms[2]);
+    for (index = 0U; index < 3U; index++) {
+        length = 0U;
+        length = Protocol_Tjc_AppendBytes(
+            frame, length, s_tjc_shuttle_number_prefix[index],
+            (uint16_t) (sizeof(s_tjc_shuttle_number_prefix[index]) - 1U));
+        length = Protocol_Tjc_AppendUnsigned(
+            frame, length, duration_ms[index]);
+        length = Protocol_Tjc_AppendBytes(
+            frame, length, s_tjc_command_suffix,
+            (uint16_t) sizeof(s_tjc_command_suffix));
+        TjcUart_SendData(frame, length);
+    }
+}
+
+static void Protocol_Tjc_ProcessShuttleSave(void)
+{
+    uint32_t duration_ms[3];
+    uint8_t accepted;
+
+    duration_ms[0] = (uint32_t) s_rx_shuttle_data[0] |
+                     ((uint32_t) s_rx_shuttle_data[1] << 8U);
+    duration_ms[1] = (uint32_t) s_rx_shuttle_data[2] |
+                     ((uint32_t) s_rx_shuttle_data[3] << 8U);
+    duration_ms[2] = (uint32_t) s_rx_shuttle_data[4] |
+                     ((uint32_t) s_rx_shuttle_data[5] << 8U);
+
+    g_tjc_last_command = TJC_COMMAND_SHUTTLE_SAVE;
+    g_tjc_valid_command_count++;
+    accepted = (uint8_t) ((App_GetHostCalibrationEnabled() == 0U) &&
+        (App_SaveBallShuttleTimes(duration_ms[0], duration_ms[1],
+                                  duration_ms[2]) != 0U));
+    if (accepted != 0U) {
+        Protocol_Tjc_SendShuttleTimes();
+        Protocol_Tjc_SendShuttleStatus(
+            s_text_shuttle_saved,
+            (uint16_t) sizeof(s_text_shuttle_saved));
+    } else {
+        Protocol_Tjc_SendShuttleStatus(
+            s_text_shuttle_save_failed,
+            (uint16_t) sizeof(s_text_shuttle_save_failed));
+    }
 }
 
 void Protocol_Tjc_Init(void)
@@ -912,6 +1042,7 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
 
     if ((App_GetHostCalibrationEnabled() != 0U) &&
         (command != TJC_COMMAND_QUERY) &&
+        (command != TJC_COMMAND_SHUTTLE_QUERY) &&
         (command != TJC_COMMAND_STOP)) {
         /* 上位机标定模式：禁止通过串口屏启动任何任务。 */
         g_tjc_valid_command_count++;
@@ -923,6 +1054,12 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
     if (command == TJC_COMMAND_QUERY) {
         g_tjc_valid_command_count++;
         Protocol_Tjc_SendResult(TJC_RESULT_STATE, current_mode, command);
+    } else if (command == TJC_COMMAND_SHUTTLE_QUERY) {
+        g_tjc_valid_command_count++;
+        Protocol_Tjc_SendShuttleTimes();
+        Protocol_Tjc_SendShuttleStatus(
+            s_text_shuttle_saved,
+            (uint16_t) sizeof(s_text_shuttle_saved));
     } else if (command == TJC_COMMAND_STOP) {
         g_tjc_valid_command_count++;
         accepted = App_RequestMode(command);
@@ -1006,6 +1143,21 @@ static void Protocol_Tjc_ProcessCommand(uint8_t command)
     }
 }
 
+static uint8_t Protocol_Tjc_ShuttleCrcMatches(uint8_t crc_high)
+{
+    uint8_t frame[3U + TJC_SHUTTLE_DATA_SIZE];
+    uint16_t received_crc;
+
+    frame[0] = TJC_REQUEST_HEADER_0;
+    frame[1] = TJC_REQUEST_HEADER_1;
+    frame[2] = TJC_COMMAND_SHUTTLE_SAVE;
+    memcpy(&frame[3], s_rx_shuttle_data, TJC_SHUTTLE_DATA_SIZE);
+    received_crc = (uint16_t) s_rx_shuttle_crc_low |
+                   ((uint16_t) crc_high << 8U);
+    return (uint8_t) (received_crc == Protocol_Tjc_CalculateModbusCrc(
+        frame, (uint8_t) sizeof(frame)));
+}
+
 static void Protocol_Tjc_ConsumeByte(uint8_t byte)
 {
     switch (s_rx_state) {
@@ -1028,7 +1180,12 @@ static void Protocol_Tjc_ConsumeByte(uint8_t byte)
                 s_rx_state = TJC_RX_WAIT_HEADER_1;
             } else {
                 s_rx_command = byte;
-                s_rx_state = TJC_RX_WAIT_CHECKSUM;
+                if (byte == TJC_COMMAND_SHUTTLE_SAVE) {
+                    s_rx_shuttle_index = 0U;
+                    s_rx_state = TJC_RX_WAIT_SHUTTLE_DATA;
+                } else {
+                    s_rx_state = TJC_RX_WAIT_CHECKSUM;
+                }
             }
             break;
 
@@ -1041,6 +1198,27 @@ static void Protocol_Tjc_ConsumeByte(uint8_t byte)
                 s_rx_state = (byte == TJC_REQUEST_HEADER_0) ?
                              TJC_RX_WAIT_HEADER_1 : TJC_RX_WAIT_HEADER_0;
             }
+            break;
+
+        case TJC_RX_WAIT_SHUTTLE_DATA:
+            s_rx_shuttle_data[s_rx_shuttle_index++] = byte;
+            if (s_rx_shuttle_index >= TJC_SHUTTLE_DATA_SIZE) {
+                s_rx_state = TJC_RX_WAIT_SHUTTLE_CRC_LOW;
+            }
+            break;
+
+        case TJC_RX_WAIT_SHUTTLE_CRC_LOW:
+            s_rx_shuttle_crc_low = byte;
+            s_rx_state = TJC_RX_WAIT_SHUTTLE_CRC_HIGH;
+            break;
+
+        case TJC_RX_WAIT_SHUTTLE_CRC_HIGH:
+            if (Protocol_Tjc_ShuttleCrcMatches(byte) != 0U) {
+                Protocol_Tjc_ProcessShuttleSave();
+            } else {
+                g_tjc_invalid_frame_count++;
+            }
+            Protocol_Tjc_ResetRxParser();
             break;
 
         default:

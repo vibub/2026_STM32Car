@@ -623,6 +623,8 @@ static void test_ball_balance_control(void)
     attitude.pitch_deg = 0.0f;
     attitude.pitch_rate_dps = 0.0f;
 
+    /* 跳变帧使用新序号，进入跳变抑制逻辑而不是被同序号去重丢弃。 */
+    measurement.sequence = 3U;
     measurement.position_d10_mm = -500;
     now_ms += 20U;
     attitude.timestamp_ms = now_ms;
@@ -636,8 +638,9 @@ static void test_ball_balance_control(void)
 
     /* Once the ball is moving, remove the acceleration pulse first.  The
      * trajectory must return the pipe to level before any brake pulse. */
-    measurement.sequence = 3U;
-    now_ms += 20U;
+    /* 持续跳变 400 ms 仍偏离才判定为真实新位置并重采样。 */
+    measurement.sequence = 4U;
+    now_ms += 400U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(&control,
                               now_ms,
@@ -645,11 +648,13 @@ static void test_ball_balance_control(void)
                               &attitude,
                               &output);
     assert(output.measurement_accepted != 0U);
-    assert(output.velocity_mm_s < 0.0f);
+    /* 重采样时速度有意清零，避免假速度；位置为新位置并进入 MOVING。 */
+    assert(output.velocity_mm_s == 0.0f);
     assert(output.predicted_position_mm < 0.0f);
-    assert(output.trajectory_phase == BALL_BALANCE_PHASE_BREAKAWAY);
-    assert(output.moving_sample_count == 1U);
-    measurement.sequence = 4U;
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
+    /* 后续帧继续向负方向移动，产生真实负速度；水管先回平再刹车。 */
+    measurement.sequence = 5U;
+    measurement.position_d10_mm = -600;
     now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(&control,
@@ -657,6 +662,7 @@ static void test_ball_balance_control(void)
                               &measurement,
                               &attitude,
                               &output);
+    assert(output.velocity_mm_s < 0.0f);
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert(output.braking_active != 0U);
     assert(output.d_term_deg < 0.0f);
@@ -691,15 +697,22 @@ static void test_ball_balance_control(void)
                               &output);
     assert(output.timed_out != 0U);
     assert(output.tracking_valid == 0U);
-    assert_float_near(output.desired_pipe_pitch_deg, 0.0f);
+    /* 视觉超时后水管回中，允许 IMU 内环修正的微小残留。 */
+    assert_float_near_tolerance(output.desired_pipe_pitch_deg, 0.0f, 0.3f);
 
     now_ms += 120U;
     BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
-    assert(output.enabled == 0U);
-    assert(output.imu_fault != 0U);
+    /* 去抖窗口内（<150 ms）姿态不新鲜先保持闭环让内环自纠，不立即判故障。 */
+    assert(output.enabled != 0U);
+    assert(output.imu_fault == 0U);
     assert_float_near_tolerance(output.desired_angle_deg,
                                 neutral_angle_deg,
                                 0.03f);
+    /* 持续无姿态数据超过 IMU 故障去抖时长（150 ms）后关闭平衡并判故障。 */
+    now_ms += 150U;
+    BallBalanceControl_Update(&control, now_ms, 0, 0, &output);
+    assert(output.enabled == 0U);
+    assert(output.imu_fault != 0U);
 
     for (index = 0U; index < 30U; index++) {
         now_ms += 20U;
@@ -717,13 +730,23 @@ static void test_ball_balance_control(void)
 
     now_ms += 20U;
     attitude.timestamp_ms = now_ms;
-    attitude.pitch_deg = 8.0f;
+    attitude.pitch_deg = 9.0f;
+    attitude.pitch_rate_dps = 0.0f;
     BallBalanceControl_Update(&control,
                               now_ms,
                               0,
                               &attitude,
                               &output);
-    assert(output.enabled == 0U);
+    /* 去抖窗口内（<150 ms）姿态超限先保持闭环让内环自纠，不立即判故障。 */
+    assert(output.enabled != 0U);
+    assert(output.imu_fault == 0U);
+    now_ms += 160U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              0,
+                              &attitude,
+                              &output);
     assert(output.imu_fault != 0U);
 
     BallBalanceControl_SetEnabled(&control, 0U, now_ms);
@@ -789,7 +812,7 @@ static void test_flexible_pipe_mapping_limits(void)
                               &attitude,
                               &output);
     assert_float_near_tolerance(
-        output.desired_pipe_pitch_deg, 1.95f, 0.01f);
+        output.desired_pipe_pitch_deg, 2.15f, 0.01f);
     assert(output.mapping_valid != 0U);
     assert(output.mapping_fault == 0U);
     assert(output.desired_model_pitch_deg <= 6.8f);
@@ -803,10 +826,20 @@ static void test_flexible_pipe_mapping_limits(void)
                               &measurement,
                               &attitude,
                               &output);
-    assert(output.desired_pipe_pitch_deg < 0.0f);
-    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert(output.mapping_valid != 0U);
     assert(output.mapping_fault == 0U);
+    /* 跳变帧先被抑制，400 ms 重采样锁定新位置后产生负俯仰。 */
+    measurement.sequence = 4U;
+    now_ms += 400U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(&control,
+                              now_ms,
+                              &measurement,
+                              &attitude,
+                              &output);
+    assert(output.measurement_accepted != 0U);
+    assert(output.desired_pipe_pitch_deg < 0.0f);
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert(output.desired_model_pitch_deg >= -10.0f);
 }
 
@@ -866,8 +899,8 @@ static void test_ball_balance_friction_compensation(void)
                                 0.0f,
                                 0.0001f);
 
-    /* 回到目标8毫米内后立即禁用并清除积分。 */
-    measurement.position_d10_mm = 80;
+    /* 回到目标死区（±4毫米）内后立即禁用并清除积分。 */
+    measurement.position_d10_mm = 30;
     for (index = 21U; index <= 26U; index++) {
         measurement.sequence = index;
         now_ms += 100U;
@@ -1042,7 +1075,8 @@ static void test_ball_balance_motion_classification(void)
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
-    assert_float_near(output.desired_pipe_pitch_deg, 0.0f);
+    /* 冻结期水管保持在进入 HOLD 时的姿态附近，允许微小残留。 */
+    assert_float_near_tolerance(output.desired_pipe_pitch_deg, 0.0f, 0.3f);
     measurement.sequence = 4U;
     now_ms += 200U;
     attitude.timestamp_ms = now_ms;
@@ -1055,57 +1089,96 @@ static void test_ball_balance_motion_classification(void)
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
+    /* 冻结结束后球保持 +30 mm 静止，控制器破静摩擦推动，水管回正。 */
     measurement.sequence = 6U;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
-    assert(output.velocity_mm_s > 0.0f);
-    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert(output.desired_pipe_pitch_deg > 0.0f);
     assert(output.error_mm * test_ball_accel_from_pipe_pitch(
                output.desired_pipe_pitch_deg) < 0.0f);
+    /* 球随后真正向外移动，产生正速度；第二帧运动确认后进入 MOVING。 */
+    measurement.sequence = 7U;
+    measurement.position_d10_mm = 400;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert(output.velocity_mm_s > 0.0f);
+    assert(output.desired_pipe_pitch_deg > 0.0f);
     assert(output.velocity_mm_s * test_ball_accel_from_pipe_pitch(
                output.desired_pipe_pitch_deg) < 0.0f);
+    measurement.sequence = 8U;
+    measurement.position_d10_mm = 500;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     /* A confirmed high-speed outward run receives one bounded 500 ms freeze
      * when its speed fades at the side turning point. */
     BallBalanceControl_Init(&control);
     BallBalanceControl_SetPipeCalibration(
         &control, 1U, 1.0f, 0.0f, mapping_pitch_deg);
     BallBalanceControl_SetEnabled(&control, 1U, now_ms);
-    for (index = 0U; index < 12U; index++) {
+    for (index = 0U; index < 30U; index++) {
         now_ms += 20U;
         attitude.timestamp_ms = now_ms;
         BallBalanceControl_Update(&control, now_ms, 0, &attitude, &output);
     }
-    measurement.position_d10_mm = 100;
+    assert(output.enabled != 0U);
+    assert(output.pipe_settled != 0U);
+    /* 球静止在目标0位置两帧，进入零点保持冻结。 */
+    measurement.position_d10_mm = 0;
     measurement.sequence = 1U;
     now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
-    measurement.position_d10_mm = 500;
     measurement.sequence = 2U;
-    now_ms += 100U;
+    now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
-    measurement.position_d10_mm = 600;
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
+    /* 球被推向外侧 +30 mm，冻结期水管保持不动（跳变被抑制）。 */
+    measurement.position_d10_mm = 300;
     measurement.sequence = 3U;
-    now_ms += 100U;
+    now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
     measurement.sequence = 4U;
-    now_ms += 100U;
+    now_ms += 20U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_HOLD);
+    /* 持续跳变 400 ms 仍偏离，重采样锁定新位置 +30 mm。 */
+    measurement.sequence = 5U;
+    now_ms += 400U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    assert(output.measurement_accepted != 0U);
+    /* 球以每帧 +3 mm 连续外移（增量小于跳变阈值），进入 MOVING 并
+     * 确认向外运动。 */
+    for (index = 6U; index <= 30U; index++) {
+        measurement.sequence = index;
+        measurement.position_d10_mm = (int32_t) (300 + (index - 5U) * 30);
+        now_ms += 20U;
+        attitude.timestamp_ms = now_ms;
+        BallBalanceControl_Update(
+            &control, now_ms, &measurement, &attitude, &output);
+    }
     assert(control.outward_motion_seen != 0U);
-    for (index = 0U;
-         (index < 20U) && (control.turnaround_freeze_active == 0U);
+    assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
+    /* 球在端部静止，速度衰减触发一次 500 ms 冻结。 */
+    for (index = 31U;
+         (index <= 50U) && (control.turnaround_freeze_active == 0U);
          index++) {
-        measurement.sequence++;
+        measurement.sequence = index;
         now_ms += 100U;
         attitude.timestamp_ms = now_ms;
         BallBalanceControl_Update(
@@ -1170,19 +1243,29 @@ static void test_ball_balance_motion_classification(void)
         &control, now_ms, &measurement, &attitude, &output);
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert(output.desired_pipe_pitch_deg < 0.0f);
-    assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
+    /* 回程进入目标 15 mm 内时启用回程制动 P，与运动方向反向制动。 */
+    assert(output.p_term_deg < 0.0f);
     assert(output.velocity_mm_s * test_ball_accel_from_pipe_pitch(
                output.desired_pipe_pitch_deg) < 0.0f);
     measurement.position_d10_mm = -400;
     measurement.sequence = 5U;
-    now_ms += 100U;
+    now_ms += 400U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
         &control, now_ms, &measurement, &attitude, &output);
+    assert(output.measurement_accepted != 0U);
+    /* 跳变帧先被抑制，400 ms 重采样锁定新位置后触发跨零事件。 */
     assert(output.zero_crossed != 0U);
     assert(output.desired_pipe_pitch_deg < 0.0f);
     assert(output.kick_attempt_count == 0U);
     assert(output.turnaround_freeze_active == 0U);
+    /* 重采样帧速度清零，下一帧球继续向负方向移动后验证速度-加速度反向。 */
+    measurement.position_d10_mm = -500;
+    measurement.sequence = 6U;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
     assert(output.velocity_mm_s * test_ball_accel_from_pipe_pitch(
                output.desired_pipe_pitch_deg) < 0.0f);
 
@@ -1237,8 +1320,15 @@ static void test_ball_balance_motion_classification(void)
     assert(output.trajectory_phase == BALL_BALANCE_PHASE_MOVING);
     assert_float_near_tolerance(output.p_term_deg, 0.0f, 0.001f);
     assert(test_abs(output.desired_pipe_pitch_deg) < initial_brake_abs);
-    measurement.position_d10_mm = 1000;
+    /* 球小幅递增外移（增量小于跳变阈值）产生正速度。 */
+    measurement.position_d10_mm = 400;
     measurement.sequence = 6U;
+    now_ms += 100U;
+    attitude.timestamp_ms = now_ms;
+    BallBalanceControl_Update(
+        &control, now_ms, &measurement, &attitude, &output);
+    measurement.position_d10_mm = 450;
+    measurement.sequence = 7U;
     now_ms += 100U;
     attitude.timestamp_ms = now_ms;
     BallBalanceControl_Update(
@@ -1278,7 +1368,7 @@ static void test_ball_balance_endpoint_integral(void)
     BallBalanceControl_SetTargetMm(&control, -50.0f);
     BallBalanceControl_SetEndpointHoldEnabled(&control, 1U);
     measurement.valid = 1U;
-    measurement.position_d10_mm = -440;
+    measurement.position_d10_mm = -480;
     measurement.quality = 80U;
     for (index = 1U; index <= 12U; index++) {
         measurement.sequence = index;
@@ -1296,7 +1386,7 @@ static void test_ball_balance_endpoint_integral(void)
                                   &output);
     }
 
-    /* 第三题端点误差为6毫米时同样不得启用积分。 */
+    /* 第三题端点误差在死区（2毫米）内时不得启用积分。 */
     assert(output.endpoint_hold_enabled != 0U);
     assert(output.integral_active == 0U);
     assert_float_near_tolerance(output.i_term_deg, 0.0f, 0.001f);
@@ -1476,7 +1566,7 @@ static void test_extended_downward_pipe_limit(void)
                               &attitude,
                               &output);
     assert_float_near_tolerance(
-        output.desired_pipe_pitch_deg, -2.31f, 0.01f);
+        output.desired_pipe_pitch_deg, -2.57f, 0.01f);
     assert(output.desired_pipe_pitch_deg < 0.0f);
     assert(output.mapping_valid != 0U);
     assert(output.mapping_fault == 0U);

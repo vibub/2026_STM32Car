@@ -25,6 +25,8 @@ static DynamicRunTaskConfig build_config(void)
     config.warning_clear_mm = 8.0f;           /* 测试使用的警告清除门槛。 */
     config.warning_clear_samples = 3U;        /* 测试使用的警告清除样本数。 */
     config.overrange_confirm_samples = 2U;    /* 测试使用的超差锁存样本数。 */
+    config.imu_fault_debounce_ms = 300U;      /* 测试使用的 IMU 故障去抖时长。 */
+    config.vision_fault_debounce_ms = 500U;   /* 测试使用的视觉失联去抖时长。 */
     return config;
 }
 
@@ -282,12 +284,22 @@ static void test_braking_fault_preserves_frozen_time(void)
     input.tracking_valid = 0U;
     input.timed_out = 1U;
     DynamicRunTask_Update(&task, &input, &actions);
+    /* 视觉故障去抖窗口内先保持柔停，不立即硬停车。 */
+    assert(actions.hard_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_BRAKING);
+
+    /* 持续超过 500 ms 去抖时长后判视觉故障并冻结成绩时间。 */
+    input = build_ready_input(1500U);
+    input.measurement_accepted = 0U;
+    input.tracking_valid = 0U;
+    input.timed_out = 1U;
+    DynamicRunTask_Update(&task, &input, &actions);
     assert(actions.hard_stop != 0U);
     assert(task.state == DYNAMIC_RUN_STATE_FAILED);
     assert(task.elapsed_ms == frozen_elapsed_ms);
 }
 
-static void test_running_fault_requests_hard_stop(void)
+static void test_running_vision_fault_debounced(void)
 {
     DynamicRunTask task;
     DynamicRunTaskConfig config = build_config();
@@ -297,7 +309,27 @@ static void test_running_fault_requests_hard_stop(void)
     assert(DynamicRunTask_Init(&task, &config) != 0U);
     start_running_task(&task, DYNAMIC_RUN_MODE_ABCD);
 
+    /* 视觉短暂失联（K230 偶发丢帧）先保持运行，去抖窗口内不判失败。 */
     input = build_ready_input(400U);
+    input.tracking_valid = 0U;
+    input.timed_out = 1U;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.hard_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_RUNNING);
+
+    /* 恢复视觉后计时清零。 */
+    input = build_ready_input(700U);
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.hard_stop == 0U);
+    assert(task.state == DYNAMIC_RUN_STATE_RUNNING);
+
+    /* 再次失联并持续超过 500 ms 去抖时长才判视觉故障停车。 */
+    input = build_ready_input(800U);
+    input.tracking_valid = 0U;
+    input.timed_out = 1U;
+    DynamicRunTask_Update(&task, &input, &actions);
+    assert(actions.hard_stop == 0U);
+    input = build_ready_input(1400U);
     input.tracking_valid = 0U;
     input.timed_out = 1U;
     DynamicRunTask_Update(&task, &input, &actions);
@@ -318,7 +350,7 @@ int main(void)
     test_pass_has_priority_at_time_limit();
     test_timeout_requests_soft_stop();
     test_braking_fault_preserves_frozen_time();
-    test_running_fault_requests_hard_stop();
+    test_running_vision_fault_debounced();
     puts("第四、五题动态任务状态机测试通过");
     return 0;
 }
