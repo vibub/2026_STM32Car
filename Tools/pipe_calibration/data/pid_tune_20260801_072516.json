@@ -1,0 +1,30 @@
+{
+  "created": "2026-08-01T07:25:16",
+  "csv_file": "pid_tune_20260801_072516.csv",
+  "protocol": "pclink-1.2",
+  "start_gains": {
+    "position_kp": 0.024,
+    "position_ki": 0.008,
+    "position_kd": 0.006,
+    "pipe_kp": 0.6,
+    "pipe_kd_s": 0.05
+  },
+  "metrics": {
+    "duration_s": 13.0439619999961,
+    "sample_count": 260,
+    "position_error_rms_mm": 20.710794732736318,
+    "position_error_max_abs_mm": 34.56,
+    "velocity_rms_mm_s": 4.777489685212067,
+    "pipe_tracking_rms_deg": 0.45280272066999977,
+    "pipe_rate_rms_dps": 3.0153127583667385,
+    "zero_crossing_count": 0,
+    "integral_active_ratio": 0.7,
+    "braking_active_ratio": 0.12307692307692308,
+    "pwm_min_us": 698,
+    "pwm_max_us": 1020
+  },
+  "preliminary_suggestions": [
+    "位置误差较大但球速很低：检查静摩擦，可在10～20 mm积分区内小幅提高Ki。",
+    "水管跟随误差和角速度都偏大：降低姿态Kp，或小幅提高姿态Kd增加阻尼。"
+  ]
+}

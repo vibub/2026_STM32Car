@@ -12,7 +12,11 @@
 #define BALL_BALANCE_KI_MAX_DEG_PER_MM_S            0.100f /* Debug 可调 Ki 安全上限。 */
 #define BALL_BALANCE_KD_MAX_DEG_PER_MM_S            0.200f /* Debug 可调 Kd 安全上限。 */
 #define BALL_BALANCE_POSITION_P_LIMIT_DEG          5.30f /* 允许位置外环使用接近完整实测角度拉回端部钢球。 */
-#define BALL_BALANCE_POSITION_D_LIMIT_DEG          1.10f /* 速度反馈只负责柔和制动，避免越零后反打过强。 */
+#define BALL_BALANCE_POSITION_D_LIMIT_DEG          3.0f /* 速度反馈只负责柔和制动，避免越零后反打过强。 */
+#define BALL_BALANCE_RETURN_BRAKE_KP_DEG_PER_MM      0.008f /* 回程附加制动P的基准增益，单位deg/mm。 */
+#define BALL_BALANCE_RETURN_BRAKE_SPEED_SCALE_MM_S  60.0f  /* 回程制动P随速度变增益的比例基准，速度越大制动越强。 */
+#define BALL_BALANCE_RETURN_BRAKE_LIMIT_DEG          2.00f /* 回程附加制动P的输出限幅，单位deg。 */
+#define BALL_BALANCE_RETURN_BRAKE_RANGE_MM          15.0f /* 回程附加制动P仅在距目标15毫米内启用，避免远离目标时提前刹车。 */
 #define BALL_BALANCE_POSITION_DEADBAND_MM          4.0f  /* 目标点正负4毫米内不再主动修正位置。 */
 #define BALL_BALANCE_STOPPED_SPEED_MM_S            3.0f  /* 只有球真正接近静止才进入零点保持。 */
 #define BALL_BALANCE_BALL_MOVING_SPEED_MM_S         8.0f
@@ -24,23 +28,25 @@
 #define BALL_BALANCE_PIPE_SETTLE_ERROR_DEG            0.45f
 #define BALL_BALANCE_PIPE_SETTLE_RATE_DPS             1.00f
 #define BALL_BALANCE_PIPE_SETTLE_MS                  120U
-#define BALL_BALANCE_ACCEL_STAGE_MS                  600U
+#define BALL_BALANCE_ACCEL_STAGE_MS                  400U
 #define BALL_BALANCE_ZERO_HOLD_FREEZE_MS             500U
 #define BALL_BALANCE_TURNAROUND_FREEZE_MS            500U
 #define BALL_BALANCE_ACCEL_PITCH_MIN_DEG              0.75f
-#define BALL_BALANCE_ACCEL_POSITION_GAIN_DEG_PER_MM   0.012f
-#define BALL_BALANCE_KICK_ATTEMPT_STEP_DEG              0.20f
+#define BALL_BALANCE_ACCEL_POSITION_GAIN_DEG_PER_MM   0.014f
+#define BALL_BALANCE_KICK_ATTEMPT_STEP_DEG              0.40f
 #define BALL_BALANCE_KICK_MAX_PITCH_DEG                 5.30f /* 破静摩擦阶段允许接近实测安全角上限。 */
 #define BALL_BALANCE_TURNAROUND_LEVEL_SPEED_MM_S       12.0f
 #define BALL_BALANCE_INTEGRAL_OUTPUT_LIMIT_DEG     0.80f /* 普通目标点积分最大只补偿0.8度。 */
-#define BALL_BALANCE_INTEGRAL_MIN_ERROR_MM         10.0f /* 距离目标不超过10毫米时禁用位置积分。 */
-#define BALL_BALANCE_NEAR_TARGET_I_RANGE_MM        20.0f /* 仅在距离目标10～20毫米时启用位置积分。 */
+#define BALL_BALANCE_INTEGRAL_MIN_ERROR_MM          4.0f /* 距离目标不超过4毫米（死区内）时禁用位置积分。 */
+#define BALL_BALANCE_NEAR_TARGET_I_RANGE_MM        20.0f /* 仅在距离目标4～20毫米时启用位置积分。 */
 #define BALL_BALANCE_ENDPOINT_KI_DEG_PER_MM_S     0.020f /* 第三题最终端点保持使用的独立积分增益。 */
 #define BALL_BALANCE_ENDPOINT_I_LIMIT_DEG          1.00f /* 端点积分允许补偿的最大持续俯仰角。 */
 #define BALL_BALANCE_STICTION_INTEGRAL_BOOST       3.0f  /* 钢球静止时加快积分以突破静摩擦。 */
 #define BALL_BALANCE_MOVING_INTEGRAL_LEAK_TAU_S    0.80f /* 钢球运动后泄放积分以降低过冲。 */
 #define BALL_BALANCE_GAIN_EPSILON                  0.000001f
 #define BALL_BALANCE_MIN_QUALITY                  50U    /* 接受 K230 测量所需的最低质量。 */
+#define BALL_BALANCE_VISION_SPIKE_JUMP_MM         15.0f  /* K230 一帧位置跳变超过该值视为跳变，抑制假速度。 */
+#define BALL_BALANCE_SPIKE_STUCK_MS               400U   /* 跳变持续超过该时间仍偏离，判定为真实新位置并重采样。 */
 #define BALL_BALANCE_IDLE_DATA_TIMEOUT_MS      1000U    /* 等待/破静摩擦时容忍 YOLO 短时漏检，避免杆反复回平重启。 */
 #define BALL_BALANCE_MOVING_DATA_TIMEOUT_MS     350U    /* 球已运动后仍快速退出盲控，避免失联时继续加速。 */
 #define BALL_BALANCE_ATTITUDE_TIMEOUT_MS        100U    /* IMU 姿态数据超时时间。 */
@@ -225,6 +231,8 @@ static void BallBalanceControl_ClearVisionState(BallBalanceControl *control,
         control->last_sequence = 0U;
     }
     control->last_valid_ms = 0U;
+    control->spike_reject_active = 0U;
+    control->last_spike_reject_ms = 0U;
     control->pipe_settle_since_ms = 0U;
     control->phase_started_ms = 0U;
     control->kick_stage_started_ms = 0U;
@@ -477,11 +485,25 @@ static float BallBalanceControl_CalculateMovingPitch(
         control->error_mm);
     moving_toward_target = (uint8_t) (
         (control->error_mm * control->velocity_mm_s) < 0.0f);
-    /* Once the ball is travelling toward zero, position must not keep
-     * accelerating it through the target.  Inward motion is damped only by
-     * speed: fast motion gives more braking and the rod levels as it slows. */
     if (moving_toward_target != 0U) {
-        control->p_term_deg = 0.0f;
+        /* 回程（球朝目标运动）时位置反馈为反向制动：
+         * 若使用正Kp*error，杆角与球速同向会加速球穿过目标造成过冲，
+         * 故取负号把球往回来路方向推；增益随回程速度增大（变增益），
+         * 在高速滑行段补齐纯D制动不足，低速接近目标时自动减弱避免抖动。
+         * 仅在距目标15毫米内启用——离目标远时保持动量冲向目标，
+         * 避免整段回程都在刹车导致球永远够不到目标。 */
+        if (BallBalanceControl_Abs(feedback_error_mm) <=
+            BALL_BALANCE_RETURN_BRAKE_RANGE_MM) {
+            control->p_term_deg = BallBalanceControl_Limit(
+                -BALL_BALANCE_RETURN_BRAKE_KP_DEG_PER_MM *
+                    feedback_error_mm *
+                    (1.0f + BallBalanceControl_Abs(control->velocity_mm_s) /
+                            BALL_BALANCE_RETURN_BRAKE_SPEED_SCALE_MM_S),
+                -BALL_BALANCE_RETURN_BRAKE_LIMIT_DEG,
+                BALL_BALANCE_RETURN_BRAKE_LIMIT_DEG);
+        } else {
+            control->p_term_deg = 0.0f;
+        }
     } else {
         control->p_term_deg = BallBalanceControl_Limit(
             control->position_kp_deg_per_mm * feedback_error_mm,
@@ -502,8 +524,8 @@ static float BallBalanceControl_CalculateMovingPitch(
                            pitch_deg;
     control->braking_active = (uint8_t) (
         (control->velocity_mm_s * ball_accel_direction) < 0.0f);
-    control->brake_term_deg =
-        BallBalanceControl_PitchFromFeedbackEffort(control->d_term_deg);
+    control->brake_term_deg = BallBalanceControl_PitchFromFeedbackEffort(
+        control->p_term_deg + control->d_term_deg);
     if ((control->braking_active != 0U) &&
         (BallBalanceControl_Abs(ball_accel_direction) > 0.001f)) {
         control->stop_distance_mm =
@@ -828,6 +850,12 @@ static void BallBalanceControl_UpdateTrajectory(
                     control->desired_pipe_pitch_deg = 0.0f;
                     control->pipe_settled = 0U;
                     control->pipe_settle_timer_ready = 0U;
+                    /* 冻结期结束立即建立接近目标的积分状态：
+                     * 若球已在目标附近，下一次 UpdateTrajectory 会因
+                     * 误差在4~20毫米区间而启用积分，弥补静摩擦保持力，
+                     * 避免球在零角度下失稳漂走。 */
+                    BallBalanceControl_UpdateNearTargetIntegral(
+                        control, 1U, 0.0f, 0.0f);
                 }
                 break;
             }
@@ -869,6 +897,7 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
     float raw_velocity;
     float alpha;
     uint8_t filter_was_ready;
+    uint8_t accepted;
 
     if (measurement == 0) {
         return 0U;
@@ -890,6 +919,7 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
 
     filter_was_ready = control->filter_ready;
     elapsed_ms = (uint32_t) (now_ms - control->last_valid_ms);
+    accepted = 1U;
     if ((filter_was_ready == 0U) ||
         (elapsed_ms > BallBalanceControl_DataTimeoutMs(control))) {
         control->filtered_position_mm = position_mm;
@@ -903,23 +933,54 @@ static uint8_t BallBalanceControl_AcceptMeasurement(
             BALL_BALANCE_DT_MIN_S,
             BALL_BALANCE_MEASUREMENT_DT_MAX_S);
         previous_position = control->filtered_position_mm;
-        alpha = measurement_dt_s /
-                (BALL_BALANCE_POSITION_FILTER_TAU_S + measurement_dt_s);
-        control->filtered_position_mm += alpha *
-            (position_mm - control->filtered_position_mm);
-        raw_velocity = (control->filtered_position_mm - previous_position) /
-                       measurement_dt_s;
-        alpha = measurement_dt_s /
-                (BALL_BALANCE_VELOCITY_FILTER_TAU_S + measurement_dt_s);
-        control->velocity_mm_s += alpha *
-            (raw_velocity - control->velocity_mm_s);
+        /* 跳变抑制：K230 一帧位置跳变超过阈值，视为检测错误。
+         * 不更新滤波位置与速度，只让测量超时保护去接管，避免
+         * 假速度触发 P/D 反打把钢球推向端部。
+         * 但跳变持续超过 SPIKE_STUCK_MS 仍偏离，判定为真实位移
+         * 或持续错检，直接重采样新位置，避免滤波值永久冻结。 */
+        if (BallBalanceControl_Abs(position_mm - previous_position) <=
+            BALL_BALANCE_VISION_SPIKE_JUMP_MM) {
+            control->spike_reject_active = 0U;
+            control->last_spike_reject_ms = 0U;
+            alpha = measurement_dt_s /
+                    (BALL_BALANCE_POSITION_FILTER_TAU_S + measurement_dt_s);
+            control->filtered_position_mm += alpha *
+                (position_mm - control->filtered_position_mm);
+            raw_velocity = (control->filtered_position_mm - previous_position) /
+                           measurement_dt_s;
+            alpha = measurement_dt_s /
+                    (BALL_BALANCE_VELOCITY_FILTER_TAU_S + measurement_dt_s);
+            control->velocity_mm_s += alpha *
+                (raw_velocity - control->velocity_mm_s);
+        } else if ((control->spike_reject_active != 0U) &&
+                   ((uint32_t) (now_ms - control->last_spike_reject_ms) >=
+                    BALL_BALANCE_SPIKE_STUCK_MS)) {
+            /* 持续跳变：重采样为新位置，速度清零，避免卡死旧值。 */
+            control->spike_reject_active = 0U;
+            control->last_spike_reject_ms = 0U;
+            control->filtered_position_mm = position_mm;
+            control->velocity_mm_s = 0.0f;
+            control->integral_mm_s = 0.0f;
+            control->filter_ready = 1U;
+            measurement_dt_s = 0.0f;
+        } else {
+            /* 单帧/短时跳变：不当作有效测量，避免干扰采样计数与积分。 */
+            if (control->spike_reject_active == 0U) {
+                control->spike_reject_active = 1U;
+                control->last_spike_reject_ms = now_ms;
+            }
+            measurement_dt_s = 0.0f;
+            accepted = 0U;
+        }
     }
 
+    /* 始终推进 last_valid_ms：保证主循环超时检测不把跳变抑制误判为
+     * 视觉失联而清除状态。跳变持续判定由独立的 SPIKE_STUCK_MS 计时负责。 */
     control->last_valid_ms = now_ms;
     control->last_measurement_dt_s = measurement_dt_s;
     control->tracking_valid = 1U;
     control->timed_out = 0U;
-    return 1U;
+    return accepted;
 }
 
 static void BallBalanceControl_AcceptAttitude(

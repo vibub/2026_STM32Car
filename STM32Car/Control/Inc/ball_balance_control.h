@@ -7,7 +7,7 @@
 
 #define BALL_BALANCE_DEFAULT_KP_DEG_PER_MM       0.014f /* 钢球位置比例增益，单位为度每毫米。 */
 #define BALL_BALANCE_DEFAULT_KI_DEG_PER_MM_S     0.008f /* 接近目标点时的位置积分增益，单位为度每毫米秒。 */
-#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.006f /* 钢球速度阻尼增益，单位为度每毫米每秒。 */
+#define BALL_BALANCE_DEFAULT_KD_DEG_PER_MM_S     0.014f /* 钢球速度阻尼增益，单位为度每毫米每秒。 */
 #define BALL_BALANCE_DEFAULT_PIPE_KP              0.60f /* IMU姿态角误差比例修正。 */
 #define BALL_BALANCE_DEFAULT_PIPE_KD_S            0.050f /* 使用120 Hz陀螺仪X轴角速度的阻尼系数，单位为秒。 */
 
@@ -66,9 +66,11 @@ typedef struct {
     uint8_t transport_mode_enabled;
     uint8_t manual_pipe_mode_enabled;
     uint8_t transport_imu_valid;
+    uint8_t spike_reject_active;
     uint16_t last_sequence;
     uint32_t enabled_since_ms;
     uint32_t last_valid_ms;
+    uint32_t last_spike_reject_ms;
     uint32_t last_task_ms;
     uint32_t last_attitude_ms;
     uint32_t last_attitude_timestamp_ms;
