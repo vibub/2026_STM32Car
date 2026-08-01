@@ -87,21 +87,32 @@ class TelemetryStreamParser:
         frames = []
         if data:
             self.buffer.extend(data)
-        while len(self.buffer) >= 2:
-            if self.buffer[0] != 0xA5 or self.buffer[1] != 0x5A:
-                del self.buffer[0]
+        cursor = 0
+        buffer_length = len(self.buffer)
+        while buffer_length - cursor >= 2:
+            if (
+                self.buffer[cursor] != 0xA5
+                or self.buffer[cursor + 1] != 0x5A
+            ):
+                cursor += 1
                 self.discarded_byte_count += 1
                 continue
-            if len(self.buffer) < FRAME_SIZE:
+            if buffer_length - cursor < FRAME_SIZE:
                 break
-            candidate = bytes(self.buffer[:FRAME_SIZE])
+            candidate = bytes(
+                self.buffer[cursor:cursor + FRAME_SIZE]
+            )
             frame = decode_frame(candidate)
             if frame is None:
-                del self.buffer[0]
+                cursor += 1
                 self.crc_error_count += 1
                 continue
-            del self.buffer[:FRAME_SIZE]
+            cursor += FRAME_SIZE
             frames.append(frame)
+        if cursor > 0:
+            # CanMV MicroPython 的 bytearray 不支持 del/slice deletion。
+            # 用新缓冲区保留尚未收完整的帧或末尾同步字节。
+            self.buffer = bytearray(self.buffer[cursor:])
         return frames
 
 

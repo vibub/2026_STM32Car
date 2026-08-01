@@ -80,6 +80,16 @@ def test_resynchronizes_after_noise_and_bad_crc():
     assert parser.discarded_byte_count >= 5
 
 
+def test_keeps_partial_sync_and_decodes_multiple_frames():
+    parser = TelemetryStreamParser()
+    first = build_frame(sequence=10)
+    second = build_frame(sequence=11)
+    assert parser.feed(b"noise\xA5") == []
+    frames = parser.feed(b"\x5A" + first[2:] + second)
+    assert [frame["sequence"] for frame in frames] == [10, 11]
+    assert parser.buffer == bytearray()
+
+
 def test_run_is_written_only_after_end():
     parser = TelemetryStreamParser()
     with tempfile.TemporaryDirectory() as directory:
@@ -100,5 +110,6 @@ def test_run_is_written_only_after_end():
 if __name__ == "__main__":
     test_fragmented_frame()
     test_resynchronizes_after_noise_and_bad_crc()
+    test_keeps_partial_sync_and_decodes_multiple_frames()
     test_run_is_written_only_after_end()
     print("telemetry logger tests passed")
