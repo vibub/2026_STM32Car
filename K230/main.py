@@ -8,12 +8,16 @@ import time
 # CanMV IDE 的“运行当前脚本”会把 main.py 作为临时代码执行，部分固件不会
 # 自动把 SD 卡根目录加入模块搜索路径。显式加入后，同卡的依赖文件才能导入。
 for module_dir in ("/sdcard/app", "/sdcard"):
-    if module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
+    if module_dir in sys.path:
+        sys.path.remove(module_dir)
+# 仓库文档约定依赖放在 SD 卡根目录；根目录必须优先于可能残留旧文件的 app 目录。
+sys.path.insert(0, "/sdcard/app")
+sys.path.insert(0, "/sdcard")
 
 from machine import UART, FPIOA
 
 EXPECTED_BALL_POSITION_MAPPING_VERSION = 3
+EXPECTED_TELEMETRY_LOGGER_VERSION = 2
 
 try:
     import ball_position as ball_position_module
@@ -27,7 +31,6 @@ try:
     )
     from libs.PlatTasks import DetectionApp
     from vision_pipeline import VisionPipeline
-    from telemetry_logger import TelemetryRunLogger, TelemetryStreamParser
     try:
         from wifi_ap_rtsp import WifiApRtspStreamer
     except ImportError:
@@ -39,8 +42,17 @@ except ImportError:
         print("/sdcard files:", os.listdir("/sdcard"))
     except Exception as list_error:
         print("cannot read /sdcard:", list_error)
-    print("required: ball_position.py, telemetry_logger.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
+    print("required: ball_position.py, vision_pipeline.py, wifi_ap_rtsp.py and /sdcard/libs/PlatTasks.py")
     raise
+
+try:
+    import telemetry_logger as telemetry_logger_module
+    from telemetry_logger import TelemetryRunLogger, TelemetryStreamParser
+except ImportError:
+    telemetry_logger_module = None
+    TelemetryRunLogger = None
+    TelemetryStreamParser = None
+    print("telemetry_logger.py missing; AB control continues without SD telemetry")
 
 actual_mapping_version = getattr(
     ball_position_module, "BALL_POSITION_MAPPING_VERSION", 0)
@@ -388,8 +400,35 @@ def run():
     uart = None
     yolo = None
     video_streamer = None
-    telemetry_parser = TelemetryStreamParser()
-    telemetry_logger = TelemetryRunLogger()
+    telemetry_parser = None
+    telemetry_logger = None
+    if telemetry_logger_module is not None:
+        telemetry_version = getattr(
+            telemetry_logger_module,
+            "TELEMETRY_LOGGER_VERSION",
+            0,
+        )
+        telemetry_path = getattr(
+            telemetry_logger_module,
+            "__file__",
+            "unknown",
+        )
+        print(
+            "telemetry logger path={} version={}".format(
+                telemetry_path,
+                telemetry_version,
+            )
+        )
+        if telemetry_version == EXPECTED_TELEMETRY_LOGGER_VERSION:
+            telemetry_parser = TelemetryStreamParser()
+            telemetry_logger = TelemetryRunLogger()
+        else:
+            print(
+                "stale telemetry_logger.py; expected version {}, "
+                "AB control continues without SD telemetry".format(
+                    EXPECTED_TELEMETRY_LOGGER_VERSION,
+                )
+            )
     os.exitpoint(os.EXITPOINT_ENABLE)
 
     try:
@@ -442,10 +481,18 @@ def run():
         last_result = None
 
         def poll_stm32_telemetry(receive_ms):
+            nonlocal telemetry_parser
             data = uart.read()
-            if not data:
+            if not data or telemetry_parser is None:
                 return
-            for telemetry_frame in telemetry_parser.feed(data):
+            try:
+                telemetry_frames = telemetry_parser.feed(data)
+            except BaseException as error:
+                print("STM32 telemetry parser failed; logging disabled:")
+                sys.print_exception(error)
+                telemetry_parser = None
+                return
+            for telemetry_frame in telemetry_frames:
                 try:
                     saved_path = telemetry_logger.handle(
                         telemetry_frame,
